@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de> -->
+<!-- SPDX-License-Identifier: MIT -->
+<!-- The icon of Kudari in one color for the system tray; Plasma colors it like text. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <style id="current-color-scheme" type="text/css">.ColorScheme-Text { color: #232629; }</style>
+  <path class="ColorScheme-Text" d="M3.5 4.5 L8 8.5 L12.5 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect class="ColorScheme-Text" x="5" y="11" width="6" height="2" rx="1" fill="currentColor"/>
+</svg>

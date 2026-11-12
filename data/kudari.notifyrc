@@ -1,0 +1,50 @@
+[Global]
+IconName=utilities-terminal
+DesktopEntry=io.github.marcjose.kudari
+Comment=Kudari
+
+[Event/silence]
+Name=Silence
+Name[de]=Stille
+Name[en_GB]=Silence
+Comment=A watched terminal has been quiet for a while
+Comment[de]=Ein beobachtetes Terminal ist seit einer Weile still
+Comment[en_GB]=A watched terminal has been quiet for a while
+Action=Popup
+
+[Event/activity]
+Name=Activity
+Name[de]=Aktivität
+Name[en_GB]=Activity
+Comment=A watched terminal shows new output
+Comment[de]=Ein beobachtetes Terminal zeigt neue Ausgabe
+Comment[en_GB]=A watched terminal shows new output
+Action=Popup
+
+[Event/BellVisible]
+Name=Bell in the session on screen
+Name[de]=Glocke in der sichtbaren Sitzung
+Name[en_GB]=Bell in the session on screen
+Comment=A program rang the bell in the session that is on screen
+Comment[de]=Ein Programm hat in der sichtbaren Sitzung die Glocke geläutet
+Comment[en_GB]=A program rang the bell in the session that is on screen
+Action=None
+
+[Event/BellInvisible]
+Name=Bell in another session
+Name[de]=Glocke in einer anderen Sitzung
+Name[en_GB]=Bell in another session
+Comment=A program rang the bell in a session that is not on screen
+Comment[de]=Ein Programm hat in einer nicht sichtbaren Sitzung die Glocke geläutet
+Comment[en_GB]=A program rang the bell in a session that is not on screen
+Sound=bell-window-system
+Action=Popup
+
+[Event/processFinished]
+Name=Program finished
+Name[de]=Programm beendet
+Name[en_GB]=Program finished
+Comment=A watched program has ended
+Comment[de]=Ein beobachtetes Programm wurde beendet
+Comment[en_GB]=A watched program has ended
+Action=Popup

@@ -1,0 +1,107 @@
+# SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de>
+# SPDX-License-Identifier: MIT
+
+# The KDE front end is the package at the root; the platform-independent core is a member
+# of the workspace. See docs/architecture.md.
+[workspace]
+members = ["crates/core", "crates/qt", "crates/windows"]
+
+[workspace.package]
+version = "0.1.0-rc.2"
+edition = "2024"
+authors = ["Marc Jose <marc@hahn-jose.de>"]
+homepage = "https://github.com/MarcJose/kudari"
+repository = "https://github.com/MarcJose/kudari"
+license = "MIT"
+rust-version = "1.95"
+
+[workspace.dependencies]
+alacritty_terminal = "0.26"
+cxx = "1.0"
+cxx-qt = "0.10"
+cxx-qt-build = "0.10"
+cxx-qt-lib = { version = "0.10", features = ["qt_full"] }
+libc = "0.2"
+kudari-core = { path = "crates/core" }
+kudari-qt = { path = "crates/qt" }
+serde_json = "1.0"
+
+[package]
+name = "kudari"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Drop-down terminal for KDE Plasma on Wayland, written in Rust"
+documentation = "https://github.com/MarcJose/kudari/wiki"
+readme = "README.md"
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords = ["linux", "terminal", "console"]
+categories = ["utilities", "terminal"]
+rust-version.workspace = true
+# Built with CMake against Qt and KDE Frameworks, so not for crates.io.
+publish = false
+
+[dependencies]
+alacritty_terminal.workspace = true
+cxx.workspace = true
+cxx-qt.workspace = true
+cxx-qt-lib.workspace = true
+cxx-qt-lib-extras = "0.10"
+kudari-core.workspace = true
+kudari-qt.workspace = true
+serde_json.workspace = true
+zbus = "6.2"
+
+[dev-dependencies]
+kudari-core = { workspace = true, features = ["fuzz"] }
+
+[build-dependencies]
+cxx-qt-build.workspace = true
+
+[features]
+# Lets automated tests drive the UI over D-Bus. Never enabled for normal builds.
+test-hooks = ["kudari-qt/test-hooks"]
+
+[lints]
+workspace = true
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Code must not be able to take the terminals down: see `panic = "abort"` below.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+undocumented_unsafe_blocks = "deny"
+# Pixel, cell and line numbers fit their types by far; checking each cast adds only noise.
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+# Written for Qt and D-Bus: signatures and flags follow those interfaces.
+needless_pass_by_value = "allow"
+similar_names = "allow"
+struct_excessive_bools = "allow"
+too_many_lines = "allow"
+# Its `assert_eq!(value, [] as [Type; 0])` reads worse than `assert!(value.is_empty())`, and
+# a failing test names its line all the same.
+assert_is_empty = "allow"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+# Until cxx-qt publishes them, these crates carry two fixes for reproducible builds; see
+# third_party/README.md. Remove the section when a release contains both.
+[patch.crates-io]
+cxx-qt-build = { path = "third_party/cxx-qt-build" }
+qt-build-utils = { path = "third_party/qt-build-utils" }

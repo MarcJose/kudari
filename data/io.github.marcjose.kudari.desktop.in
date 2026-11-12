@@ -1,0 +1,15 @@
+[Desktop Entry]
+Name=Kudari
+GenericName=Drop-down Terminal
+GenericName[de]=Ausklappbares Terminal
+GenericName[en_GB]=Drop-down Terminal
+Exec=@KDE_INSTALL_FULL_BINDIR@/kudari
+Icon=io.github.marcjose.kudari
+Type=Application
+Terminal=false
+Categories=Qt;KDE;System;TerminalEmulator;
+Comment=A drop-down terminal emulator for KDE Plasma on Wayland
+Comment[de]=Ein ausklappbarer Terminal-Emulator für KDE Plasma unter Wayland
+Comment[en_GB]=A drop-down terminal emulator for KDE Plasma on Wayland
+StartupNotify=false
+DBusActivatable=true

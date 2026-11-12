@@ -1,0 +1,35 @@
+name: Pull request
+
+# The title of a pull request becomes the commit when it is squashed, and every commit of it
+# goes into the changelog otherwise; both follow Conventional Commits, as the commit-msg hook
+# asks, which a contributor may not have turned on.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  conventional-commits:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: tools/commit-subject.sh "$TITLE"
+      - name: Commits
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: tools/commit-subject.sh --range "$BASE..$HEAD"

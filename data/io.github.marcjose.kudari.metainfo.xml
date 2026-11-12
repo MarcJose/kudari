@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component type="desktop-application">
+  <id>io.github.marcjose.kudari</id>
+  <name>Kudari</name>
+  <summary>A drop-down terminal for KDE Plasma on Wayland</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>Kudari slides down from the top of the screen at the press of a key. It is a
+    rewrite of Yakuake in Rust, with tabs and split terminals in the colors of the Plasma theme.</p>
+  </description>
+  <url type="homepage">https://github.com/MarcJose/kudari</url>
+  <url type="bugtracker">https://github.com/MarcJose/kudari/issues</url>
+  <url type="vcs-browser">https://github.com/MarcJose/kudari</url>
+  <developer id="io.github.marcjose">
+    <name>Marc Jose</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <launchable type="desktop-id">io.github.marcjose.kudari.desktop</launchable>
+  <provides>
+    <binary>kudari</binary>
+  </provides>
+  <releases>
+    <release version="0.1.0~rc.2" date="2026-11-09" type="development"/>
+  </releases>
+</component>

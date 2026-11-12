@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de>
+# SPDX-License-Identifier: CC0-1.0
+#
+# Copyright of files that cannot carry a comment.
+
+version = 1
+
+[[annotations]]
+path = ["data/kudari.notifyrc", "data/io.github.marcjose.kudari.desktop.in", "data/io.github.marcjose.kudari.service.in", "Cargo.lock", "THIRD_PARTY_LICENSES", "AUTHORS", "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "third_party/README.md", "docs/**"]
+SPDX-FileCopyrightText = "2026 Marc Jose <marc@hahn-jose.de>"
+SPDX-License-Identifier = "MIT"
+
+# Rendered from data/icons/io.github.marcjose.kudari.svg by tools/icons.py.
+[[annotations]]
+path = ["crates/windows/icons/**", "crates/windows/package/Assets/**"]
+SPDX-FileCopyrightText = "2026 Marc Jose <marc@hahn-jose.de>"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["data/io.github.marcjose.kudari.metainfo.xml", ".gitignore", "rustfmt.toml", "clippy.toml", "deny.toml", ".github/**"]
+SPDX-FileCopyrightText = "2026 Marc Jose <marc@hahn-jose.de>"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = ["third_party/cxx-qt-build/Cargo.toml", "third_party/qt-build-utils/Cargo.toml"]
+SPDX-FileCopyrightText = "Klarälvdalens Datakonsult AB, a KDAB Group company <info@kdab.com>"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
+# The Contributor Covenant, with the reporting address and the scope filled in.
+[[annotations]]
+path = "CODE_OF_CONDUCT.md"
+SPDX-FileCopyrightText = ["Organization for Ethical Source", "2026 Marc Jose <marc@hahn-jose.de>"]
+SPDX-License-Identifier = "CC-BY-SA-4.0"

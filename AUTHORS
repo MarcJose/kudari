@@ -1,0 +1,12 @@
+Kudari is written by Marc Jose <marc@hahn-jose.de>.
+
+Thanks to
+
+Eike Hein and the Yakuake developers, for Yakuake, the drop-down terminal Kudari grew out
+of; its settings and D-Bus interface stay compatible with it. See https://apps.kde.org/yakuake
+
+The Konsole developers, for the ideas for many terminal options. Kudari reads Konsole's
+profiles and key binding files. See https://konsole.kde.org
+
+The translations in po/ were made for Kudari by machine and have not been reviewed by
+people; the comments in the files say so for each entry.
