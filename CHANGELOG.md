@@ -3,7 +3,7 @@
 All notable changes to Kudari. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 From 0.1.0 on, `tools/release.py` writes each section from the [Conventional Commits](https://www.conventionalcommits.org) since the previous release.
 
-## [0.1.0] - unreleased
+## [0.1.0] - 2026-11-12
 
 The first release: a drop-down terminal for KDE Plasma on Wayland and for Windows 11, in
 Rust, cxx-qt and QML, which keeps the workflow of Yakuake.

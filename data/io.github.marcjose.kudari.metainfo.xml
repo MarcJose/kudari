@@ -31,6 +31,7 @@
     <binary>kudari</binary>
   </provides>
   <releases>
+    <release version="0.1.0" date="2026-11-12"/>
     <release version="0.1.0~rc.3" date="2026-11-12" type="development"/>
     <release version="0.1.0~rc.2" date="2026-11-09" type="development"/>
   </releases>
