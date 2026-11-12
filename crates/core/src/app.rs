@@ -241,7 +241,8 @@ pub struct App {
     refocusing: bool,
     polls: u32,
     /// Sessions an AI agent opened, the only ones it may close.
-    agent_sessions: BTreeSet<SessionId>,
+    /// The sessions agents opened, with the name of the agent that opened each.
+    agent_sessions: BTreeMap<SessionId, String>,
     /// Which AI agents the user allowed, denied or is being asked about.
     agents: Access,
     window_visible: bool,
@@ -274,7 +275,7 @@ impl App {
             focus_toggle_lock: false,
             refocusing: false,
             polls: 0,
-            agent_sessions: BTreeSet::new(),
+            agent_sessions: BTreeMap::new(),
             agents: Access::default(),
             window_visible: false,
             fullscreen: false,
@@ -329,13 +330,21 @@ impl App {
         self.stack.active().map(|session| session.active_terminal)
     }
 
-    pub fn add_agent_session(&mut self, session: SessionId) {
-        self.agent_sessions.insert(session);
+    /// Remembers that `agent` opened `session`.
+    pub fn add_agent_session(&mut self, session: SessionId, agent: &str) {
+        self.agent_sessions.insert(session, agent.to_string());
     }
 
+    /// Whether an agent opened `session`.
     #[must_use]
     pub fn is_agent_session(&self, session: SessionId) -> bool {
-        self.agent_sessions.contains(&session)
+        self.agent_sessions.contains_key(&session)
+    }
+
+    /// The agent that opened `session`.
+    #[must_use]
+    pub fn agent_session_owner(&self, session: SessionId) -> Option<&str> {
+        self.agent_sessions.get(&session).map(String::as_str)
     }
 
     #[must_use]
@@ -1582,8 +1591,9 @@ mod tests {
         assert!(app.terminal_exited(terminal).is_empty(), "never started");
         app.started(&[terminal]);
         assert!(app.terminal_exited(terminal).contains(&Effect::Stop(terminal)));
-        app.add_agent_session(7);
+        app.add_agent_session(7, "a");
         assert!(app.is_agent_session(7) && !app.is_agent_session(8));
+        assert_eq!(app.agent_session_owner(7), Some("a"));
     }
 
     #[test]

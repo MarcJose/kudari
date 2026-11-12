@@ -405,11 +405,12 @@ impl App {
         let reading = matches!(request, Request::Terminals | Request::Read { .. });
         let result = self
             .admit(agent, reading, &mut effects)
-            .and_then(|()| self.serve_agent(request, host, &mut effects));
+            .and_then(|agent| self.serve_agent(&agent, request, host, &mut effects));
         (result, effects)
     }
 
-    fn admit(&mut self, agent: Option<&str>, reading: bool, effects: &mut Vec<Effect>) -> Result<(), Error> {
+    /// The name of the agent, if it may make the request.
+    fn admit(&mut self, agent: Option<&str>, reading: bool, effects: &mut Vec<Effect>) -> Result<String, Error> {
         if reading && !self.settings().allow_agent_reading {
             return Err(switched_off("Reading terminals"));
         }
@@ -418,7 +419,7 @@ impl App {
         }
         let agent = agent.ok_or_else(|| Error::Denied(DENIED.to_string()))?;
         match self.agents_mut().check(agent) {
-            Decision::Allowed => Ok(()),
+            Decision::Allowed => Ok(agent.to_string()),
             Decision::Denied => Err(Error::Denied(DENIED.to_string())),
             Decision::Waiting => Err(Error::Waiting),
             Decision::Ask => {
@@ -428,7 +429,13 @@ impl App {
         }
     }
 
-    fn serve_agent(&mut self, request: Request, host: &dyn Host, effects: &mut Vec<Effect>) -> Result<String, Error> {
+    fn serve_agent(
+        &mut self,
+        agent: &str,
+        request: Request,
+        host: &dyn Host,
+        effects: &mut Vec<Effect>,
+    ) -> Result<String, Error> {
         match request {
             Request::Terminals => Ok(self.terminals_json(host).to_string()),
             Request::Read { terminal, lines } => {
@@ -470,7 +477,7 @@ impl App {
                 }
                 let (session, added) = self.add_session(SessionType::Single, host);
                 effects.extend(added);
-                self.add_agent_session(session);
+                self.add_agent_session(session, agent);
                 if !title.is_empty() {
                     self.stack_mut().set_tab_title(session, &title, true);
                     effects.extend(self.refresh());
@@ -479,7 +486,9 @@ impl App {
                 Ok(json!({ "session": session, "terminal": terminal }).to_string())
             }
             Request::Close { session } => {
-                if !self.is_agent_session(session) {
+                // Not those of another agent either, which the user may have allowed for
+                // something else.
+                if self.agent_session_owner(session) != Some(agent) {
                     return Err(Error::Denied(
                         "Agents may close only the sessions they opened themselves.".to_string(),
                     ));
@@ -1122,6 +1131,11 @@ mod tests {
                 ask(&mut app, Request::Close { session: 0 }, &host),
                 Err(Error::Denied(_))
             ));
+            let _ = app.agent_request(Some("b"), Request::Terminals, &host);
+            let _ = app.agent_answered("b", true);
+            let (other, _) = app.agent_request(Some("b"), Request::Close { session }, &host);
+            assert!(matches!(other, Err(Error::Denied(_))), "another agent: {other:?}");
+            assert!(app.stack().session(session).is_some());
             assert_eq!(ask(&mut app, Request::Close { session }, &host), Ok(String::new()));
             assert!(app.stack().session(session).is_none());
         }
