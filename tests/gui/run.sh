@@ -469,6 +469,10 @@ hook Trigger edit_paste; sleep 1; input key 1; sleep 0.6
 check "pasting several lines asks first" "" "$(cat "$work/lines")"
 hook Trigger edit_paste; sleep 1; input key 28; sleep 0.6; input key 29 32; sleep 0.4
 check "the lines arrive once the user agrees" "one|two|" "$(content "$work/lines")"
+run "clear; cat > $work/dropped"
+hook DropText "$(printf 'three\nfour\n')"; sleep 1; input key 1; sleep 0.6
+check "dropping several lines of text asks first as well" "" "$(cat "$work/dropped")"
+end_input
 mkdir -p "$work/bin"; ln -sf "$(command -v sleep)" "$work/bin/ssh"
 hook SetSetting RemoteTitleFormat "%w on %H"; sleep 0.3
 run "clear; printf '\033]0;remote\a'; $work/bin/ssh 3"

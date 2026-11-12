@@ -22,6 +22,7 @@ use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::{CursorStyle, Handler, Processor, StdSyncHandler};
 
+use crate::command::Quoting;
 use crate::marks::{Marks, Prompt, Tee};
 #[cfg(windows)]
 use crate::process::Console;
@@ -261,6 +262,8 @@ pub struct Backend {
     history_lines: Mutex<Option<usize>>,
     /// Whether programs get the mouse here, instead of the configured choice.
     mouse_tracking: Mutex<Option<bool>>,
+    /// How the shell of the terminal reads quoted paths.
+    quoting: Quoting,
 }
 
 impl Backend {
@@ -299,6 +302,11 @@ impl Backend {
         .unwrap_or_default();
         let mut environment = shell_environment(&settings.environment);
         let launch_key = launch.key;
+        let mut quoting = if launch.program.is_empty() {
+            Quoting::system()
+        } else {
+            launch.quoting
+        };
         environment.extend(launch.environment);
         let configured = Some(PathBuf::from(crate::command::expand_home(&settings.directory)))
             .filter(|directory| directory.is_dir());
@@ -320,6 +328,7 @@ impl Backend {
                 let mut parser = Processor::<StdSyncHandler>::new();
                 parser.advance(&mut *term.lock(), format!("{warning}\r\n").as_bytes());
                 options.shell = None;
+                quoting = Quoting::system();
                 tty::new(&options, size, id as u64).map_err(|error| error.to_string())?
             }
             Err(error) => return Err(error.to_string()),
@@ -352,9 +361,17 @@ impl Backend {
             auto_save: Mutex::new(None),
             history_lines: Mutex::new(None),
             mouse_tracking: Mutex::new(None),
+            quoting,
         });
         backend.apply_flow_control();
         Ok(backend)
+    }
+
+    /// A path quoted for the shell of this terminal, or `None` if it cannot take it safely;
+    /// see [`crate::command::quote_path`].
+    #[must_use]
+    pub fn quote_path(&self, path: &str) -> Option<String> {
+        crate::command::quote_path(path, self.quoting)
     }
 
     fn apply_config(&self) {
@@ -623,16 +640,20 @@ fn last_lines<T: EventListener>(term: &Term<T>, lines: usize) -> String {
     found.split_off(found.len().saturating_sub(wanted)).join("\n")
 }
 
-/// Types shell-quoted paths into a terminal, or a command that changes into a directory.
+/// Types paths into a terminal, quoted for its shell, or a command that changes into a
+/// directory. Paths the shell cannot take safely are left out.
 pub fn send_paths(id: TerminalId, paths: &str, change_directory: bool) {
-    let quoted = paths
-        .lines()
-        .map(crate::command::shell_quote)
-        .collect::<Vec<_>>()
-        .join(" ");
     if let Some(backend) = backend(id) {
+        let quoted = paths
+            .lines()
+            .filter_map(|path| backend.quote_path(path))
+            .collect::<Vec<_>>()
+            .join(" ");
+        if quoted.is_empty() {
+            return;
+        }
         let text = if change_directory {
-            format!("cd {quoted}\r")
+            format!("{}\r", crate::command::change_directory(&quoted, backend.quoting))
         } else {
             format!("{quoted} ")
         };

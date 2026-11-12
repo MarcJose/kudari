@@ -546,6 +546,15 @@ impl TestHooks {
         queue(Controller::revoke_agent_access);
     }
 
+    /// Drops text on the active terminal, as from another program.
+    fn drop_text(&self, text: String) {
+        queue(move |c| {
+            if let Some(terminal) = c.stack().active().map(|session| session.active_terminal) {
+                kudari_qt::terminal_item::drop_into(terminal, text, false);
+            }
+        });
+    }
+
     fn popup(&self, menu: String) {
         queue(move |c| match menu.as_str() {
             "main" => crate::kde::rk_popup_main_menu(1000, 400),

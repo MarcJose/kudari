@@ -13,4 +13,4 @@ pub mod terminal;
 pub mod terminal_item;
 
 // The modules of the core, under the names these modules have always used for them.
-use kudari_core::{app, colors, command, input, keytab, process, render, services, sessions, settings, theme, view};
+use kudari_core::{app, colors, input, keytab, process, render, services, sessions, settings, theme, view};

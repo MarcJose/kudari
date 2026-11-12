@@ -21,13 +21,13 @@ use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QColor, QFont, QPen, QPoint, QRectF, QString, QVariant};
 
 use crate::colors;
-use crate::command::shell_quote;
 use crate::frontend::frontend;
 use crate::input::{Modifiers, prepare_paste, would_execute};
 use crate::qt as kde;
 use crate::qt_input;
 use crate::render::{self, FontStyle, Paint};
 use crate::services::Selection;
+use crate::sessions::TerminalId;
 use crate::terminal;
 use crate::view::{self, Context, Effect, View};
 
@@ -316,6 +316,46 @@ impl Default for TerminalItemRust {
     }
 }
 
+/// Types text from the clipboard or a drop into a terminal as its shell expects pasted text:
+/// in brackets where it understands them, else after asking if the text would run commands.
+pub fn paste_into(terminal: TerminalId, text: String) {
+    let Some(backend) = terminal::backend(terminal) else {
+        return;
+    };
+    if text.is_empty() {
+        return;
+    }
+    let bracketed = backend.term.lock().mode().contains(TermMode::BRACKETED_PASTE);
+    // Without bracketed paste the shell runs every line as soon as it arrives. The question
+    // goes through the queue, since this can run inside a call of the controller.
+    if !bracketed && would_execute(&text) {
+        crate::controller::queue(move |controller| controller.ask_paste(terminal, text));
+        return;
+    }
+    backend.write_user_input(prepare_paste(&text, bracketed).into_bytes());
+}
+
+/// What a drop on a terminal types: dropped text as pasted text, whose lines must not run
+/// unasked, or the dropped files, a path on each line, quoted for the shell of the terminal;
+/// a path it cannot take safely is left out.
+pub fn drop_into(terminal: TerminalId, text: String, are_files: bool) {
+    if !are_files {
+        paste_into(terminal, text);
+        return;
+    }
+    let Some(backend) = terminal::backend(terminal) else {
+        return;
+    };
+    let quoted = text
+        .lines()
+        .filter_map(|path| backend.quote_path(path))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !quoted.is_empty() {
+        backend.write_user_input(quoted.into_bytes());
+    }
+}
+
 impl qobject::TerminalItem {
     fn backend(&self) -> Option<std::sync::Arc<terminal::Backend>> {
         terminal::backend(*self.terminal_id())
@@ -516,15 +556,7 @@ impl qobject::TerminalItem {
         if !*self.keyboard_enabled() {
             return;
         }
-        let text = text.to_string();
-        let bytes = if are_files {
-            text.lines().map(shell_quote).collect::<Vec<_>>().join(" ")
-        } else {
-            prepare_paste(&text, false)
-        };
-        if let Some(backend) = self.as_ref().backend() {
-            backend.write_user_input(bytes.into_bytes());
-        }
+        drop_into(*self.terminal_id(), text.to_string(), are_files);
     }
 
     fn commit_text(mut self: Pin<&mut Self>, text: &QString) {
@@ -649,22 +681,7 @@ impl qobject::TerminalItem {
         } else {
             Selection::Clipboard
         };
-        let text = frontend().paste(source);
-        let Some(backend) = self.as_ref().backend() else {
-            return;
-        };
-        if text.is_empty() {
-            return;
-        }
-        let bracketed = backend.term.lock().mode().contains(TermMode::BRACKETED_PASTE);
-        // Without bracketed paste the shell runs every line as soon as it arrives. The
-        // question goes through the queue, since this can run inside a call of the controller.
-        if !bracketed && would_execute(&text) {
-            let terminal = *self.terminal_id();
-            crate::controller::queue(move |controller| controller.ask_paste(terminal, text));
-            return;
-        }
-        backend.write_user_input(prepare_paste(&text, bracketed).into_bytes());
+        paste_into(*self.terminal_id(), frontend().paste(source));
     }
 
     #[allow(

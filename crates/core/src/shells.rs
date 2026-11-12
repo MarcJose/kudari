@@ -13,6 +13,8 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use crate::command::Quoting;
+
 /// What kind of shell it is, which decides how Kudari sets up its marks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -45,6 +47,8 @@ pub struct Launch {
     /// that the marks of programs and of the text they show do not count; see
     /// [`crate::marks::Scanner::new`].
     pub key: Option<String>,
+    /// How the shell reads quoted paths.
+    pub quoting: Quoting,
 }
 
 /// What the search for shells asks of the system.
@@ -198,6 +202,7 @@ pub fn launch(
     if let Some(mut words) = crate::command::split_command(command) {
         let program = crate::command::expand_home(&words.remove(0));
         return Some(Launch {
+            quoting: Quoting::of_program(&program),
             program,
             arguments: words,
             environment: Vec::new(),
@@ -214,6 +219,11 @@ pub fn launch(
         arguments: shell.arguments.clone(),
         environment: Vec::new(),
         key: None,
+        quoting: match shell.kind {
+            Kind::CommandPrompt => Quoting::CommandPrompt,
+            Kind::PowerShell => Quoting::PowerShell,
+            Kind::Wsl => Quoting::Posix,
+        },
     };
     let key = if integration { new_key() } else { None };
     if let Some(key) = key {
@@ -421,6 +431,19 @@ mod tests {
         assert_eq!(launch.program, "vim");
         assert_eq!(launch.arguments, ["-n"]);
         assert!(launch.environment.is_empty());
+    }
+
+    #[test]
+    fn each_shell_gets_its_quoting() {
+        let shells = discover(&windows(&ALL));
+        let quoting = |chosen| launch("", Some(chosen), "", false, &shells, None).unwrap().quoting;
+        assert_eq!(quoting("cmd"), Quoting::CommandPrompt);
+        assert_eq!(quoting("powershell"), Quoting::PowerShell);
+        assert_eq!(quoting("pwsh"), Quoting::PowerShell);
+        assert_eq!(quoting("wsl:Debian"), Quoting::Posix);
+        let command = |command| launch(command, None, "", false, &shells, None).unwrap().quoting;
+        assert_eq!(command("C:/Windows/System32/cmd.exe /k"), Quoting::CommandPrompt);
+        assert_eq!(command("zsh -l"), Quoting::Posix);
     }
 
     #[test]
