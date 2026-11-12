@@ -160,9 +160,6 @@ LGPL-2.1-or-later. The Rust crates in the binary, among them `alacritty_terminal
 Apache-2.0, are listed with their licenses in `THIRD_PARTY_LICENSES`. Qt and KDE Frameworks
 are linked dynamically and keep their own licenses.
 
-Until 2026-11-07 Kudari was under GPL-3.0-only, because it contained parts of Yakuake and
-Konsole; versions up to then stay under that license.
-
 Kudari grew out of Yakuake and takes ideas from Konsole, and it needs neither of them. It
 contains no code, texts, translations or graphics of theirs any more: those parts were
 rewritten or replaced in 2026, as the history of the repository records. A few short

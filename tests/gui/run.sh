@@ -23,9 +23,12 @@ if [ -z "${KUDARI_GUI_TEST:-}" ]; then
     # The bus starts services with its own environment and from the user's service files.
     # Without these, it can neither start an installed Kudari nor give one the desktop.
     env -u WAYLAND_DISPLAY -u DISPLAY XDG_CONFIG_HOME=/nonexistent XDG_DATA_HOME=/nonexistent \
-        KUDARI_GUI_TEST=1 dbus-run-session -- "$0" "$binary" > "$report" 2>&1 < /dev/null
+        KUDARI_GUI_TEST=1 dbus-run-session -- "$0" "$binary" > "$report" 2>&1 < /dev/null &
+    test=$!
+    # Each check as it comes, so that a run that hangs shows where.
+    tail -n +1 -f --pid="$test" "$report" | grep --line-buffered -E '^(ok|FAIL|[0-9]+ checks|Error in)'
+    wait "$test"
     status=$?
-    grep -E '^(ok|FAIL|[0-9]+ checks|Error in)' "$report"
     rm -f "$report"
     exit "$status"
 fi
