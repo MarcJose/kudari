@@ -31,7 +31,7 @@ ApplicationWindow {
     // True while the grip is being dragged. Terminals then only learn their new size on
     // release; every resize makes shells redraw their prompt.
     property bool gripDragged: false
-    // The icons of Windows 11, or of Windows 10, as a font; elsewhere the buttons show text.
+    // The icons of Windows as a font, or those of its older one; elsewhere the buttons show text.
     readonly property string iconFont: {
         const families = Qt.fontFamilies();
         return ["Segoe Fluent Icons", "Segoe MDL2 Assets"].find(family => families.includes(family)) ?? "";

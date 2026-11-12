@@ -64,8 +64,7 @@ All eight steps are done. The Windows front end comes next and builds on the sam
 
 The Windows front end offers what the KDE one does, in the way Windows does it. What has no
 counterpart there is left out: the D-Bus interface for scripts, the import from Yakuake and
-the effects of KWin. The design target is Windows 11; Windows 10 from 1809 on, the first
-with ConPTY, runs it with a plain background instead of Mica.
+the effects of KWin. It needs Windows 11: Windows 10 gets no updates since October 2025.
 
 ### Layout
 
@@ -160,9 +159,12 @@ Each step leaves the KDE version as it was, with all its tests passing.
    (`Popup.Window`), so that they reach beyond the window, and open upwards at the bottom
    of the screen.
 
-### Open questions
+### Decisions
 
-- The default shortcut: Windows Terminal uses Win+` for its own drop-down window.
-- Windows 10: worth the second look without Mica, or Windows 11 only?
-- Signing: self-signed for now; Azure Trusted Signing would spare users the step of
-  trusting the certificate, and let winget install the MSIX package.
+- The global shortcut is Ctrl+F12 by default. F12 alone belongs to the debugger, Win+` to
+  the drop-down window of Windows Terminal, and Ctrl+` to the terminal of VS Code; the first
+  start offers another key.
+- Windows 11 only, as Microsoft no longer updates Windows 10.
+- The packages are signed with a certificate of Kudari's own, without costs or a third
+  party. Users trust it once for the MSIX package; winget installs the ZIP archive, as it
+  trusts no self-signed package.

@@ -7,7 +7,7 @@ Versions follow [Semantic Versioning](https://semver.org). Each release on GitHu
 | `kudari-X.Y.Z.tar.xz` | the source, with all Rust crates, so it builds without network |
 | `kudari-X.Y.Z-x86_64-linux.tar.xz` | the installed files under `usr/`, built on Arch Linux |
 | `kudari-X.Y.Z.cdx.json`, `kudari-X.Y.Z.spdx.json` | SBOMs of the source in CycloneDX and SPDX |
-| `kudari-X.Y.Z-x86_64-windows.msix` | the package for Windows 10 1809 and newer |
+| `kudari-X.Y.Z-x86_64-windows.msix` | the package for Windows 11 |
 | `kudari-X.Y.Z-x86_64-windows.zip` | the same program to unpack and run, without installing |
 | `kudari-X.Y.Z-x86_64-windows.cer` | the certificate that signs both |
 | `kudari-X.Y.Z-x86_64-windows.cdx.json` | the SBOM of the Windows packages: the crates, Qt and the runtime of Visual C++ |

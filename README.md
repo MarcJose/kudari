@@ -100,7 +100,7 @@ sudo tar -x -C / -f kudari-1.2.0-x86_64-linux.tar.xz
 
 On other distributions, build the source of the release as described next.
 
-On Windows 10 1809 or newer, the release has an MSIX package and a ZIP archive, both signed
+On Windows 11, the release has an MSIX package and a ZIP archive, both signed
 with a certificate of Kudari's own rather than one of a certification authority. To install
 the MSIX package, trust its certificate once, in an administrator PowerShell, then install:
 

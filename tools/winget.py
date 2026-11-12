@@ -52,7 +52,7 @@ def main():
         f"{IDENTIFIER}.installer.yaml": manifest(
             "installer",
             version,
-            "MinimumOSVersion: 10.0.17763.0\n"
+            "MinimumOSVersion: 10.0.22000.0\n"
             "InstallerType: zip\n"
             "NestedInstallerType: portable\n"
             "NestedInstallerFiles:\n"

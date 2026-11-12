@@ -34,7 +34,6 @@ body:
       options:
         - KDE Plasma on Wayland
         - Windows 11
-        - Windows 10
         - Something else (please say which below)
     validations:
       required: true
