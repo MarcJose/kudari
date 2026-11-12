@@ -7,7 +7,7 @@ keeps the workflow of [Yakuake](https://apps.kde.org/yakuake) and is built anew 
 QML, with Kirigami on KDE and the look of Windows 11 there.
 
 The name is the Japanese 下り, *kudari*, "downwards", as the terminal comes down from the top
-of the screen. Before its first release, it was called Rakuake.
+of the screen.
 
 ![Kudari on KDE Plasma: three tabs, the first with two terminals side by side](docs/screenshots/kde-terminal.png)
 

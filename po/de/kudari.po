@@ -3,1756 +3,1431 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: kudari\n"
+"PO-Revision-Date: 2026-11-12 00:00+0100\n"
+"Last-Translator: Marc Jose <marc@hahn-jose.de>\n"
+"Language-Team: German\n"
 "Language: de\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@title:group Group box label"
 msgid "General"
 msgstr "Allgemein"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@label:chooser"
 msgid "Background color:"
 msgstr "Hintergrundfarbe:"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@title:group"
 msgid "Tab Bar"
 msgstr "Unterfensterleiste"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@option:check"
 msgid "Show the tab bar"
 msgstr "Unterfensterleiste anzeigen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@label:slider"
 msgid "Width:"
 msgstr "Breite:"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@label:slider"
 msgid "Height:"
 msgstr "Höhe:"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@title:group"
 msgid "Position"
 msgstr "Position"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@item:inrange Direction to move the window in"
 msgid "Left"
 msgstr "Links"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@item:inrange Direction to move the window in"
 msgid "Right"
 msgstr "Rechts"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@title"
 msgid "Welcome to Kudari"
 msgstr "Willkommen bei Kudari"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "New Session"
 msgstr "Neue Sitzung"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Close Session"
 msgstr "Sitzung schließen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Previous Session"
 msgstr "Vorherige Sitzung"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Next Session"
 msgstr "Nächste Sitzung"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Move Session Left"
 msgstr "Sitzung nach links verschieben"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Move Session Right"
 msgstr "Sitzung nach rechts verschieben"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Rename Session..."
 msgstr "Sitzung umbenennen..."
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Previous Terminal"
 msgstr "Vorheriges Terminal"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Next Terminal"
 msgstr "Nächstes Terminal"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Split Automatically"
 msgstr "Automatisch teilen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Disable Keyboard Input"
 msgstr "Tastatureingabe deaktivieren"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Switch to Session %1"
 msgstr "Zu Sitzung %1 wechseln"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@title:menu"
 msgid "Help"
 msgstr "Hilfe"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@title:menu"
 msgid "Screen"
 msgstr "Bildschirm"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@title:menu"
 msgid "Width"
 msgstr "Breite"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@title:menu"
 msgid "Height"
 msgstr "Höhe"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@title:menu"
 msgid "Settings"
 msgstr "Einstellungen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@item:inmenu"
 msgid "Screen %1"
 msgstr "Bildschirm %1"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgid "%1%"
 msgstr "%1 %"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@title Preferences page name"
 msgid "Window"
 msgstr "Fenster"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@title Preferences page name"
 msgid "Behavior"
 msgstr "Verhalten"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@title Preferences page name"
 msgid "Appearance"
 msgstr "Erscheinungsbild"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@title:menu"
 msgid "Disable Keyboard Input"
 msgstr "Tastatureingabe deaktivieren"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@info:tooltip"
 msgid "New Session"
 msgstr "Neue Sitzung"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@info:tooltip"
 msgid "Close Session"
 msgstr "Sitzung schließen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@title:tab"
 msgid "Shell"
 msgstr "Shell"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@info:tooltip"
 msgid "Open Menu"
 msgstr "Menü öffnen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@info:tooltip Quits the application"
 msgid "Quit"
 msgstr "Beenden"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title"
 msgid "A drop-down terminal for KDE Plasma on Wayland"
 msgstr "Ein Dropdown-Terminal für KDE Plasma unter Wayland"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action"
 msgid "Clear Scrollback"
 msgstr "Verlauf leeren"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action:inmenu"
 msgid "Open Link"
 msgstr "Link öffnen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action:inmenu"
 msgid "Copy Link Address"
 msgstr "Linkadresse kopieren"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "The text you are pasting contains line breaks. Commands in it will run immediately. Paste it anyway?"
 msgstr "Der einzufügende Text enthält Zeilenumbrüche. Darin enthaltene Befehle werden sofort ausgeführt. Trotzdem einfügen?"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:window"
 msgid "Paste Multiple Lines?"
 msgstr "Mehrere Zeilen einfügen?"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title Preferences page name"
 msgid "Terminal"
 msgstr "Terminal"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title Preferences page name"
 msgid "Security"
 msgstr "Sicherheit"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:group"
 msgid "Remote Control"
 msgstr "Fernsteuerung"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Allow other programs to run commands"
 msgstr "Anderen Programmen erlauben, Befehle auszuführen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Lets the D-Bus methods runCommand and runCommandInTerminal type into your terminals. Every program running as your user could then execute commands through them. Leave this off unless a script of yours needs it."
 msgstr "Erlaubt den D-Bus-Methoden runCommand und runCommandInTerminal, in Ihre Terminals zu tippen. Jedes Programm, das unter Ihrem Benutzer läuft, könnte dann darüber Befehle ausführen. Lassen Sie dies ausgeschaltet, sofern nicht eines Ihrer Skripte es benötigt."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:group"
 msgid "Font"
 msgstr "Schrift"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:listbox"
 msgid "Font family:"
 msgstr "Schriftfamilie:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "System default"
 msgstr "Systemstandard"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:spinbox"
 msgid "Font size:"
 msgstr "Schriftgröße:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:group"
 msgid "Scrolling and Cursor"
 msgstr "Blättern und Cursor"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:spinbox"
 msgid "History lines:"
 msgstr "Zeilen im Verlauf:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:listbox"
 msgid "Cursor shape:"
 msgstr "Cursorform:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "Block"
 msgstr "Block"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "Underline"
 msgstr "Unterstrich"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "I-Beam"
 msgstr "Senkrechter Strich"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:group"
 msgid "Transparency"
 msgstr "Transparenz"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:spinbox"
 msgid "Background opacity:"
 msgstr "Deckkraft des Hintergrunds:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Blur the background"
 msgstr "Hintergrund weichzeichnen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info:placeholder"
 msgid "Find…"
 msgstr "Suchen…"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info:tooltip"
 msgid "Find Next"
 msgstr "Weitersuchen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info:tooltip"
 msgid "Find Previous"
 msgstr "Rückwärts suchen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info:tooltip"
 msgid "Close Search"
 msgstr "Suche schließen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action"
 msgid "Enlarge Font"
 msgstr "Schrift vergrößern"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action"
 msgid "Shrink Font"
 msgstr "Schrift verkleinern"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action"
 msgid "Reset Font Size"
 msgstr "Schriftgröße zurücksetzen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "This replaces the matching settings with those from Yakuake and Konsole. Continue?"
 msgstr "Dies ersetzt die entsprechenden Einstellungen durch die von Yakuake und Konsole. Fortfahren?"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:window"
 msgid "Import from Yakuake"
 msgstr "Aus Yakuake importieren"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action:button"
 msgid "Import from Yakuake…"
 msgstr "Aus Yakuake importieren…"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Take over settings from Yakuake"
 msgstr "Einstellungen von Yakuake übernehmen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Yakuake is using %1. If you choose the same key, Kudari will ask before taking it over."
 msgstr "Yakuake verwendet %1. Wenn Sie dieselbe Taste wählen, fragt Kudari nach, bevor es sie übernimmt."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Bell in session \"%1\"."
 msgstr "Signalton in Sitzung „%1“."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action"
 msgid "Auto Save Output"
 msgstr "Ausgabe automatisch speichern"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Blinking cursor"
 msgstr "Blinkender Cursor"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Change the font size with Ctrl+mouse wheel"
 msgstr "Schriftgröße mit Strg+Mausrad ändern"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:textbox"
 msgid "Characters that end a word on double click (empty for the default):"
 msgstr "Zeichen, die bei Doppelklick ein Wort beenden (leer für die Voreinstellung):"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action"
 msgid "Clear Scrollback and Reset"
 msgstr "Verlauf leeren und zurücksetzen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:textbox"
 msgid "Command (empty for the login shell):"
 msgstr "Befehl (leer für die Anmelde-Shell):"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:group"
 msgid "Compatibility"
 msgstr "Kompatibilität"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inmenu"
 msgid "Continue Task (CONT)"
 msgstr "Prozess fortsetzen (CONT)"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Copy selected text automatically"
 msgstr "Ausgewählten Text automatisch kopieren"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info:shell"
 msgid "Could not start the configured command: %1"
 msgstr "Der eingestellte Befehl kann nicht gestartet werden: %1"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Dim terminals without focus"
 msgstr "Terminals ohne Fokus abdunkeln"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:group"
 msgid "Display"
 msgstr "Anzeige"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "Do nothing"
 msgstr "Nichts tun"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Draw bold text in bright colors"
 msgstr "Fetten Text in hellen Farben darstellen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inmenu"
 msgid "Hangup (HUP)"
 msgstr "Auflegen (HUP)"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "Hidden"
 msgstr "Ausgeblendet"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Highlight All Matches"
 msgstr "Alle Treffer hervorheben"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:textbox"
 msgid "Initial directory (empty for the current directory):"
 msgstr "Startordner (leer für den aktuellen Ordner):"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inmenu"
 msgid "Interrupt Task (INT)"
 msgstr "Prozess unterbrechen (INT)"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inmenu"
 msgid "Kill Task (KILL)"
 msgstr "Prozess sofort beenden (KILL)"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Kitty keyboard protocol"
 msgstr "Kitty-Tastaturprotokoll"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "Left"
 msgstr "Links"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Lets programs tell apart keys that terminals usually mix up. Takes effect in new terminals."
 msgstr "Ermöglicht Programmen, Tasten zu unterscheiden, die Terminals üblicherweise verwechseln. Wirkt sich in neuen Terminals aus."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:spinbox"
 msgid "Line spacing:"
 msgstr "Zeilenabstand:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Match Case"
 msgstr "Groß-/Kleinschreibung beachten"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:listbox"
 msgid "Middle click:"
 msgstr "Mittelklick:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action"
 msgid "Monitor for Process Finishing"
 msgstr "Auf Prozessende überwachen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:group"
 msgid "Mouse"
 msgstr "Maus"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "None"
 msgstr "Keine"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "Notification"
 msgstr "Benachrichtigung"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:group"
 msgid "Notifications"
 msgstr "Benachrichtigungen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action"
 msgid "Open File Manager"
 msgstr "Dateiverwaltung öffnen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action"
 msgid "Paste Selection"
 msgstr "Auswahl einfügen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "Paste clipboard"
 msgstr "Zwischenablage einfügen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "Paste selection"
 msgstr "Auswahl einfügen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Process finished in monitored terminal in session \"%1\"."
 msgstr "Prozess im überwachten Terminal in Sitzung „%1“ beendet."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Regular Expression"
 msgstr "Regulärer Ausdruck"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "Right"
 msgstr "Rechts"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:listbox"
 msgid "Scrollbar:"
 msgstr "Bildlaufleiste:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action"
 msgid "Search the Web"
 msgstr "Im Internet suchen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action"
 msgid "Select Line"
 msgstr "Zeile auswählen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action"
 msgid "Select Mode"
 msgstr "Auswahlmodus"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:menu"
 msgid "Send Signal"
 msgstr "Signal senden"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Send arrow keys for the mouse wheel in full-screen programs"
 msgstr "Pfeiltasten für das Mausrad in Vollbildprogrammen senden"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Show the terminal size after resizing"
 msgstr "Terminalgröße nach dem Ändern der Größe anzeigen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:spinbox"
 msgid "Silence after:"
 msgstr "Stille nach:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:group"
 msgid "Startup"
 msgstr "Start"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inmenu"
 msgid "Suspend Task (STOP)"
 msgstr "Prozess anhalten (STOP)"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title Preferences page name"
 msgid "Terminal Behavior"
 msgstr "Terminal-Verhalten"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:listbox"
 msgid "Terminal bell:"
 msgstr "Terminal-Signalton:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inmenu"
 msgid "Terminate Task (TERM)"
 msgstr "Prozess beenden (TERM)"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:textbox"
 msgid "Title format (%d directory, %n program, %u user, %h host, %w program title):"
 msgstr "Titelformat (%d Ordner, %n Programm, %u Benutzer, %h Rechner, %w Programmtitel):"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inmenu"
 msgid "User Signal 1 (USR1)"
 msgstr "Benutzersignal 1 (USR1)"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inmenu"
 msgid "User Signal 2 (USR2)"
 msgstr "Benutzersignal 2 (USR2)"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "Visual flash"
 msgstr "Visuelles Aufblitzen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Allow links set by programs"
 msgstr "Von Programmen gesetzte Links erlauben"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:spinbox"
 msgid "Auto save interval:"
 msgstr "Intervall für automatisches Speichern:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:group"
 msgid "Badge"
 msgstr "Kennzeichen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:chooser"
 msgid "Badge color:"
 msgstr "Farbe des Kennzeichens:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:textbox"
 msgid "Badge font (empty for the terminal font):"
 msgstr "Schrift des Kennzeichens (leer für die Terminalschrift):"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:spinbox"
 msgid "Badge font size:"
 msgstr "Schriftgröße des Kennzeichens:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:spinbox"
 msgid "Badge opacity:"
 msgstr "Deckkraft des Kennzeichens:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:textbox"
 msgid "Badge text (placeholders as in the title format):"
 msgstr "Text des Kennzeichens (Platzhalter wie im Titelformat):"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Border around the terminal with focus"
 msgstr "Rahmen um das Terminal mit Fokus"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:chooser"
 msgid "Border color:"
 msgstr "Rahmenfarbe:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Center the text"
 msgstr "Text zentrieren"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Clear the selection after copying"
 msgstr "Auswahl nach dem Kopieren aufheben"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Copy text with colors as HTML as well"
 msgstr "Text mit Farben zusätzlich als HTML kopieren"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Ctrl+S and Ctrl+Q stop and resume output"
 msgstr "Strg+S und Strg+Q halten die Ausgabe an und setzen sie fort"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Cursor color"
 msgstr "Cursorfarbe"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:spinbox"
 msgid "Dimming of terminals without focus:"
 msgstr "Abdunkeln von Terminals ohne Fokus:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Dragging selected text requires Ctrl"
 msgstr "Ziehen von ausgewähltem Text erfordert Strg"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:textbox"
 msgid "Editor for file links (PATH, LINE and COLUMN are replaced; empty for the default application):"
 msgstr "Editor für Dateilinks (PATH, LINE und COLUMN werden ersetzt; leer für die Standardanwendung):"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:textbox"
 msgid "Environment variables (one NAME=value per line):"
 msgstr "Umgebungsvariablen (ein NAME=Wert pro Zeile):"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:group"
 msgid "Focus"
 msgstr "Fokus"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Full font hinting"
 msgstr "Vollständiges Hinting der Schrift"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:group"
 msgid "Layout"
 msgstr "Anordnung"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:spinbox"
 msgid "Margin around the text:"
 msgstr "Rand um den Text:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inrange"
 msgid "Off"
 msgstr "Aus"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Only the text, without a background"
 msgstr "Nur der Text, ohne Hintergrund"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Open links with a plain click"
 msgstr "Links mit einfachem Klick öffnen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Programs may use the mouse"
 msgstr "Programme dürfen die Maus verwenden"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Remove spaces at the end of copied lines"
 msgstr "Leerzeichen am Ende kopierter Zeilen entfernen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Remove spaces at the start of copied lines"
 msgstr "Leerzeichen am Anfang kopierter Zeilen entfernen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action"
 msgid "Reset Tab Color"
 msgstr "Unterfensterfarbe zurücksetzen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:listbox"
 msgid "Right click:"
 msgstr "Rechtsklick:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "Select the whole line"
 msgstr "Ganze Zeile auswählen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "Select to the end of the line"
 msgstr "Bis zum Zeilenende auswählen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:group"
 msgid "Selection and Links"
 msgstr "Auswahl und Links"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Shift+Page Up and Page Down move a full page"
 msgstr "Umschalt+Bild auf und Bild ab blättern um eine ganze Seite"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Shift+right click always shows the context menu."
 msgstr "Umschalt+Rechtsklick zeigt immer das Kontextmenü."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Show a badge in the corner of the terminal"
 msgstr "Kennzeichen in der Ecke des Terminals anzeigen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Show line numbers"
 msgstr "Zeilennummern anzeigen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "Show the context menu"
 msgstr "Kontextmenü anzeigen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Smooth fonts"
 msgstr "Schriften glätten"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action"
 msgid "Tab Color..."
 msgstr "Unterfensterfarbe..."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Tab color"
 msgstr "Unterfensterfarbe"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Tab title color after output in the background"
 msgstr "Farbe des Unterfenstertitels nach Ausgabe im Hintergrund"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:group"
 msgid "Tabs"
 msgstr "Unterfenster"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Takes effect in new terminals."
 msgstr "Wirkt sich in neuen Terminals aus."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Text color under the cursor"
 msgstr "Textfarbe unter dem Cursor"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "The visible text of such a link can differ from its target."
 msgstr "Der sichtbare Text eines solchen Links kann sich von seinem Ziel unterscheiden."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:textbox"
 msgid "Title format over SSH (%u user, %U user with @, %h host, %H full host, %c command, %w program title):"
 msgstr "Titelformat über SSH (%u Benutzer, %U Benutzer mit @, %h Rechner, %H vollständiger Rechnername, %c Befehl, %w Programmtitel):"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:listbox"
 msgid "Triple click:"
 msgstr "Dreifachklick:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Underline file names under the mouse"
 msgstr "Dateinamen unter der Maus unterstreichen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Underline links under the mouse"
 msgstr "Links unter der Maus unterstreichen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:spinbox"
 msgid "Vertical line at column:"
 msgstr "Senkrechte Linie bei Spalte:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "A double click on the scrollbar adds or removes a marker."
 msgstr "Ein Doppelklick auf die Bildlaufleiste setzt oder entfernt eine Markierung."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Ask what to do with dropped files"
 msgstr "Nachfragen, was mit abgelegten Dateien geschehen soll"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "Built-in"
 msgstr "Integriert"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action:inmenu"
 msgid "Cancel"
 msgstr "Abbrechen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action:inmenu"
 msgid "Change Directory To"
 msgstr "In diesen Ordner wechseln"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:chooser"
 msgid "Color of markers:"
 msgstr "Farbe der Markierungen:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:chooser"
 msgid "Color of search matches:"
 msgstr "Farbe der Suchtreffer:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action:inmenu"
 msgid "Copy Here"
 msgstr "Hierher kopieren"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:textbox"
 msgid "Emoji font (empty for automatic):"
 msgstr "Emoji-Schrift (leer für automatisch):"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Fade the blinking cursor"
 msgstr "Blinkenden Cursor sanft ein- und ausblenden"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:listbox"
 msgid "Hold to number the links on screen:"
 msgstr "Gedrückt halten, um die Links auf dem Bildschirm zu nummerieren:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Invert the colors of selected text"
 msgstr "Farben von ausgewähltem Text umkehren"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:listbox"
 msgid "Key bindings:"
 msgstr "Tastenbelegung:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Konsole's .keytab files from ~/.local/share/kudari/keytabs. They change the keys they name."
 msgstr "Die .keytab-Dateien von Konsole aus ~/.local/share/kudari/keytabs. Sie ändern die Tasten, die sie nennen."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action:inmenu"
 msgid "Link Here"
 msgstr "Hierher verknüpfen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:textbox"
 msgid "Link types that may open (separated by semicolons):"
 msgstr "Linktypen, die geöffnet werden dürfen (durch Semikolons getrennt):"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Mark new lines while scrolling"
 msgstr "Neue Zeilen beim Blättern markieren"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action:inmenu"
 msgid "Move Here"
 msgstr "Hierher verschieben"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "New terminals start in the directory of the active one"
 msgstr "Neue Terminals starten im Ordner des aktiven Terminals"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Number the links from the bottom"
 msgstr "Links von unten her nummerieren"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "Off"
 msgstr "Aus"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Offers copying, moving and linking. Otherwise their paths are pasted."
 msgstr "Bietet Kopieren, Verschieben und Verknüpfen an. Andernfalls werden ihre Pfade eingefügt."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:spinbox"
 msgid "Opacity of search matches:"
 msgstr "Deckkraft der Suchtreffer:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Otherwise they are drawn without gaps between the cells."
 msgstr "Andernfalls werden sie ohne Lücken zwischen den Zellen gezeichnet."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Otherwise they start in the home directory. An initial directory takes precedence."
 msgstr "Andernfalls starten sie im Persönlichen Ordner. Ein Startordner hat Vorrang."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action:inmenu"
 msgid "Paste Location"
 msgstr "Pfad einfügen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Preview colors under the mouse"
 msgstr "Farbvorschau unter der Maus"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:group"
 msgid "Scrollbar Marks"
 msgstr "Markierungen in der Bildlaufleiste"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:spinbox"
 msgid "Size of markers:"
 msgstr "Größe der Markierungen:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Use the font for Braille characters"
 msgstr "Die Schrift für Braille-Zeichen verwenden"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Use the font for line and block characters"
 msgstr "Die Schrift für Linien- und Blockzeichen verwenden"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "While holding it, the keys 1 to 9 open the numbered links."
 msgstr "Solange sie gedrückt ist, öffnen die Tasten 1 bis 9 die nummerierten Links."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:window"
 msgid "Adjust Scrollback"
 msgstr "Verlauf anpassen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action"
 msgid "Adjust Scrollback..."
 msgstr "Verlauf anpassen ..."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action"
 msgid "Allow Mouse Tracking"
 msgstr "Mausverfolgung erlauben"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:spinbox"
 msgid "Lines kept in this terminal:"
 msgstr "In diesem Terminal behaltene Zeilen:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action"
 msgid "One-Shot Monitors"
 msgstr "Einmalige Überwachung"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Follows the active Plasma theme."
 msgstr "Folgt dem aktiven Plasma-Design."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Plasma theme"
 msgstr "Plasma-Design"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "System theme"
 msgstr "Systemdesign"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Window size and keyboard shortcuts, plus font and colors of your Konsole profile. These settings are only read, not changed."
 msgstr "Fenstergröße und Tastenkürzel sowie Schrift und Farben Ihres Konsole-Profils. Diese Einstellungen werden nur gelesen, nicht verändert."
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@info:credit"
 msgid "Ideas for many terminal options"
 msgstr "Anregungen für viele Terminal-Optionen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgid "Come back in full screen if the window was in full screen"
 msgstr "Wieder im Vollbild erscheinen, wenn das Fenster im Vollbild war"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgid "Hide the window border"
 msgstr "Fensterrahmen ausblenden"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgid "Show an icon in the system tray"
 msgstr "Symbol im Systemabschnitt der Kontrollleiste anzeigen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Close Terminal"
 msgstr "Terminal schließen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Expand Terminal Down"
 msgstr "Terminal nach unten erweitern"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Expand Terminal Left"
 msgstr "Terminal nach links erweitern"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Expand Terminal Right"
 msgstr "Terminal nach rechts erweitern"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Expand Terminal Up"
 msgstr "Terminal nach oben erweitern"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Keep Open When Focus Moves Elsewhere"
 msgstr "Geöffnet lassen, wenn der Fokus woandershin wechselt"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Make Window Shorter"
 msgstr "Fenster niedriger machen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Make Window Taller"
 msgstr "Fenster höher machen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Narrow Window"
 msgstr "Fenster schmaler machen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "New Session, Four Terminals"
 msgstr "Neue Sitzung, vier Terminals"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "New Session, Side by Side"
 msgstr "Neue Sitzung, nebeneinander"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "New Session, Stacked"
 msgstr "Neue Sitzung, übereinander"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Protect from Closing"
 msgstr "Vor dem Schließen schützen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Show/Hide Kudari"
 msgstr "Kudari ein-/ausblenden"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Split into Columns"
 msgstr "In Spalten teilen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Split into Rows"
 msgstr "In Zeilen teilen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Terminal %1"
 msgstr "Terminal %1"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Terminal Settings…"
 msgstr "Terminal-Einstellungen…"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Watch for Activity"
 msgstr "Auf Aktivität überwachen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Watch for Silence"
 msgstr "Auf Stille überwachen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Whole Session"
 msgstr "Gesamte Sitzung"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@action"
 msgid "Widen Window"
 msgstr "Fenster breiter machen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@info"
 msgid "<shortcut>%1</shortcut> shows the window"
 msgstr "<shortcut>%1</shortcut> zeigt das Fenster an"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@info"
 msgid "<warning>Several sessions are open, <emphasis>and some of them are protected from closing.</emphasis> Quitting ends all of them.</warning>"
 msgstr "<warning>Mehrere Sitzungen sind geöffnet, <emphasis>und einige davon sind vor dem Schließen geschützt.</emphasis> Beim Beenden werden alle geschlossen.</warning>"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@info"
 msgid "<warning>Several sessions are open. Quitting ends all of them.</warning>"
 msgstr "<warning>Mehrere Sitzungen sind geöffnet. Beim Beenden werden alle geschlossen.</warning>"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@info"
 msgid "<warning>Some sessions are protected from closing. Quitting ends them as well.</warning>"
 msgstr "<warning>Einige Sitzungen sind vor dem Schließen geschützt. Beim Beenden werden auch sie geschlossen.</warning>"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@info"
 msgid "<warning>This session is protected from closing.</warning>"
 msgstr "<warning>Diese Sitzung ist vor dem Schließen geschützt.</warning>"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@info"
 msgid "Activity in session \"%1\"."
 msgstr "Aktivität in Sitzung „%1“."
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@info"
 msgid "Close this session anyway?"
 msgstr "Diese Sitzung trotzdem schließen?"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@info"
 msgid "Close this terminal anyway?"
 msgstr "Dieses Terminal trotzdem schließen?"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@info"
 msgid "Quit Kudari?"
 msgstr "Kudari beenden?"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@info"
 msgid "Kudari slides down and up again with a keyboard shortcut. You can pick another one now:"
 msgstr "Kudari gleitet mit einem Tastenkürzel herunter und wieder hinauf. Sie können jetzt ein anderes wählen:"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@info"
 msgid "Silence in session \"%1\"."
 msgstr "Stille in Sitzung „%1“."
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@info"
 msgid "The menu lets you change it later as well."
 msgstr "Im Menü können Sie es auch später noch ändern."
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@info:credit"
 msgid "Kudari started as a rewrite of Yakuake in Rust."
 msgstr "Kudari begann als Neufassung von Yakuake in Rust."
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@info:credit"
 msgid "Yakuake, the drop-down terminal Kudari grew out of"
 msgstr "Yakuake, das Dropdown-Terminal, aus dem Kudari hervorgegangen ist"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@info:tooltip"
 msgid "Keep open when the focus moves elsewhere"
 msgstr "Geöffnet lassen, wenn der Fokus woandershin wechselt"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@item:inmenu"
 msgid "Where the mouse pointer is"
 msgstr "Dort, wo sich der Mauszeiger befindet"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@label:listbox"
 msgid "Screen:"
 msgstr "Bildschirm:"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@label:spinbox"
 msgid "Opacity of the background color:"
 msgstr "Deckkraft der Hintergrundfarbe:"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@option:check"
 msgid "Ask before quitting with several sessions open"
 msgstr "Vor dem Beenden mit mehreren geöffneten Sitzungen nachfragen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@option:check"
 msgid "Flash a terminal briefly when it gets the focus"
 msgstr "Ein Terminal kurz aufblitzen lassen, wenn es den Fokus erhält"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@option:check"
 msgid "Focus the terminal under the mouse pointer"
 msgstr "Das Terminal unter dem Mauszeiger fokussieren"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@option:check"
 msgid "Keep the window open when another window gets the focus"
 msgstr "Fenster geöffnet lassen, wenn ein anderes Fenster den Fokus erhält"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@option:check"
 msgid "Keep the window open when its last session closes"
 msgstr "Fenster geöffnet lassen, wenn seine letzte Sitzung geschlossen wird"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@option:check"
 msgid "Let the desktop show through the background"
 msgstr "Die Arbeitsfläche durch den Hintergrund scheinen lassen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@option:check"
 msgid "Let the show/hide shortcut focus the window instead of hiding it"
 msgstr "Das Kürzel zum Ein-/Ausblenden fokussiert das Fenster, statt es auszublenden"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@option:check"
 msgid "Name tabs after the title of their terminal"
 msgstr "Unterfenster nach dem Titel ihres Terminals benennen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@option:check"
 msgid "Show the window when Kudari starts"
 msgstr "Fenster beim Start von Kudari anzeigen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@title:group"
 msgid "Background"
 msgstr "Hintergrund"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@title:group"
 msgid "Questions"
 msgstr "Rückfragen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@title:group"
 msgid "Size"
 msgstr "Größe"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@title:group"
 msgid "Theme"
 msgstr "Design"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@title:menu"
 msgid "Quick Settings"
 msgstr "Schnelleinstellungen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@title:menu"
 msgid "Watch for Activity"
 msgstr "Auf Aktivität überwachen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-kuit-format
 msgctxt "@title:menu"
 msgid "Watch for Silence"
 msgstr "Auf Stille überwachen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@title:tab"
 msgid "Shell %1"
 msgstr "Shell %1"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@title:window"
 msgid "Close Protected Session"
 msgstr "Geschützte Sitzung schließen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@title:window"
 msgid "Quit"
 msgstr "Beenden"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@title:window"
 msgid "Welcome"
 msgstr "Willkommen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:group"
 msgid "AI Agents"
 msgstr "KI-Agenten"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Allow AI agents to read terminals"
 msgstr "KI-Agenten das Lesen der Terminals erlauben"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Agents connected through kudari mcp see the text of all terminals, including passwords or tokens shown there."
 msgstr "Über kudari mcp verbundene Agenten sehen den Text aller Terminals, auch dort angezeigte Passwörter oder Tokens."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Allow AI agents to control terminals"
 msgstr "KI-Agenten die Steuerung der Terminals erlauben"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Agents can type into terminals, press keys, and open and close sessions of their own."
 msgstr "Agenten können in Terminals tippen, Tasten drücken sowie eigene Sitzungen öffnen und schließen."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Ask before running their commands"
 msgstr "Vor dem Ausführen ihrer Befehle nachfragen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Agents type only at the shell prompt, and their commands run when you press Return."
 msgstr "Agenten tippen nur an der Eingabeaufforderung der Shell, und ihre Befehle laufen erst, wenn Sie die Eingabetaste drücken."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info:shell"
 msgid "Serve the Model Context Protocol to an AI agent on standard input and output"
 msgstr "Das Model Context Protocol für einen KI-Agenten über Standardeingabe und -ausgabe bereitstellen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title:window"
 msgid "AI Agent"
 msgstr "KI-Agent"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "An AI agent wants to read your terminals. The request comes from %1."
 msgstr "Ein KI-Agent möchte Ihre Terminals lesen. Die Anfrage kommt von %1."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "An AI agent wants to read and control your terminals. The request comes from %1."
 msgstr "Ein KI-Agent möchte Ihre Terminals lesen und steuern. Die Anfrage kommt von %1."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "An AI agent wants to control your terminals. The request comes from %1."
 msgstr "Ein KI-Agent möchte Ihre Terminals steuern. Die Anfrage kommt von %1."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "an unknown program"
 msgstr "einem unbekannten Programm"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Allow this only if you started the agent yourself. Its access lasts until the agent ends, or until you end it with the eye button in the bar."
 msgstr "Erlauben Sie das nur, wenn Sie den Agenten selbst gestartet haben. Sein Zugriff gilt, bis der Agent endet oder bis Sie ihn mit dem Augen-Knopf in der Leiste beenden."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action:button"
 msgid "Allow"
 msgstr "Erlauben"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action:button"
 msgid "Deny"
 msgstr "Ablehnen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info:tooltip"
 msgid "An AI agent has access to your terminals. Click to end its access."
 msgstr "Ein KI-Agent hat Zugriff auf Ihre Terminals. Klicken, um seinen Zugriff zu beenden."
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@action:inmenu"
 msgid "Full Screen Mode"
 msgstr "Vollbildmodus"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@action:inmenu"
 msgid "Quit"
 msgstr "Beenden"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@action:inmenu"
 msgid "Copy"
 msgstr "Kopieren"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@action:inmenu"
 msgid "Paste"
 msgstr "Einfügen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@action:inmenu"
 msgid "Select All"
 msgstr "Alles auswählen"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@action:inmenu"
 msgid "Find…"
 msgstr "Suchen…"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@action:inmenu"
 msgid "Save Output As…"
 msgstr "Ausgabe speichern unter…"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@action:inmenu"
 msgid "Print…"
 msgstr "Drucken…"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@item:inmenu"
 msgid "Command Prompt"
 msgstr "Eingabeaufforderung"
 
-# Machine translation, not reviewed by a human translator.
 #, kde-format
 msgctxt "@title:menu"
 msgid "New Session With"
 msgstr "Neue Sitzung mit"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:listbox"
 msgid "Shell:"
 msgstr "Shell:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@option:check"
 msgid "Shell integration"
 msgstr "Shell-Integration"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Kudari sets up the prompt of the shell, so that tabs know its directory and AI agents type only at the prompt. Takes effect in new terminals."
 msgstr "Kudari richtet die Eingabeaufforderung der Shell ein, damit Tabs ihr Verzeichnis kennen und KI-Agenten nur an der Eingabeaufforderung tippen. Gilt für neue Terminals."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title Preferences page name"
 msgid "Shortcuts"
 msgstr "Tastenkürzel"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action:button"
 msgid "Press a shortcut…"
 msgstr "Tastenkürzel drücken …"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info:tooltip"
 msgid "Back to the default"
 msgstr "Zurück zur Voreinstellung"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info:tooltip"
 msgid "Remove the shortcut"
 msgstr "Tastenkürzel entfernen"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Another program already uses this shortcut."
 msgstr "Ein anderes Programm verwendet dieses Tastenkürzel bereits."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@action:inmenu"
 msgid "About Kudari"
 msgstr "Über Kudari"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@title"
 msgid "A drop-down terminal for Windows and KDE Plasma"
 msgstr "Ein ausklappbares Terminal für Windows und KDE Plasma"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@info"
 msgid "Kudari uses Qt under the LGPL 3. The licenses of Qt and of the other parts are in the folder licenses next to the program."
 msgstr "Kudari verwendet Qt unter der LGPL 3. Die Lizenzen von Qt und der übrigen Teile liegen im Ordner licenses neben dem Programm."
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@label:listbox"
 msgid "Color scheme:"
 msgstr "Farbschema:"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "Light"
 msgstr "Hell"
 
-# Machine translation, not reviewed by a human translator.
 msgctxt "@item:inlistbox"
 msgid "Dark"
 msgstr "Dunkel"
