@@ -17,6 +17,16 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <launchable type="desktop-id">io.github.marcjose.kudari.desktop</launchable>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Tabs, with two terminals side by side</caption>
+      <image>https://raw.githubusercontent.com/MarcJose/kudari/main/docs/screenshots/kde-terminal.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The settings</caption>
+      <image>https://raw.githubusercontent.com/MarcJose/kudari/main/docs/screenshots/kde-settings.png</image>
+    </screenshot>
+  </screenshots>
   <provides>
     <binary>kudari</binary>
   </provides>

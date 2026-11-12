@@ -67,6 +67,8 @@ git config core.hooksPath .githooks
   `THIRD_PARTY_LICENSES` when the crates change. `tools/icons.py` renders the icon,
   `data/icons/io.github.marcjose.kudari.svg`, into the files Windows needs, which
   `--check` compares with the SVG; KDE installs the SVG and its symbolic variant itself.
+  `tools/screenshots.sh` takes the screenshots of the KDE version in `docs/screenshots`,
+  from a build with `--features test-hooks`; those of Windows are taken by hand.
 - **Dependencies.** A new crate needs a good reason. `cargo deny check` allows only the
   licenses listed in `deny.toml` and crates from crates.io.
 

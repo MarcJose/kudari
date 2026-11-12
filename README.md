@@ -1,12 +1,15 @@
 # Kudari
 
-A drop-down terminal for KDE Plasma on Wayland. A key, F12 by default, slides a terminal
-down from the top of the screen, over whatever window is open; the same key sends it away
-again, and the shells in it keep running. Kudari keeps the workflow of
-[Yakuake](https://apps.kde.org/yakuake) and is built anew in Rust, QML and Kirigami.
+A drop-down terminal for KDE Plasma on Wayland and for Windows. A key, F12 by default on KDE
+and Ctrl+F12 on Windows, slides a terminal down from the top of the screen, over whatever
+window is open; the same key sends it away again, and the shells in it keep running. Kudari
+keeps the workflow of [Yakuake](https://apps.kde.org/yakuake) and is built anew in Rust and
+QML, with Kirigami on KDE and the look of Windows 11 there.
 
 The name is the Japanese 下り, *kudari*, "downwards", as the terminal comes down from the top
 of the screen. Before its first release, it was called Rakuake.
+
+![Kudari on KDE Plasma: three tabs, the first with two terminals side by side](docs/screenshots/kde-terminal.png)
 
 ## What it does
 
@@ -28,6 +31,15 @@ of the screen. Before its first release, it was called Rakuake.
   Yakuake and the profile of Konsole, and the D-Bus interface has the methods of Yakuake,
   so scripts carry over.
 - In English and German, with a man page.
+
+## Screenshots
+
+| | |
+|---|---|
+| ![The settings on KDE Plasma, in Kirigami](docs/screenshots/kde-settings.png) | ![The settings on Windows 11, in the style of its own settings](docs/screenshots/windows-settings.png) |
+| The settings on KDE Plasma | The same settings on Windows 11 |
+
+![Kudari on Windows 11: PowerShell and the Command Prompt side by side](docs/screenshots/windows-terminal.png)
 
 ## Why
 
