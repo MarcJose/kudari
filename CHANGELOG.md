@@ -5,8 +5,8 @@ From 0.1.0 on, `tools/release.py` writes each section from the [Conventional Com
 
 ## [0.1.0] - unreleased
 
-The first release: a drop-down terminal for KDE Plasma on Wayland in Rust, cxx-qt, QML and
-Kirigami, which keeps the workflow of Yakuake.
+The first release: a drop-down terminal for KDE Plasma on Wayland and for Windows 11, in
+Rust, cxx-qt and QML, which keeps the workflow of Yakuake.
 
 ### Features
 
@@ -26,4 +26,11 @@ Kirigami, which keeps the workflow of Yakuake.
 - `kudari mcp`, a Model Context Protocol server through which AI agents read the
   terminals and, if allowed, type commands that wait for the user's Return. It is off by
   default, and Kudari asks the user before each new agent gets access.
-- A German translation, a man page, and notifications through KNotification.
+- A German and a British English translation, a man page, and notifications through
+  KNotification.
+- A version for Windows 11 with the same settings in the style of Windows, its accent color
+  and light or dark mode: Ctrl+F12 by default, tabs and split terminals for the Command
+  Prompt, PowerShell and WSL, as an MSIX package, a ZIP archive and manifests for winget,
+  signed with a certificate of its own.
+- Releases with checksums signed through Sigstore, build provenance, SBOMs, and a Linux
+  package that is rebuilt and compared byte for byte before it is published.
