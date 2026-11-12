@@ -48,7 +48,8 @@ fn split(command: &str, escapes: bool) -> Option<Vec<String>> {
 /// How a shell reads a quoted word, which differs between the shells of Unix and Windows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Quoting {
-    /// sh, bash, zsh, fish and the like, also in WSL: single quotes.
+    /// sh, bash, zsh, fish and the like, also in WSL: single quotes, with `'` and `\\` outside
+    /// of them, as fish reads backslashes within them.
     #[default]
     Posix,
     /// cmd.exe: double quotes, which keep `&`, `|`, `<`, `>` and `^` from it.
@@ -97,7 +98,18 @@ pub fn quote_path(path: &str, quoting: Quoting) -> Option<String> {
         return None;
     }
     match quoting {
-        Quoting::Posix => Some(format!("'{}'", path.replace('\'', "'\\''"))),
+        Quoting::Posix => {
+            let mut quoted = String::from("'");
+            for character in path.chars() {
+                match character {
+                    '\'' => quoted.push_str("'\\''"),
+                    '\\' => quoted.push_str("'\\\\'"),
+                    _ => quoted.push(character),
+                }
+            }
+            quoted.push('\'');
+            Some(quoted)
+        }
         Quoting::CommandPrompt => (!path.contains(['"', '%'])).then(|| format!("\"{path}\"")),
         Quoting::PowerShell => {
             // Within single quotes, PowerShell takes any of its single quotes, doubled, as one.
@@ -147,6 +159,9 @@ mod tests {
         assert_eq!(posix("/tmp/a b").as_deref(), Some("'/tmp/a b'"));
         assert_eq!(posix("it's").as_deref(), Some("'it'\\''s'"));
         assert_eq!(posix("$(rm -rf ~)`x`;&|").as_deref(), Some("'$(rm -rf ~)`x`;&|'"));
+        // fish ends a quote at \' and keeps \\ within it; outside, both shells read \\ alike.
+        assert_eq!(posix(r"x\").as_deref(), Some(r"'x'\\''"));
+        assert_eq!(posix(r"a\b").as_deref(), Some(r"'a'\\'b'"));
 
         let cmd = |path| quote_path(path, Quoting::CommandPrompt);
         assert_eq!(cmd(r"C:\Tom & Jerry.txt").as_deref(), Some(r#""C:\Tom & Jerry.txt""#));
