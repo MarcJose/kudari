@@ -1,0 +1,50 @@
+name: Bug
+description: Something does not work as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: What you see, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen
+      description: The steps, keys or commands that lead to it, as short as you can make them.
+      placeholder: |
+        1. Open a new session
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What `kudari --version` says.
+      placeholder: kudari 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: system
+    attributes:
+      label: System
+      options:
+        - KDE Plasma on Wayland
+        - Windows 11
+        - Windows 10
+        - Something else (please say which below)
+    validations:
+      required: true
+  - type: input
+    id: installed
+    attributes:
+      label: Installed from
+      description: The release archive, MSIX package, winget, a distribution package, or built yourself.
+  - type: textarea
+    id: details
+    attributes:
+      label: More details
+      description: Shell, distribution or Windows build, messages Kudari printed, screenshots. Please leave out anything private, such as tokens shown in a terminal.
