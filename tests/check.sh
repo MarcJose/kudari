@@ -19,6 +19,16 @@ python3 tools/box_drawing.py --check
 echo "== Translations"
 python3 tools/translations.py --check --strict --quiet
 
+echo "== Packages for the AUR"
+python3 tools/aur.py --check
+for pkgbuild in packaging/aur/*/PKGBUILD; do
+    findings=$(namcap "$pkgbuild")
+    if [ -n "$findings" ]; then
+        echo "$findings"
+        exit 1
+    fi
+done
+
 echo "== Formatting"
 cargo fmt --all --check
 

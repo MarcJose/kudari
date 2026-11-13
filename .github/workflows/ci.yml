@@ -31,7 +31,7 @@ jobs:
           persist-credentials: false
       - run: |
           # shellcheck disable=SC2046 # the package list is meant to split
-          pacman -S --noconfirm --needed rust vale $(grep -v '^#' .github/arch-packages.txt)
+          pacman -S --noconfirm --needed rust vale namcap $(grep -v '^#' .github/arch-packages.txt)
       # The checkout belongs to another user than the container's root, and Vale gets its
       # files from git.
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -114,6 +114,22 @@ jobs:
           cmake --build build
           DESTDIR="$PWD/package" cmake --install build
       - run: tools/dist.sh verify package
+
+  # The packages for the AUR, built as an AUR helper would, installed and started: kudari-git
+  # from this commit, kudari-bin from the release its PKGBUILD names.
+  aur:
+    runs-on: ubuntu-latest
+    container: archlinux:base-20261101.0.620205@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - run: pacman -Syu --noconfirm --needed git base-devel namcap
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: tests/aur.sh git
+      - run: tests/aur.sh bin
 
   # The GUI test runs with coverage measured, so it serves for both.
   gui-and-coverage:
