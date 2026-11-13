@@ -171,7 +171,27 @@ ApplicationWindow {
     Component {
         id: itemComponent
 
-        MenuItem {}
+        // With its shortcut on the right, dimmed, as the menus of Windows show it.
+        MenuItem {
+            id: menuItem
+
+            property string shortcut: ""
+
+            rightPadding: 12 + (shortcut.length > 0 ? shortcutLabel.implicitWidth + 24 : 0)
+
+            Label {
+                id: shortcutLabel
+
+                anchors.right: parent.right
+                anchors.rightMargin: 12
+                anchors.verticalCenter: parent.verticalCenter
+                visible: menuItem.shortcut.length > 0
+                text: menuItem.shortcut
+                font: menuItem.font
+                color: menuItem.palette.text
+                opacity: menuItem.enabled ? 0.6 : 0.4
+            }
+        }
     }
 
     Component {
@@ -190,6 +210,7 @@ ApplicationWindow {
             } else {
                 const item = itemComponent.createObject(null, {
                     text: entry.text,
+                    shortcut: root.shortcutText(entry),
                     checkable: entry.checkable === true || (entry.type === "value" && entry.kind !== "signal"),
                     checked: entry.checked === true,
                     enabled: entry.enabled !== false
@@ -210,6 +231,12 @@ ApplicationWindow {
         }
         menu.width = Math.min(widest + menu.leftPadding + menu.rightPadding, root.width);
         return menu;
+    }
+
+    // The first key of an action, as the user's language names it; none for other entries.
+    function shortcutText(entry) {
+        const shortcut = entry.type === "action" ? root.shortcuts.find(candidate => candidate.name === entry.name) : undefined;
+        return shortcut && shortcut.sequences.length > 0 ? app.nativeKeySequence(shortcut.sequences[0]) : "";
     }
 
     function activate(entry, checked) {
