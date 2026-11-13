@@ -1,0 +1,6 @@
+# The Arch packages Kudari builds against; the workflows install them. Rust itself comes
+# from the rust package or, where llvm-tools are needed, from rustup.
+clang python wayland extra-cmake-modules qt6-base qt6-declarative qt6-svg qt6-wayland
+kirigami kirigami-addons kcolorscheme kconfig kconfigwidgets kcoreaddons kcrash
+kdoctools kglobalaccel ki18n kio knotifications knotifyconfig kstatusnotifieritem
+kwidgetsaddons kwindowsystem kxmlgui layer-shell-qt qqc2-desktop-style

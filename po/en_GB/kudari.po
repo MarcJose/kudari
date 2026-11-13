@@ -1,0 +1,1434 @@
+# SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de>
+# SPDX-License-Identifier: MIT
+msgid ""
+msgstr ""
+"Project-Id-Version: kudari\n"
+"PO-Revision-Date: 2026-11-12 00:00+0100\n"
+"Last-Translator: Marc Jose <marc@hahn-jose.de>\n"
+"Language-Team: British English\n"
+"Language: en_GB\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=n != 1;\n"
+
+#, kde-format
+msgctxt "@title:group Group box label"
+msgid "General"
+msgstr "General"
+
+#, kde-format
+msgctxt "@label:chooser"
+msgid "Background color:"
+msgstr "Background colour:"
+
+#, kde-format
+msgctxt "@title:group"
+msgid "Tab Bar"
+msgstr "Tab Bar"
+
+#, kde-format
+msgctxt "@option:check"
+msgid "Show the tab bar"
+msgstr "Show the tab bar"
+
+#, kde-format
+msgctxt "@label:slider"
+msgid "Width:"
+msgstr "Width:"
+
+#, kde-format
+msgctxt "@label:slider"
+msgid "Height:"
+msgstr "Height:"
+
+#, kde-format
+msgctxt "@title:group"
+msgid "Position"
+msgstr "Position"
+
+#, kde-format
+msgctxt "@item:inrange Direction to move the window in"
+msgid "Left"
+msgstr "Left"
+
+#, kde-format
+msgctxt "@item:inrange Direction to move the window in"
+msgid "Right"
+msgstr "Right"
+
+#, kde-format
+msgctxt "@title"
+msgid "Welcome to Kudari"
+msgstr "Welcome to Kudari"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "New Session"
+msgstr "New Session"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Close Session"
+msgstr "Close Session"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Previous Session"
+msgstr "Previous Session"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Next Session"
+msgstr "Next Session"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Move Session Left"
+msgstr "Move Session Left"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Move Session Right"
+msgstr "Move Session Right"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Rename Session..."
+msgstr "Rename Session..."
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Previous Terminal"
+msgstr "Previous Terminal"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Next Terminal"
+msgstr "Next Terminal"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Split Automatically"
+msgstr "Split Automatically"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Disable Keyboard Input"
+msgstr "Disable Keyboard Input"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Switch to Session %1"
+msgstr "Switch to Session %1"
+
+#, kde-kuit-format
+msgctxt "@title:menu"
+msgid "Help"
+msgstr "Help"
+
+#, kde-kuit-format
+msgctxt "@title:menu"
+msgid "Screen"
+msgstr "Screen"
+
+#, kde-kuit-format
+msgctxt "@title:menu"
+msgid "Width"
+msgstr "Width"
+
+#, kde-kuit-format
+msgctxt "@title:menu"
+msgid "Height"
+msgstr "Height"
+
+#, kde-kuit-format
+msgctxt "@title:menu"
+msgid "Settings"
+msgstr "Settings"
+
+#, kde-kuit-format
+msgctxt "@item:inmenu"
+msgid "Screen %1"
+msgstr "Screen %1"
+
+#, kde-format
+msgid "%1%"
+msgstr "%1%"
+
+#, kde-kuit-format
+msgctxt "@title Preferences page name"
+msgid "Window"
+msgstr "Window"
+
+#, kde-kuit-format
+msgctxt "@title Preferences page name"
+msgid "Behavior"
+msgstr "Behaviour"
+
+#, kde-kuit-format
+msgctxt "@title Preferences page name"
+msgid "Appearance"
+msgstr "Appearance"
+
+#, kde-kuit-format
+msgctxt "@title:menu"
+msgid "Disable Keyboard Input"
+msgstr "Disable Keyboard Input"
+
+#, kde-kuit-format
+msgctxt "@info:tooltip"
+msgid "New Session"
+msgstr "New Session"
+
+#, kde-kuit-format
+msgctxt "@info:tooltip"
+msgid "Close Session"
+msgstr "Close Session"
+
+#, kde-kuit-format
+msgctxt "@title:tab"
+msgid "Shell"
+msgstr "Shell"
+
+#, kde-kuit-format
+msgctxt "@info:tooltip"
+msgid "Open Menu"
+msgstr "Open Menu"
+
+#, kde-kuit-format
+msgctxt "@info:tooltip Quits the application"
+msgid "Quit"
+msgstr "Quit"
+
+msgctxt "@action"
+msgid "Auto Save Output"
+msgstr "Auto Save Output"
+
+msgctxt "@option:check"
+msgid "Blinking cursor"
+msgstr "Blinking cursor"
+
+msgctxt "@option:check"
+msgid "Change the font size with Ctrl+mouse wheel"
+msgstr "Change the font size with Ctrl+mouse wheel"
+
+msgctxt "@label:textbox"
+msgid "Characters that end a word on double click (empty for the default):"
+msgstr "Characters that end a word on double click (empty for the default):"
+
+msgctxt "@action"
+msgid "Clear Scrollback and Reset"
+msgstr "Clear Scrollback and Reset"
+
+msgctxt "@label:textbox"
+msgid "Command (empty for the login shell):"
+msgstr "Command (empty for the login shell):"
+
+msgctxt "@title:group"
+msgid "Compatibility"
+msgstr "Compatibility"
+
+msgctxt "@item:inmenu"
+msgid "Continue Task (CONT)"
+msgstr "Continue Task (CONT)"
+
+msgctxt "@option:check"
+msgid "Copy selected text automatically"
+msgstr "Copy selected text automatically"
+
+msgctxt "@info:shell"
+msgid "Could not start the configured command: %1"
+msgstr "Could not start the configured command: %1"
+
+msgctxt "@option:check"
+msgid "Dim terminals without focus"
+msgstr "Dim terminals without focus"
+
+msgctxt "@title:group"
+msgid "Display"
+msgstr "Display"
+
+msgctxt "@item:inlistbox"
+msgid "Do nothing"
+msgstr "Do nothing"
+
+msgctxt "@option:check"
+msgid "Draw bold text in bright colors"
+msgstr "Draw bold text in bright colours"
+
+msgctxt "@item:inmenu"
+msgid "Hangup (HUP)"
+msgstr "Hangup (HUP)"
+
+msgctxt "@item:inlistbox"
+msgid "Hidden"
+msgstr "Hidden"
+
+msgctxt "@option:check"
+msgid "Highlight All Matches"
+msgstr "Highlight All Matches"
+
+msgctxt "@label:textbox"
+msgid "Initial directory (empty for the current directory):"
+msgstr "Initial directory (empty for the current directory):"
+
+msgctxt "@item:inmenu"
+msgid "Interrupt Task (INT)"
+msgstr "Interrupt Task (INT)"
+
+msgctxt "@item:inmenu"
+msgid "Kill Task (KILL)"
+msgstr "Kill Task (KILL)"
+
+msgctxt "@option:check"
+msgid "Kitty keyboard protocol"
+msgstr "Kitty keyboard protocol"
+
+msgctxt "@item:inlistbox"
+msgid "Left"
+msgstr "Left"
+
+msgctxt "@info"
+msgid "Lets programs tell apart keys that terminals usually mix up. Takes effect in new terminals."
+msgstr "Lets programs tell apart keys that terminals usually mix up. Takes effect in new terminals."
+
+msgctxt "@label:spinbox"
+msgid "Line spacing:"
+msgstr "Line spacing:"
+
+msgctxt "@option:check"
+msgid "Match Case"
+msgstr "Match Case"
+
+msgctxt "@label:listbox"
+msgid "Middle click:"
+msgstr "Middle click:"
+
+msgctxt "@action"
+msgid "Monitor for Process Finishing"
+msgstr "Monitor for Process Finishing"
+
+msgctxt "@title:group"
+msgid "Mouse"
+msgstr "Mouse"
+
+msgctxt "@item:inlistbox"
+msgid "None"
+msgstr "None"
+
+msgctxt "@item:inlistbox"
+msgid "Notification"
+msgstr "Notification"
+
+msgctxt "@title:group"
+msgid "Notifications"
+msgstr "Notifications"
+
+msgctxt "@action"
+msgid "Open File Manager"
+msgstr "Open File Manager"
+
+msgctxt "@action"
+msgid "Paste Selection"
+msgstr "Paste Selection"
+
+msgctxt "@item:inlistbox"
+msgid "Paste clipboard"
+msgstr "Paste clipboard"
+
+msgctxt "@item:inlistbox"
+msgid "Paste selection"
+msgstr "Paste selection"
+
+msgctxt "@info"
+msgid "Process finished in monitored terminal in session \"%1\"."
+msgstr "Process finished in monitored terminal in session \"%1\"."
+
+msgctxt "@option:check"
+msgid "Regular Expression"
+msgstr "Regular Expression"
+
+msgctxt "@item:inlistbox"
+msgid "Right"
+msgstr "Right"
+
+msgctxt "@label:listbox"
+msgid "Scrollbar:"
+msgstr "Scrollbar:"
+
+msgctxt "@action"
+msgid "Search the Web"
+msgstr "Search the Web"
+
+msgctxt "@action"
+msgid "Select Line"
+msgstr "Select Line"
+
+msgctxt "@action"
+msgid "Select Mode"
+msgstr "Select Mode"
+
+msgctxt "@title:menu"
+msgid "Send Signal"
+msgstr "Send Signal"
+
+msgctxt "@option:check"
+msgid "Send arrow keys for the mouse wheel in full-screen programs"
+msgstr "Send arrow keys for the mouse wheel in full-screen programs"
+
+msgctxt "@option:check"
+msgid "Show the terminal size after resizing"
+msgstr "Show the terminal size after resizing"
+
+msgctxt "@label:spinbox"
+msgid "Silence after:"
+msgstr "Silence after:"
+
+msgctxt "@title:group"
+msgid "Startup"
+msgstr "Startup"
+
+msgctxt "@item:inmenu"
+msgid "Suspend Task (STOP)"
+msgstr "Suspend Task (STOP)"
+
+msgctxt "@title Preferences page name"
+msgid "Terminal Behavior"
+msgstr "Terminal Behaviour"
+
+msgctxt "@label:listbox"
+msgid "Terminal bell:"
+msgstr "Terminal bell:"
+
+msgctxt "@item:inmenu"
+msgid "Terminate Task (TERM)"
+msgstr "Terminate Task (TERM)"
+
+msgctxt "@label:textbox"
+msgid "Title format (%d directory, %n program, %u user, %h host, %w program title):"
+msgstr "Title format (%d directory, %n program, %u user, %h host, %w program title):"
+
+msgctxt "@item:inmenu"
+msgid "User Signal 1 (USR1)"
+msgstr "User Signal 1 (USR1)"
+
+msgctxt "@item:inmenu"
+msgid "User Signal 2 (USR2)"
+msgstr "User Signal 2 (USR2)"
+
+msgctxt "@item:inlistbox"
+msgid "Visual flash"
+msgstr "Visual flash"
+
+msgctxt "@option:check"
+msgid "Allow links set by programs"
+msgstr "Allow links set by programs"
+
+msgctxt "@label:spinbox"
+msgid "Auto save interval:"
+msgstr "Auto save interval:"
+
+msgctxt "@title:group"
+msgid "Badge"
+msgstr "Badge"
+
+msgctxt "@label:chooser"
+msgid "Badge color:"
+msgstr "Badge colour:"
+
+msgctxt "@label:textbox"
+msgid "Badge font (empty for the terminal font):"
+msgstr "Badge font (empty for the terminal font):"
+
+msgctxt "@label:spinbox"
+msgid "Badge font size:"
+msgstr "Badge font size:"
+
+msgctxt "@label:spinbox"
+msgid "Badge opacity:"
+msgstr "Badge opacity:"
+
+msgctxt "@label:textbox"
+msgid "Badge text (placeholders as in the title format):"
+msgstr "Badge text (placeholders as in the title format):"
+
+msgctxt "@option:check"
+msgid "Border around the terminal with focus"
+msgstr "Border around the terminal with focus"
+
+msgctxt "@label:chooser"
+msgid "Border color:"
+msgstr "Border colour:"
+
+msgctxt "@option:check"
+msgid "Center the text"
+msgstr "Centre the text"
+
+msgctxt "@option:check"
+msgid "Clear the selection after copying"
+msgstr "Clear the selection after copying"
+
+msgctxt "@option:check"
+msgid "Copy text with colors as HTML as well"
+msgstr "Copy text with colours as HTML as well"
+
+msgctxt "@option:check"
+msgid "Ctrl+S and Ctrl+Q stop and resume output"
+msgstr "Ctrl+S and Ctrl+Q stop and resume output"
+
+msgctxt "@option:check"
+msgid "Cursor color"
+msgstr "Cursor colour"
+
+msgctxt "@label:spinbox"
+msgid "Dimming of terminals without focus:"
+msgstr "Dimming of terminals without focus:"
+
+msgctxt "@option:check"
+msgid "Dragging selected text requires Ctrl"
+msgstr "Dragging selected text requires Ctrl"
+
+msgctxt "@label:textbox"
+msgid "Editor for file links (PATH, LINE and COLUMN are replaced; empty for the default application):"
+msgstr "Editor for file links (PATH, LINE and COLUMN are replaced; empty for the default application):"
+
+msgctxt "@label:textbox"
+msgid "Environment variables (one NAME=value per line):"
+msgstr "Environment variables (one NAME=value per line):"
+
+msgctxt "@title:group"
+msgid "Focus"
+msgstr "Focus"
+
+msgctxt "@option:check"
+msgid "Full font hinting"
+msgstr "Full font hinting"
+
+msgctxt "@title:group"
+msgid "Layout"
+msgstr "Layout"
+
+msgctxt "@label:spinbox"
+msgid "Margin around the text:"
+msgstr "Margin around the text:"
+
+msgctxt "@item:inrange"
+msgid "Off"
+msgstr "Off"
+
+msgctxt "@option:check"
+msgid "Only the text, without a background"
+msgstr "Only the text, without a background"
+
+msgctxt "@option:check"
+msgid "Open links with a plain click"
+msgstr "Open links with a plain click"
+
+msgctxt "@option:check"
+msgid "Programs may use the mouse"
+msgstr "Programs may use the mouse"
+
+msgctxt "@option:check"
+msgid "Remove spaces at the end of copied lines"
+msgstr "Remove spaces at the end of copied lines"
+
+msgctxt "@option:check"
+msgid "Remove spaces at the start of copied lines"
+msgstr "Remove spaces at the start of copied lines"
+
+msgctxt "@action"
+msgid "Reset Tab Color"
+msgstr "Reset Tab Colour"
+
+msgctxt "@label:listbox"
+msgid "Right click:"
+msgstr "Right click:"
+
+msgctxt "@item:inlistbox"
+msgid "Select the whole line"
+msgstr "Select the whole line"
+
+msgctxt "@item:inlistbox"
+msgid "Select to the end of the line"
+msgstr "Select to the end of the line"
+
+msgctxt "@title:group"
+msgid "Selection and Links"
+msgstr "Selection and Links"
+
+msgctxt "@option:check"
+msgid "Shift+Page Up and Page Down move a full page"
+msgstr "Shift+Page Up and Page Down move a full page"
+
+msgctxt "@info"
+msgid "Shift+right click always shows the context menu."
+msgstr "Shift+right click always shows the context menu."
+
+msgctxt "@option:check"
+msgid "Show a badge in the corner of the terminal"
+msgstr "Show a badge in the corner of the terminal"
+
+msgctxt "@option:check"
+msgid "Show line numbers"
+msgstr "Show line numbers"
+
+msgctxt "@item:inlistbox"
+msgid "Show the context menu"
+msgstr "Show the context menu"
+
+msgctxt "@option:check"
+msgid "Smooth fonts"
+msgstr "Smooth fonts"
+
+msgctxt "@action"
+msgid "Tab Color..."
+msgstr "Tab Colour..."
+
+msgctxt "@option:check"
+msgid "Tab color"
+msgstr "Tab colour"
+
+msgctxt "@option:check"
+msgid "Tab title color after output in the background"
+msgstr "Tab title colour after output in the background"
+
+msgctxt "@title:group"
+msgid "Tabs"
+msgstr "Tabs"
+
+msgctxt "@info"
+msgid "Takes effect in new terminals."
+msgstr "Takes effect in new terminals."
+
+msgctxt "@option:check"
+msgid "Text color under the cursor"
+msgstr "Text colour under the cursor"
+
+msgctxt "@info"
+msgid "The visible text of such a link can differ from its target."
+msgstr "The visible text of such a link can differ from its target."
+
+msgctxt "@label:textbox"
+msgid "Title format over SSH (%u user, %U user with @, %h host, %H full host, %c command, %w program title):"
+msgstr "Title format over SSH (%u user, %U user with @, %h host, %H full host, %c command, %w program title):"
+
+msgctxt "@label:listbox"
+msgid "Triple click:"
+msgstr "Triple click:"
+
+msgctxt "@option:check"
+msgid "Underline file names under the mouse"
+msgstr "Underline file names under the mouse"
+
+msgctxt "@option:check"
+msgid "Underline links under the mouse"
+msgstr "Underline links under the mouse"
+
+msgctxt "@label:spinbox"
+msgid "Vertical line at column:"
+msgstr "Vertical line at column:"
+
+msgctxt "@info"
+msgid "A double click on the scrollbar adds or removes a marker."
+msgstr "A double click on the scrollbar adds or removes a marker."
+
+msgctxt "@option:check"
+msgid "Ask what to do with dropped files"
+msgstr "Ask what to do with dropped files"
+
+msgctxt "@item:inlistbox"
+msgid "Built-in"
+msgstr "Built-in"
+
+msgctxt "@action:inmenu"
+msgid "Cancel"
+msgstr "Cancel"
+
+msgctxt "@action:inmenu"
+msgid "Change Directory To"
+msgstr "Change Directory To"
+
+msgctxt "@label:chooser"
+msgid "Color of markers:"
+msgstr "Colour of markers:"
+
+msgctxt "@label:chooser"
+msgid "Color of search matches:"
+msgstr "Colour of search matches:"
+
+msgctxt "@action:inmenu"
+msgid "Copy Here"
+msgstr "Copy Here"
+
+msgctxt "@label:textbox"
+msgid "Emoji font (empty for automatic):"
+msgstr "Emoji font (empty for automatic):"
+
+msgctxt "@option:check"
+msgid "Fade the blinking cursor"
+msgstr "Fade the blinking cursor"
+
+msgctxt "@label:listbox"
+msgid "Hold to number the links on screen:"
+msgstr "Hold to number the links on screen:"
+
+msgctxt "@option:check"
+msgid "Invert the colors of selected text"
+msgstr "Invert the colours of selected text"
+
+msgctxt "@label:listbox"
+msgid "Key bindings:"
+msgstr "Key bindings:"
+
+msgctxt "@info"
+msgid "Konsole's .keytab files from ~/.local/share/kudari/keytabs. They change the keys they name."
+msgstr "Konsole's .keytab files from ~/.local/share/kudari/keytabs. They change the keys they name."
+
+msgctxt "@action:inmenu"
+msgid "Link Here"
+msgstr "Link Here"
+
+msgctxt "@label:textbox"
+msgid "Link types that may open (separated by semicolons):"
+msgstr "Link types that may open (separated by semicolons):"
+
+msgctxt "@option:check"
+msgid "Mark new lines while scrolling"
+msgstr "Mark new lines while scrolling"
+
+msgctxt "@action:inmenu"
+msgid "Move Here"
+msgstr "Move Here"
+
+msgctxt "@option:check"
+msgid "New terminals start in the directory of the active one"
+msgstr "New terminals start in the directory of the active one"
+
+msgctxt "@option:check"
+msgid "Number the links from the bottom"
+msgstr "Number the links from the bottom"
+
+msgctxt "@item:inlistbox"
+msgid "Off"
+msgstr "Off"
+
+msgctxt "@info"
+msgid "Offers copying, moving and linking. Otherwise their paths are pasted."
+msgstr "Offers copying, moving and linking. Otherwise their paths are pasted."
+
+msgctxt "@label:spinbox"
+msgid "Opacity of search matches:"
+msgstr "Opacity of search matches:"
+
+msgctxt "@info"
+msgid "Otherwise they are drawn without gaps between the cells."
+msgstr "Otherwise they are drawn without gaps between the cells."
+
+msgctxt "@info"
+msgid "Otherwise they start in the home directory. An initial directory takes precedence."
+msgstr "Otherwise they start in the home directory. An initial directory takes precedence."
+
+msgctxt "@action:inmenu"
+msgid "Paste Location"
+msgstr "Paste Location"
+
+msgctxt "@option:check"
+msgid "Preview colors under the mouse"
+msgstr "Preview colours under the mouse"
+
+msgctxt "@title:group"
+msgid "Scrollbar Marks"
+msgstr "Scrollbar Marks"
+
+msgctxt "@label:spinbox"
+msgid "Size of markers:"
+msgstr "Size of markers:"
+
+msgctxt "@option:check"
+msgid "Use the font for Braille characters"
+msgstr "Use the font for Braille characters"
+
+msgctxt "@option:check"
+msgid "Use the font for line and block characters"
+msgstr "Use the font for line and block characters"
+
+msgctxt "@info"
+msgid "While holding it, the keys 1 to 9 open the numbered links."
+msgstr "While holding it, the keys 1 to 9 open the numbered links."
+
+msgctxt "@title:window"
+msgid "Adjust Scrollback"
+msgstr "Adjust Scrollback"
+
+msgctxt "@action"
+msgid "Adjust Scrollback..."
+msgstr "Adjust Scrollback..."
+
+msgctxt "@action"
+msgid "Allow Mouse Tracking"
+msgstr "Allow Mouse Tracking"
+
+msgctxt "@label:spinbox"
+msgid "Lines kept in this terminal:"
+msgstr "Lines kept in this terminal:"
+
+msgctxt "@action"
+msgid "One-Shot Monitors"
+msgstr "One-Shot Monitors"
+
+msgctxt "@info"
+msgid "Follows the active Plasma theme."
+msgstr "Follows the active Plasma theme."
+
+msgctxt "@info"
+msgid "Plasma theme"
+msgstr "Plasma theme"
+
+msgctxt "@item:inlistbox"
+msgid "System theme"
+msgstr "System theme"
+
+msgctxt "@info"
+msgid "Window size and keyboard shortcuts, plus font and colors of your Konsole profile. These settings are only read, not changed."
+msgstr "Window size and keyboard shortcuts, plus font and colours of your Konsole profile. These settings are only read, not changed."
+
+#, kde-format
+msgctxt "@info"
+msgid "Bell in session \"%1\"."
+msgstr "Bell in session \"%1\"."
+
+msgctxt "@action"
+msgid "Reset Font Size"
+msgstr "Reset Font Size"
+
+msgctxt "@action:inmenu"
+msgid "Copy Link Address"
+msgstr "Copy Link Address"
+
+msgctxt "@info"
+msgid "This replaces the matching settings with those from Yakuake and Konsole. Continue?"
+msgstr "This replaces the matching settings with those from Yakuake and Konsole. Continue?"
+
+msgctxt "@title:window"
+msgid "Import from Yakuake"
+msgstr "Import from Yakuake"
+
+msgctxt "@info"
+msgid "The text you are pasting contains line breaks. Commands in it will run immediately. Paste it anyway?"
+msgstr "The text you are pasting contains line breaks. Commands in it will run immediately. Paste it anyway?"
+
+msgctxt "@title:window"
+msgid "Paste Multiple Lines?"
+msgstr "Paste Multiple Lines?"
+
+msgctxt "@action:button"
+msgid "Import from Yakuake…"
+msgstr "Import from Yakuake…"
+
+msgctxt "@info"
+msgid "Yakuake is using %1. If you choose the same key, Kudari will ask before taking it over."
+msgstr "Yakuake is using %1. If you choose the same key, Kudari will ask before taking it over."
+
+msgctxt "@option:check"
+msgid "Take over settings from Yakuake"
+msgstr "Take over settings from Yakuake"
+
+msgctxt "@title Preferences page name"
+msgid "Terminal"
+msgstr "Terminal"
+
+msgctxt "@title Preferences page name"
+msgid "Security"
+msgstr "Security"
+
+msgctxt "@title:group"
+msgid "Remote Control"
+msgstr "Remote Control"
+
+msgctxt "@option:check"
+msgid "Allow other programs to run commands"
+msgstr "Allow other programs to run commands"
+
+msgctxt "@info"
+msgid "Lets the D-Bus methods runCommand and runCommandInTerminal type into your terminals. Every program running as your user could then execute commands through them. Leave this off unless a script of yours needs it."
+msgstr "Lets the D-Bus methods runCommand and runCommandInTerminal type into your terminals. Every program running as your user could then execute commands through them. Leave this off unless a script of yours needs it."
+
+msgctxt "@info:placeholder"
+msgid "Find…"
+msgstr "Find…"
+
+msgctxt "@info:tooltip"
+msgid "Find Previous"
+msgstr "Find Previous"
+
+msgctxt "@info:tooltip"
+msgid "Find Next"
+msgstr "Find Next"
+
+msgctxt "@info:tooltip"
+msgid "Close Search"
+msgstr "Close Search"
+
+msgctxt "@item:inlistbox"
+msgid "System default"
+msgstr "System default"
+
+msgctxt "@item:inlistbox"
+msgid "Block"
+msgstr "Block"
+
+msgctxt "@item:inlistbox"
+msgid "Underline"
+msgstr "Underline"
+
+msgctxt "@item:inlistbox"
+msgid "I-Beam"
+msgstr "I-Beam"
+
+msgctxt "@title:group"
+msgid "Font"
+msgstr "Font"
+
+msgctxt "@label:listbox"
+msgid "Font family:"
+msgstr "Font family:"
+
+msgctxt "@label:spinbox"
+msgid "Font size:"
+msgstr "Font size:"
+
+msgctxt "@title:group"
+msgid "Scrolling and Cursor"
+msgstr "Scrolling and Cursor"
+
+msgctxt "@label:spinbox"
+msgid "History lines:"
+msgstr "History lines:"
+
+msgctxt "@label:listbox"
+msgid "Cursor shape:"
+msgstr "Cursor shape:"
+
+msgctxt "@title:group"
+msgid "Transparency"
+msgstr "Transparency"
+
+msgctxt "@label:spinbox"
+msgid "Background opacity:"
+msgstr "Background opacity:"
+
+msgctxt "@option:check"
+msgid "Blur the background"
+msgstr "Blur the background"
+
+msgctxt "@action"
+msgid "Clear Scrollback"
+msgstr "Clear Scrollback"
+
+msgctxt "@action"
+msgid "Enlarge Font"
+msgstr "Enlarge Font"
+
+msgctxt "@action"
+msgid "Shrink Font"
+msgstr "Shrink Font"
+
+msgctxt "@title"
+msgid "A drop-down terminal for KDE Plasma on Wayland"
+msgstr "A drop-down terminal for KDE Plasma on Wayland"
+
+msgctxt "@action:inmenu"
+msgid "Open Link"
+msgstr "Open Link"
+
+#, kde-kuit-format
+msgctxt "@info:credit"
+msgid "Ideas for many terminal options"
+msgstr "Ideas for many terminal options"
+
+#, kde-format
+msgid "Come back in full screen if the window was in full screen"
+msgstr "Come back in full screen if the window was in full screen"
+
+#, kde-format
+msgid "Hide the window border"
+msgstr "Hide the window border"
+
+#, kde-format
+msgid "Show an icon in the system tray"
+msgstr "Show an icon in the system tray"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Close Terminal"
+msgstr "Close Terminal"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Expand Terminal Down"
+msgstr "Expand Terminal Down"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Expand Terminal Left"
+msgstr "Expand Terminal Left"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Expand Terminal Right"
+msgstr "Expand Terminal Right"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Expand Terminal Up"
+msgstr "Expand Terminal Up"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Keep Open When Focus Moves Elsewhere"
+msgstr "Keep Open When Focus Moves Elsewhere"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Make Window Shorter"
+msgstr "Make Window Shorter"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Make Window Taller"
+msgstr "Make Window Taller"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Narrow Window"
+msgstr "Narrow Window"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "New Session, Four Terminals"
+msgstr "New Session, Four Terminals"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "New Session, Side by Side"
+msgstr "New Session, Side by Side"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "New Session, Stacked"
+msgstr "New Session, Stacked"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Protect from Closing"
+msgstr "Protect from Closing"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Show/Hide Kudari"
+msgstr "Show/Hide Kudari"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Split into Columns"
+msgstr "Split into Columns"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Split into Rows"
+msgstr "Split into Rows"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Terminal %1"
+msgstr "Terminal %1"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Terminal Settings…"
+msgstr "Terminal Settings…"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Watch for Activity"
+msgstr "Watch for Activity"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Watch for Silence"
+msgstr "Watch for Silence"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Whole Session"
+msgstr "Whole Session"
+
+#, kde-kuit-format
+msgctxt "@action"
+msgid "Widen Window"
+msgstr "Widen Window"
+
+#, kde-kuit-format
+msgctxt "@info"
+msgid "<shortcut>%1</shortcut> shows the window"
+msgstr "<shortcut>%1</shortcut> shows the window"
+
+#, kde-format
+msgctxt "@info"
+msgid "<warning>Several sessions are open, <emphasis>and some of them are protected from closing.</emphasis> Quitting ends all of them.</warning>"
+msgstr "<warning>Several sessions are open, <emphasis>and some of them are protected from closing.</emphasis> Quitting ends all of them.</warning>"
+
+#, kde-format
+msgctxt "@info"
+msgid "<warning>Several sessions are open. Quitting ends all of them.</warning>"
+msgstr "<warning>Several sessions are open. Quitting ends all of them.</warning>"
+
+#, kde-format
+msgctxt "@info"
+msgid "<warning>Some sessions are protected from closing. Quitting ends them as well.</warning>"
+msgstr "<warning>Some sessions are protected from closing. Quitting ends them as well.</warning>"
+
+#, kde-format
+msgctxt "@info"
+msgid "<warning>This session is protected from closing.</warning>"
+msgstr "<warning>This session is protected from closing.</warning>"
+
+#, kde-format
+msgctxt "@info"
+msgid "Activity in session \"%1\"."
+msgstr "Activity in session \"%1\"."
+
+#, kde-format
+msgctxt "@info"
+msgid "Close this session anyway?"
+msgstr "Close this session anyway?"
+
+#, kde-format
+msgctxt "@info"
+msgid "Close this terminal anyway?"
+msgstr "Close this terminal anyway?"
+
+#, kde-format
+msgctxt "@info"
+msgid "Quit Kudari?"
+msgstr "Quit Kudari?"
+
+#, kde-format
+msgctxt "@info"
+msgid "Kudari slides down and up again with a keyboard shortcut. You can pick another one now:"
+msgstr "Kudari slides down and up again with a keyboard shortcut. You can pick another one now:"
+
+#, kde-format
+msgctxt "@info"
+msgid "Silence in session \"%1\"."
+msgstr "Silence in session \"%1\"."
+
+#, kde-format
+msgctxt "@info"
+msgid "The menu lets you change it later as well."
+msgstr "The menu lets you change it later as well."
+
+#, kde-kuit-format
+msgctxt "@info:credit"
+msgid "Kudari started as a rewrite of Yakuake in Rust."
+msgstr "Kudari started as a rewrite of Yakuake in Rust."
+
+#, kde-kuit-format
+msgctxt "@info:credit"
+msgid "Yakuake, the drop-down terminal Kudari grew out of"
+msgstr "Yakuake, the drop-down terminal Kudari grew out of"
+
+#, kde-format
+msgctxt "@info:tooltip"
+msgid "Keep open when the focus moves elsewhere"
+msgstr "Keep open when the focus moves elsewhere"
+
+#, kde-format
+msgctxt "@item:inmenu"
+msgid "Where the mouse pointer is"
+msgstr "Where the mouse pointer is"
+
+#, kde-format
+msgctxt "@label:listbox"
+msgid "Screen:"
+msgstr "Screen:"
+
+#, kde-format
+msgctxt "@label:spinbox"
+msgid "Opacity of the background color:"
+msgstr "Opacity of the background colour:"
+
+#, kde-format
+msgctxt "@option:check"
+msgid "Ask before quitting with several sessions open"
+msgstr "Ask before quitting with several sessions open"
+
+#, kde-format
+msgctxt "@option:check"
+msgid "Flash a terminal briefly when it gets the focus"
+msgstr "Flash a terminal briefly when it gets the focus"
+
+#, kde-format
+msgctxt "@option:check"
+msgid "Focus the terminal under the mouse pointer"
+msgstr "Focus the terminal under the mouse pointer"
+
+#, kde-format
+msgctxt "@option:check"
+msgid "Keep the window open when another window gets the focus"
+msgstr "Keep the window open when another window gets the focus"
+
+#, kde-format
+msgctxt "@option:check"
+msgid "Keep the window open when its last session closes"
+msgstr "Keep the window open when its last session closes"
+
+#, kde-format
+msgctxt "@option:check"
+msgid "Let the desktop show through the background"
+msgstr "Let the desktop show through the background"
+
+#, kde-format
+msgctxt "@option:check"
+msgid "Let the show/hide shortcut focus the window instead of hiding it"
+msgstr "Let the show/hide shortcut focus the window instead of hiding it"
+
+#, kde-format
+msgctxt "@option:check"
+msgid "Name tabs after the title of their terminal"
+msgstr "Name tabs after the title of their terminal"
+
+#, kde-format
+msgctxt "@option:check"
+msgid "Show the window when Kudari starts"
+msgstr "Show the window when Kudari starts"
+
+#, kde-format
+msgctxt "@title:group"
+msgid "Background"
+msgstr "Background"
+
+#, kde-format
+msgctxt "@title:group"
+msgid "Questions"
+msgstr "Questions"
+
+#, kde-format
+msgctxt "@title:group"
+msgid "Size"
+msgstr "Size"
+
+#, kde-format
+msgctxt "@title:group"
+msgid "Theme"
+msgstr "Theme"
+
+#, kde-kuit-format
+msgctxt "@title:menu"
+msgid "Quick Settings"
+msgstr "Quick Settings"
+
+#, kde-kuit-format
+msgctxt "@title:menu"
+msgid "Watch for Activity"
+msgstr "Watch for Activity"
+
+#, kde-kuit-format
+msgctxt "@title:menu"
+msgid "Watch for Silence"
+msgstr "Watch for Silence"
+
+#, kde-format
+msgctxt "@title:tab"
+msgid "Shell %1"
+msgstr "Shell %1"
+
+#, kde-format
+msgctxt "@title:window"
+msgid "Close Protected Session"
+msgstr "Close Protected Session"
+
+#, kde-format
+msgctxt "@title:window"
+msgid "Quit"
+msgstr "Quit"
+
+#, kde-format
+msgctxt "@title:window"
+msgid "Welcome"
+msgstr "Welcome"
+
+msgctxt "@title:group"
+msgid "AI Agents"
+msgstr "AI Agents"
+
+msgctxt "@option:check"
+msgid "Allow AI agents to read terminals"
+msgstr "Allow AI agents to read terminals"
+
+msgctxt "@info"
+msgid "Agents connected through kudari mcp see the text of all terminals, including passwords or tokens shown there."
+msgstr "Agents connected through kudari mcp see the text of all terminals, including passwords or tokens shown there."
+
+msgctxt "@option:check"
+msgid "Allow AI agents to control terminals"
+msgstr "Allow AI agents to control terminals"
+
+msgctxt "@info"
+msgid "Agents can type into terminals, press keys, and open and close sessions of their own."
+msgstr "Agents can type into terminals, press keys, and open and close sessions of their own."
+
+msgctxt "@option:check"
+msgid "Ask before running their commands"
+msgstr "Ask before running their commands"
+
+msgctxt "@info"
+msgid "Agents type only at the shell prompt, and their commands run when you press Return."
+msgstr "Agents type only at the shell prompt, and their commands run when you press Return."
+
+msgctxt "@info:shell"
+msgid "Serve the Model Context Protocol to an AI agent on standard input and output"
+msgstr "Serve the Model Context Protocol to an AI agent on standard input and output"
+
+msgctxt "@title:window"
+msgid "AI Agent"
+msgstr "AI Agent"
+
+msgctxt "@info"
+msgid "An AI agent wants to read your terminals. The request comes from %1."
+msgstr "An AI agent wants to read your terminals. The request comes from %1."
+
+msgctxt "@info"
+msgid "An AI agent wants to read and control your terminals. The request comes from %1."
+msgstr "An AI agent wants to read and control your terminals. The request comes from %1."
+
+msgctxt "@info"
+msgid "An AI agent wants to control your terminals. The request comes from %1."
+msgstr "An AI agent wants to control your terminals. The request comes from %1."
+
+msgctxt "@info"
+msgid "an unknown program"
+msgstr "an unknown program"
+
+msgctxt "@info"
+msgid "Allow this only if you started the agent yourself. Its access lasts until the agent ends, or until you end it with the eye button in the bar."
+msgstr "Allow this only if you started the agent yourself. Its access lasts until the agent ends, or until you end it with the eye button in the bar."
+
+msgctxt "@action:button"
+msgid "Allow"
+msgstr "Allow"
+
+msgctxt "@action:button"
+msgid "Deny"
+msgstr "Deny"
+
+msgctxt "@info:tooltip"
+msgid "An AI agent has access to your terminals. Click to end its access."
+msgstr "An AI agent has access to your terminals. Click to end its access."
+
+#, kde-format
+msgctxt "@action:inmenu"
+msgid "Full Screen Mode"
+msgstr "Full Screen Mode"
+
+#, kde-format
+msgctxt "@action:inmenu"
+msgid "Quit"
+msgstr "Quit"
+
+#, kde-format
+msgctxt "@action:inmenu"
+msgid "Copy"
+msgstr "Copy"
+
+#, kde-format
+msgctxt "@action:inmenu"
+msgid "Paste"
+msgstr "Paste"
+
+#, kde-format
+msgctxt "@action:inmenu"
+msgid "Select All"
+msgstr "Select All"
+
+#, kde-format
+msgctxt "@action:inmenu"
+msgid "Find…"
+msgstr "Find…"
+
+#, kde-format
+msgctxt "@action:inmenu"
+msgid "Save Output As…"
+msgstr "Save Output As…"
+
+#, kde-format
+msgctxt "@action:inmenu"
+msgid "Print…"
+msgstr "Print…"
+
+#, kde-format
+msgctxt "@item:inmenu"
+msgid "Command Prompt"
+msgstr "Command Prompt"
+
+#, kde-format
+msgctxt "@title:menu"
+msgid "New Session With"
+msgstr "New Session With"
+
+msgctxt "@label:listbox"
+msgid "Shell:"
+msgstr "Shell:"
+
+msgctxt "@option:check"
+msgid "Shell integration"
+msgstr "Shell integration"
+
+msgctxt "@info"
+msgid "Kudari sets up the prompt of the shell, so that tabs know its directory and AI agents type only at the prompt. Takes effect in new terminals."
+msgstr "Kudari sets up the prompt of the shell, so that tabs know its directory and AI agents type only at the prompt. Takes effect in new terminals."
+
+msgctxt "@title Preferences page name"
+msgid "Shortcuts"
+msgstr "Shortcuts"
+
+msgctxt "@action:button"
+msgid "Press a shortcut…"
+msgstr "Press a shortcut…"
+
+msgctxt "@info:tooltip"
+msgid "Back to the default"
+msgstr "Back to the default"
+
+msgctxt "@info:tooltip"
+msgid "Remove the shortcut"
+msgstr "Remove the shortcut"
+
+msgctxt "@info"
+msgid "Another program already uses this shortcut."
+msgstr "Another program already uses this shortcut."
+
+msgctxt "@action:inmenu"
+msgid "About Kudari"
+msgstr "About Kudari"
+
+msgctxt "@title"
+msgid "A drop-down terminal for Windows and KDE Plasma"
+msgstr "A drop-down terminal for Windows and KDE Plasma"
+
+msgctxt "@info"
+msgid "Kudari uses Qt under the LGPL 3. The licenses of Qt and of the other parts are in the folder licenses next to the program."
+msgstr "Kudari uses Qt under the LGPL 3. The licences of Qt and of the other parts are in the folder licenses next to the program."
+
+msgctxt "@label:listbox"
+msgid "Color scheme:"
+msgstr "Colour scheme:"
+
+msgctxt "@item:inlistbox"
+msgid "Light"
+msgstr "Light"
+
+msgctxt "@item:inlistbox"
+msgid "Dark"
+msgstr "Dark"

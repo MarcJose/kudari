@@ -1,0 +1,24 @@
+name: Idea
+description: Something Kudari could do, or do better.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you want to do
+      description: The situation and what gets in your way, rather than a solution first.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: How Kudari could help
+      description: Your idea, and how Yakuake, Konsole or another terminal does it, if they do.
+  - type: dropdown
+    id: system
+    attributes:
+      label: For
+      multiple: true
+      options:
+        - KDE Plasma
+        - Windows

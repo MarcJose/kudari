@@ -1,0 +1,23 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de>
+# SPDX-License-Identifier: MIT
+# The quick checks of tests/check.sh, before every commit. Turned on with
+#   git config core.hooksPath .githooks
+# and skipped once with `git commit --no-verify`. Apart from the secrets, which are looked
+# for in what is staged, the checks see the working tree.
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+
+if command -v gitleaks > /dev/null; then
+    gitleaks git --pre-commit --staged --no-banner --redact --verbose --log-level warn .
+else
+    echo "pre-commit: gitleaks is not installed, staged changes are not checked for secrets" >&2
+fi
+cargo fmt --check
+python3 tools/translations.py --check --strict --quiet
+python3 tools/box_drawing.py --check
+python3 tools/third_party_licenses.py --check
+if command -v reuse > /dev/null; then
+    reuse lint --quiet || { reuse lint | sed -n '/MISSING/,/^$/p'; exit 1; }
+fi

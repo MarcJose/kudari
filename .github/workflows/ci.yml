@@ -1,0 +1,174 @@
+name: CI
+
+on:
+  # Tags are left to release.yml, which runs this workflow before it publishes.
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_call:
+
+permissions: {}
+
+# A newer push to the same branch makes the running checks pointless.
+concurrency:
+  group: ${{ github.workflow }}-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# The image is pinned, since its keyring decides which packages pacman trusts. Its packages
+# are updated on every run all the same; tools/update-pins.py renews the pin in all workflows.
+# The packages Kudari builds against are listed in .github/arch-packages.txt.
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    container: archlinux:base-20261101.0.620205@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - run: pacman -Syu --noconfirm --needed git
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          # shellcheck disable=SC2046 # the package list is meant to split
+          pacman -S --noconfirm --needed rust vale namcap $(grep -v '^#' .github/arch-packages.txt)
+      # The checkout belongs to another user than the container's root, and Vale gets its
+      # files from git.
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: tests/check.sh
+
+  # The core is meant for every front end, so it has to build and pass its tests on Windows
+  # as well; Unix assumptions show up here before the Windows front end exists.
+  core-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal --component clippy --no-self-update
+      - run: cargo +stable clippy --locked --package kudari-core --all-targets -- --deny warnings
+      - run: cargo +stable test --locked --package kudari-core
+
+  # The shared Qt parts and the Windows front end, against Qt for MSVC. The smoke test opens
+  # the window without a screen, with a ConPTY and the default shell of Windows behind it,
+  # once from the build and once from the packages, signed with a throwaway certificate.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      QT_VERSION: 6.8.3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal --component clippy --no-self-update
+      - run: python -m pip install aqtinstall==3.3.0
+      - run: python -m aqt install-qt windows desktop $env:QT_VERSION win64_msvc2022_64 --outputdir C:\Qt
+        shell: pwsh
+      - run: |
+          "QMAKE=C:\Qt\$env:QT_VERSION\msvc2022_64\bin\qmake.exe" >> $env:GITHUB_ENV
+          "C:\Qt\$env:QT_VERSION\msvc2022_64\bin" >> $env:GITHUB_PATH
+        shell: pwsh
+      - run: cargo +stable clippy --locked --package kudari-qt --package kudari-windows --all-targets -- --deny warnings
+      - run: cargo +stable test --locked --package kudari-qt --package kudari-windows
+      - run: cargo +stable build --locked --package kudari-windows
+      - run: tests/windows/run.sh target/debug/kudari-windows.exe
+        shell: bash
+      - run: tools/windows-package.ps1 -Out dist
+        shell: pwsh
+      # The archive brings only the platform of Windows; the test needs the one without a screen.
+      - run: |
+          mkdir unpacked
+          unzip -q dist/kudari-*-x86_64-windows.zip -d unpacked
+          cp "C:/Qt/$QT_VERSION/msvc2022_64/plugins/platforms/qoffscreen.dll" unpacked/kudari-*/platforms/
+          tests/windows/run.sh unpacked/kudari-*/kudari.exe
+        shell: bash
+      # The runners of GitHub have a desktop, where UI Automation drives the window.
+      - run: tests/windows/gui.ps1 (Resolve-Path unpacked/kudari-*/kudari.exe).Path
+        shell: pwsh
+      - run: tests/windows/package.ps1 dist
+        shell: pwsh
+
+  # Builds and installs as a distribution would, and checks what lands in the package.
+  build:
+    runs-on: ubuntu-latest
+    container: archlinux:base-20261101.0.620205@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - run: pacman -Syu --noconfirm --needed git
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          # shellcheck disable=SC2046 # the package list is meant to split
+          pacman -S --noconfirm --needed rust cmake make appstream desktop-file-utils $(grep -v '^#' .github/arch-packages.txt)
+      - run: |
+          cmake -B build -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build
+          DESTDIR="$PWD/package" cmake --install build
+      - run: tools/dist.sh verify package
+
+  # The packages for the AUR, built as an AUR helper would, installed and started: kudari-git
+  # from this commit, kudari-bin from the release its PKGBUILD names.
+  aur:
+    runs-on: ubuntu-latest
+    container: archlinux:base-20261101.0.620205@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - run: pacman -Syu --noconfirm --needed git base-devel namcap
+      # The whole history with the tags, for the version that kudari-git describes itself with.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: tests/aur.sh git
+      - run: tests/aur.sh bin
+
+  # The GUI test runs with coverage measured, so it serves for both.
+  gui-and-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # KWin needs a render device, which the runners lack; vgem provides one, and Mesa draws
+      # on it in software. The container is started here, as it has to get the device.
+      - run: sudo modprobe vgem && ls -l /dev/dri
+      # kwin_wayland carries the file capability CAP_SYS_NICE; without it in the container,
+      # the kernel refuses to start it at all.
+      - run: |
+          docker run --rm --device /dev/dri --cap-add SYS_NICE --volume "$PWD:/src" --workdir /src \
+            archlinux:base-20261101.0.620205@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9 \
+            bash -euo pipefail -c '
+              pacman -Syu --noconfirm --needed git kwin dbus qt6-tools rustup cargo-llvm-cov $(grep -v "^#" .github/arch-packages.txt)
+              git config --global --add safe.directory /src
+              rustup default stable && rustup component add llvm-tools
+              tools/coverage.sh --html --fail-under 90 | tee coverage.txt'
+      # The container wrote as root; the steps after it read as the user of the runner.
+      - if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" .
+      - if: always()
+        run: |
+          {
+            echo '### Coverage of the Rust code'
+            echo '```'
+            sed -n '/^Filename/,$p' coverage.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-report
+          path: target/coverage/report/html

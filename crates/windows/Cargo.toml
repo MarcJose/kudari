@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de>
+# SPDX-License-Identifier: MIT
+
+[package]
+name = "kudari-windows"
+description = "Kudari for Windows: Qt Quick with the FluentWinUI3 style"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+# The KDE front end owns the name `kudari`; the package for Windows names its program.
+[[bin]]
+name = "kudari-windows"
+path = "src/main.rs"
+
+[dependencies]
+cxx.workspace = true
+cxx-qt.workspace = true
+cxx-qt-lib.workspace = true
+cxx-qt-lib-extras = "0.10"
+kudari-core.workspace = true
+kudari-qt.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+cxx-qt-build.workspace = true
+
+[lints]
+workspace = true

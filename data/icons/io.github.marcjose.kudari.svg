@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de> -->
+<!-- SPDX-License-Identifier: MIT -->
+<!-- The icon of Kudari: the prompt of a shell, turned downwards, above its cursor. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#26303d"/>
+      <stop offset="1" stop-color="#161c24"/>
+    </linearGradient>
+    <linearGradient id="prompt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7dd3fc"/>
+      <stop offset="1" stop-color="#3b82f6"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="224" height="224" rx="52" fill="url(#tile)"/>
+  <path d="M74 78 l54 46 54 -46" fill="none" stroke="url(#prompt)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="88" y="160" width="80" height="20" rx="10" fill="#e2e8f0"/>
+</svg>

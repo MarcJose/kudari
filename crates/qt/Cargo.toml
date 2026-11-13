@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de>
+# SPDX-License-Identifier: MIT
+
+[package]
+name = "kudari-qt"
+description = "The Qt parts that the front ends of Kudari share"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+# cxx-qt-build passes the headers, Qt modules and QML module on to the front ends by this name.
+links = "kudari-qt"
+
+[dependencies]
+alacritty_terminal.workspace = true
+cxx.workspace = true
+cxx-qt.workspace = true
+cxx-qt-lib.workspace = true
+kudari-core.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+kudari-core = { workspace = true, features = ["fuzz"] }
+
+[build-dependencies]
+cxx-qt-build.workspace = true
+
+[features]
+# Lets automated tests drive the UI. Never enabled for normal builds.
+test-hooks = []
+
+[lints]
+workspace = true

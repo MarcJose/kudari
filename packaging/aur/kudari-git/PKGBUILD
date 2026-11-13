@@ -1,0 +1,63 @@
+# Maintainer: Marc Jose <marc@hahn-jose.de>
+#
+# SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de>
+# SPDX-License-Identifier: CC0-1.0
+#
+# The newest state of main, built from source.
+
+pkgname=kudari-git
+pkgver=0.2.0.r0.g0000000
+pkgrel=1
+pkgdesc='A drop-down terminal for KDE Plasma on Wayland (newest state of main)'
+arch=('x86_64')
+url='https://github.com/MarcJose/kudari'
+license=('MIT')
+depends=(
+  'glibc' 'libgcc' 'libstdc++' 'hicolor-icon-theme'
+  'qt6-base' 'qt6-declarative' 'qt6-svg' 'qt6-wayland' 'layer-shell-qt' 'qqc2-desktop-style'
+  'kcolorscheme' 'kconfig' 'kconfigwidgets' 'kcoreaddons' 'kcrash' 'kdeclarative'
+  'kglobalaccel' 'ki18n' 'kio' 'kirigami' 'kirigami-addons' 'knotifications' 'knotifyconfig'
+  'kstatusnotifieritem' 'kwidgetsaddons' 'kwindowsystem' 'kxmlgui'
+)
+makedepends=('git' 'rust' 'cmake' 'extra-cmake-modules' 'kdoctools' 'clang' 'lld' 'python')
+provides=('kudari')
+conflicts=('kudari')
+# The LTO of makepkg turns the C++ of cxx-qt into GCC bytecode, which the Rust linker
+# cannot read.
+options=('!lto')
+source=("git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd kudari
+  # Before the first release, the count of commits and the commit, which pacman puts below
+  # every release.
+  if version=$(git describe --long --tags --abbrev=7 --match 'v[0-9]*' 2> /dev/null); then
+    echo "$version" | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+  else
+    printf '0.r%s.g%s\n' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+  fi
+}
+
+prepare() {
+  cd kudari
+  cargo fetch --locked --target "$(rustc --print host-tuple)"
+}
+
+build() {
+  export CARGO_NET_OFFLINE=true
+  cmake -S kudari -B build -DCMAKE_INSTALL_PREFIX=/usr
+  cmake --build build
+}
+
+check() {
+  cd kudari
+  CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="$srcdir/build/cargo" cargo test --frozen --package kudari-core
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  install -d "$pkgdir/usr/share/licenses/$pkgname"
+  ln -s /usr/share/doc/kudari/MIT.txt "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  ln -s /usr/share/doc/kudari/THIRD_PARTY_LICENSES "$pkgdir/usr/share/licenses/$pkgname/THIRD_PARTY_LICENSES"
+}

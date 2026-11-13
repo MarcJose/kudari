@@ -1,0 +1,10 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de>
+# SPDX-License-Identifier: MIT
+# The subject of a commit follows Conventional Commits; tools/commit-subject.sh says how.
+# Turned on with `git config core.hooksPath .githooks`.
+set -eu
+
+# The first line that is no comment, as Git keeps it.
+subject=$(sed -n '/^[^#]/{p;q;}' "$1")
+exec "$(git rev-parse --show-toplevel)/tools/commit-subject.sh" "$subject"

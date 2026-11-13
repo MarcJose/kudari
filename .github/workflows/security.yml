@@ -1,0 +1,103 @@
+name: Security
+
+on:
+  # Tags are left to release.yml, which runs this workflow before it publishes.
+  push:
+    branches: ["**"]
+  pull_request:
+  # New advisories concern code that has not changed, so the checks also run weekly.
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+  workflow_call:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-security-${{ github.ref }}
+  cancel-in-progress: true
+
+# tools/security.sh runs the same checks locally. The image is the one of ci.yml.
+jobs:
+  # Secrets anywhere in the history, found by two scanners with different rules.
+  secrets:
+    runs-on: ubuntu-latest
+    container: archlinux:base-20261101.0.620205@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - run: pacman -Syu --noconfirm --needed git gitleaks
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The checkout belongs to another user than the container's root.
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: gitleaks git --no-banner --redact --verbose --exit-code 1 .
+
+  # TruffleHog is not packaged by Arch, so its own image runs it, pinned like the actions.
+  # Update the version and the digest together.
+  trufflehog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: >-
+          docker run --rm -v "$PWD:/repository:ro"
+          ghcr.io/trufflesecurity/trufflehog:3.99.8@sha256:674b2f187620a19df77f44cf9a7d77efcc581a5662accef2f2739cbb46ba4a3a
+          git file:///repository --results=verified,unknown --fail --no-update --github-actions
+
+  # Known vulnerabilities and malicious crates, licenses, and where crates come from.
+  dependencies:
+    runs-on: ubuntu-latest
+    container: archlinux:base-20261101.0.620205@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - run: pacman -Syu --noconfirm --needed git rust cargo-deny osv-scanner
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: cargo deny --locked check
+      - run: osv-scanner scan source --lockfile Cargo.lock
+
+  # The workflows themselves: mistakes, and the shell scripts, which the CI runs as well.
+  # The job names "actionlint" and "zizmor" are required status checks in the ruleset of main.
+  actionlint:
+    runs-on: ubuntu-latest
+    container: archlinux:base-20261101.0.620205@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - run: pacman -Syu --noconfirm --needed git actionlint shellcheck
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: actionlint
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: git ls-files -z '*.sh' '.githooks/*' | xargs -0 shellcheck
+
+  # Openings for attacks on the CI in the workflows.
+  zizmor:
+    runs-on: ubuntu-latest
+    container: archlinux:base-20261101.0.620205@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - run: pacman -Syu --noconfirm --needed zizmor
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # With a token, zizmor also checks that pinned commits belong to their actions.
+      - run: zizmor --format github .github
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -1,0 +1,190 @@
+name: Release
+
+# tools/release.py raises the version and writes the changelog on a branch, and tags the
+# release once its pull request is merged; pushing the tag starts this workflow. It publishes only when the checks pass and the package came out the
+# same in two separate builds. The Windows packages are signed with the self-signed
+# certificate in the secrets WINDOWS_CERTIFICATE and WINDOWS_CERTIFICATE_PASSWORD, which
+# tools/windows-certificate.sh makes.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+
+permissions: {}
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml # zizmor: ignore[self-repository] actionlint does not know $/ yet
+    permissions:
+      contents: read
+
+  security:
+    uses: ./.github/workflows/security.yml # zizmor: ignore[self-repository] actionlint does not know $/ yet
+    permissions:
+      contents: read
+
+  source:
+    runs-on: ubuntu-latest
+    container: archlinux:base-20261101.0.620205@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - run: pacman -Syu --noconfirm --needed git rust python cargo-cyclonedx syft
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # The tag, Cargo.toml, the metainfo, the man page and the changelog name one version.
+      - run: tools/release.py --check --tag "$GITHUB_REF_NAME"
+      - run: tools/dist.sh source dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: source
+          path: dist/
+          if-no-files-found: error
+      # The crates of the Windows package, which its job completes with Qt and the runtime.
+      - run: |
+          cargo cyclonedx --manifest-path crates/windows/Cargo.toml --format json --spec-version 1.5 \
+            --target x86_64-pc-windows-msvc --override-filename crates-windows.cdx > /dev/null
+          mkdir sbom && mv crates/windows/crates-windows.cdx.json sbom/
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom-windows
+          path: sbom/
+          if-no-files-found: error
+
+  # Two builds of the same tarball on separate runners, in different directories.
+  binary:
+    needs: source
+    strategy:
+      matrix:
+        build: [first, second]
+    runs-on: ubuntu-latest
+    container: archlinux:base-20261101.0.620205@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9
+    timeout-minutes: 40
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: source
+          path: source
+      # The tarball brings the package list and the build tools along.
+      - run: |
+          tar -x -f source/kudari-*.tar.xz
+          cd kudari-*/
+          # shellcheck disable=SC2046 # the package list is meant to split
+          pacman -Syu --noconfirm --needed rust cmake make appstream desktop-file-utils $(grep -v '^#' .github/arch-packages.txt)
+          tools/dist.sh binary "$(ls ../source/kudari-*.tar.xz)" ../package
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binary-${{ matrix.build }}
+          path: package/
+          if-no-files-found: error
+
+  # Not checked for reproducibility: the compiler of Microsoft writes the time of the build
+  # into the program.
+  windows:
+    needs: source
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      QT_VERSION: 6.8.3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sbom-windows
+          path: sbom
+      - run: rustup toolchain install stable --profile minimal --no-self-update
+      - run: python -m pip install aqtinstall==3.3.0
+      - run: python -m aqt install-qt windows desktop $env:QT_VERSION win64_msvc2022_64 --outputdir C:\Qt
+        shell: pwsh
+      - run: |
+          "QMAKE=C:\Qt\$env:QT_VERSION\msvc2022_64\bin\qmake.exe" >> $env:GITHUB_ENV
+          "C:\Qt\$env:QT_VERSION\msvc2022_64\bin" >> $env:GITHUB_PATH
+        shell: pwsh
+      - name: Package
+        shell: pwsh
+        env:
+          CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          KUDARI_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:CERTIFICATE) { throw 'The secret WINDOWS_CERTIFICATE is missing; tools/windows-certificate.sh makes it.' }
+          $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERTIFICATE))
+          try {
+              tools/windows-package.ps1 -Out dist -Certificate $pfx -Timestamp -Sbom sbom/crates-windows.cdx.json
+          } finally {
+              Remove-Item $pfx
+          }
+      - run: tests/windows/package.ps1 dist
+        shell: pwsh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows
+          path: dist/
+          if-no-files-found: error
+
+  reproducible:
+    needs: binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: binary-*
+      - run: |
+          sha256sum binary-first/* binary-second/*
+          for file in binary-first/*; do
+              cmp "$file" "binary-second/${file#binary-first/}"
+          done
+
+  publish:
+    needs: [ci, security, source, reproducible, windows]
+    runs-on: ubuntu-latest
+    container: archlinux:base-20261101.0.620205@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9
+    timeout-minutes: 15
+    permissions:
+      contents: write # the release
+      id-token: write # the keyless signatures of Sigstore
+      attestations: write # the build provenance
+    steps:
+      - run: pacman -Syu --noconfirm --needed git python cosign github-cli
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          pattern: "{source,binary-first,windows}"
+          merge-multiple: true
+      # For a pull request to microsoft/winget-pkgs, which the release leaves to the author.
+      - run: tools/winget.py "${GITHUB_REF_NAME#v}" dist/kudari-*-x86_64-windows.zip dist
+      - name: Checksums and signatures
+        working-directory: dist
+        run: |
+          sha256sum -- * > SHA256SUMS
+          sha512sum -- kudari-* > SHA512SUMS
+          for sums in SHA256SUMS SHA512SUMS; do
+              cosign sign-blob --yes --bundle "$sums.sigstore.json" "$sums"
+          done
+          cat SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/kudari-*
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          tools/release.py --notes "$version" > notes.md
+          case $version in *-*) prerelease=--prerelease ;; *) prerelease= ;; esac
+          # shellcheck disable=SC2086 # empty when it is a normal release
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Kudari $version" --notes-file notes.md $prerelease

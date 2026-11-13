@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de>
+# SPDX-License-Identifier: CC0-1.0
+#
+# git-cliff writes the section of a release in CHANGELOG.md from the Conventional Commits
+# since the previous tag. tools/release.py calls it and adds the date.
+
+[changelog]
+header = ""
+body = """
+## [{{ version | default(value="Unreleased") | trim_start_matches(pat="v") }}]
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}
+- {% if commit.breaking %}**Breaking:** {% endif %}\
+{% if commit.scope %}**{{ commit.scope }}:** {% endif %}\
+{{ commit.message | split(pat="\n") | first | trim | upper_first }}\
+{% endfor %}
+{% endfor %}
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+protect_breaking_commits = true
+tag_pattern = "v[0-9]+\\.[0-9]+\\.[0-9]+.*"
+sort_commits = "oldest"
+# The HTML comments only order the groups; they are not shown.
+commit_parsers = [
+    { message = "^feat", group = "<!-- 0 -->Features" },
+    { message = "^fix", group = "<!-- 1 -->Bug Fixes" },
+    { message = "^perf", group = "<!-- 2 -->Performance" },
+    { message = "^refactor", group = "<!-- 3 -->Refactoring" },
+    { message = "^docs", group = "<!-- 4 -->Documentation" },
+    { message = "^build", group = "<!-- 5 -->Build and Packaging" },
+    { message = "^revert", group = "<!-- 6 -->Reverted" },
+    { message = "^(chore|ci|test|style)", skip = true },
+]
+
+# Before 1.0.0, a breaking change raises the minor version, as Semantic Versioning allows.
+[bump]
+features_always_bump_minor = true
+breaking_always_bump_major = false

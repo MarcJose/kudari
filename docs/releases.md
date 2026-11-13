@@ -1,0 +1,130 @@
+# Releases
+
+Versions follow [Semantic Versioning](https://semver.org). Each release on GitHub contains:
+
+| File | What it is |
+|---|---|
+| `kudari-X.Y.Z.tar.xz` | the source, with all Rust crates, so it builds without network |
+| `kudari-X.Y.Z-x86_64-linux.tar.xz` | the installed files under `usr/`, built on Arch Linux |
+| `kudari-X.Y.Z.cdx.json`, `kudari-X.Y.Z.spdx.json` | SBOMs of the source in CycloneDX and SPDX |
+| `kudari-X.Y.Z-x86_64-windows.msix` | the package for Windows 11 |
+| `kudari-X.Y.Z-x86_64-windows.zip` | the same program to unpack and run, without installing |
+| `kudari-X.Y.Z-x86_64-windows.cer` | the certificate that signs both |
+| `kudari-X.Y.Z-x86_64-windows.cdx.json` | the SBOM of the Windows packages: the crates, Qt and the runtime of Visual C++ |
+| `MarcJose.Kudari*.yaml` | the manifests for winget |
+| `SHA256SUMS`, `SHA512SUMS` | checksums of all files |
+| `*.sigstore.json` | the Sigstore signatures of the checksums |
+
+## Checking a download
+
+Sigstore signs the checksums without a key. The signature names the workflow and the tag
+that made them. With [cosign](https://docs.sigstore.dev/cosign/), check the
+signature, then the files:
+
+```sh
+cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    --certificate-identity-regexp '^https://github.com/MarcJose/kudari/\.github/workflows/release\.yml@refs/tags/v'
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+The source, the package and the SBOMs also have a build provenance attestation, which the
+GitHub CLI checks:
+
+```sh
+gh attestation verify kudari-1.2.0.tar.xz --repo MarcJose/kudari
+```
+
+## The Windows packages
+
+A self-signed certificate of Kudari, valid for three years, signs the program in both and
+the MSIX package. Every release has the same one until its renewal. Windows installs an
+MSIX package only from a publisher it trusts, so you have to trust the certificate first,
+as the README shows. Check the `.cer` file like any other download, through
+`SHA256SUMS` and its signature as shown earlier, and on Windows that it signed the package:
+
+```powershell
+Get-AuthenticodeSignature kudari-1.2.0-x86_64-windows.msix | Format-List Status, SignerCertificate
+```
+
+The packages bring Qt and the runtime of Visual C++ along, with their licenses under
+`licenses\`. They are not reproducible: the compiler of Microsoft writes the time of the
+build into the program.
+
+winget does not trust the certificate either, so its manifests install the ZIP archive as a
+portable program and put its directory on the path, with the command `kudari`. Nothing
+submits them on its own: a pull request to
+[microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) under
+`manifests/m/MarcJose/Kudari/X.Y.Z/` takes them in.
+
+## The packages for Arch Linux
+
+`packaging/aur/` holds two packages for the AUR, which exclude each other:
+
+- `kudari-bin` installs the package of a release, as the release workflow built it.
+- `kudari-git` builds the newest state of `main` from source.
+
+After a release, `tools/aur.py 1.2.0` sets the version of `kudari-bin` and the checksum of
+its package from the `SHA256SUMS` of the release, and writes the `.SRCINFO` of both. A
+pre-release stays out, as pacman would order it after the release. To publish a package,
+push its directory, with `PKGBUILD` and `.SRCINFO`, to
+`ssh://aur@aur.archlinux.org/kudari-bin.git` or `kudari-git.git`. `tests/check.sh` checks
+the PKGBUILDs with `namcap` and that each `.SRCINFO` is up to date. The CI builds both
+packages with `tests/aur.sh`, installs them and starts the program.
+
+## Rebuilding the package
+
+The package is reproducible. On Arch Linux, it can be rebuilt from the source tarball:
+
+```sh
+tools/dist.sh binary kudari-1.2.0.tar.xz out/
+```
+
+With the same versions of Rust, Qt and the other Arch packages as the release build, it
+matches the published one byte for byte, wherever it builds. The release workflow checks
+that with two builds on separate runners before it publishes.
+
+## Making a release
+
+Commit messages follow Conventional Commits, as [CONTRIBUTING.md](../CONTRIBUTING.md)
+describes, so that the changelog and the next version can come from them. To prepare a
+release, run on `main`
+
+```sh
+tools/release.py            # or tools/release.py 1.2.0 to choose the version
+```
+
+It takes the next version from the commits since the last release (git-cliff), writes it
+into `Cargo.toml`, `Cargo.lock`, the metainfo and the man page (CMake and the program read it
+from `Cargo.toml`), adds the section of the release to `CHANGELOG.md` from the commits, and
+commits on the new branch `release/VERSION`. It keeps a section written by hand beforehand.
+`tools/release.py --check` tells whether all of these agree, and `tests/check.sh` runs it.
+
+`main` takes changes through pull requests only, the release too:
+
+```sh
+git push origin release/1.2.0
+gh pr create --base main --title 'chore(release): 1.2.0'
+# once the checks pass and the pull request is merged:
+git switch main && git pull
+tools/release.py --finish 1.2.0
+git push origin v1.2.0
+```
+
+`--finish` tags the merge on `main` once it matches `origin/main`, with the changelog section
+as the message. The tag waits for the merge, as the rules of the repository keep tags of
+releases from moving: a tag pushed before a correction to the pull request would cost the
+version.
+
+Pushing the tag starts `.github/workflows/release.yml`. It runs the CI and security checks,
+builds the source tarball with all crates and its SBOMs, builds the package from it twice on
+separate runners and compares them, and publishes everything with checksums, signatures and
+build provenance. `tools/dist.sh` makes the same files locally, and `tools/update-pins.py`
+renews the container images the workflows pin, which Dependabot does not see.
+
+The Windows packages come from `tools/windows-package.ps1` on a Windows runner, signed with
+the certificate in the secrets `WINDOWS_CERTIFICATE` (the PKCS #12 file in Base64) and
+`WINDOWS_CERTIFICATE_PASSWORD`. Without them, the release fails. `tools/windows-certificate.sh`
+makes a new certificate and, with `--upload`, stores it there. Its subject becomes the
+publisher of the MSIX package, so a new subject makes a package that Windows treats as
+another program.
