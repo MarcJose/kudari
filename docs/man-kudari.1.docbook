@@ -48,12 +48,12 @@ SPDX-License-Identifier: MIT
 <refsect1>
 <title>Description</title>
 <para><command>kudari</command> is a terminal that slides down from the top edge of the
-screen at the press of a key and retracts again. It starts hidden; the global shortcut,
+screen at the press of a key and retracts again. It starts hidden. The global shortcut,
 <keycap>F12</keycap> unless changed, shows and hides the window. Starting
 <command>kudari</command> while it is already running shows or hides the running
 window instead of starting a second one.</para>
 
-<para>Each session is a tab and can be divided into several terminals. The window takes
+<para>Each session is a tab, and you can divide it into several terminals. The window takes
 its colors, fonts, controls and icons from the Plasma theme and follows it when it
 changes. The menu, opened with the button on the right of the tab bar, holds the
 settings and the keyboard shortcuts.</para>
@@ -90,8 +90,8 @@ are only read, never changed.</para>
 <varlistentry>
 <term><option>mcp</option></term>
 <listitem><para>Serves the Model Context Protocol on standard input and output, so that an
-AI agent can use the running <command>kudari</command>; see <link linkend="agents">AI
-Agents</link>. The agent's client starts it; it opens no window and ends with its
+AI agent can use the running <command>kudari</command>, as <link linkend="agents">AI
+agents</link> describes. The agent's client starts it. It opens no window and ends with its
 input.</para></listitem>
 </varlistentry>
 </variablelist>
@@ -103,8 +103,8 @@ input.</para></listitem>
 <literal>io.github.marcjose.kudari</literal> on the session bus. The methods have the
 names and meaning of Yakuake's interface, so scripts written for Yakuake work after
 changing the name and the object paths. All methods use the interface
-<literal>io.github.marcjose.kudari</literal>. Sessions and terminals are named by
-number; <literal>-1</literal> stands for the active one wherever a method takes a session
+<literal>io.github.marcjose.kudari</literal>. Numbers name the sessions and terminals, and
+<literal>-1</literal> stands for the active one wherever a method takes a session
 or terminal.</para>
 
 <para>Object <literal>/kudari/window</literal>:</para>
@@ -120,8 +120,8 @@ or terminal.</para>
 <varlistentry>
 <term><function>tabTitle</function>(<parameter>session</parameter>),
 <function>setTabTitle</function>(<parameter>session</parameter>, <parameter>title</parameter>)</term>
-<listitem><para>Reads or sets the title of a tab. A title that was set replaces the
-title of the terminal; an empty one gives the tab back its automatic title.</para></listitem>
+<listitem><para>Reads or sets the title of a tab. A title set this way replaces the
+title of the terminal, and an empty one gives the tab back its automatic title.</para></listitem>
 </varlistentry>
 <varlistentry>
 <term><function>sessionAtTab</function>(<parameter>index</parameter>)</term>
@@ -135,7 +135,7 @@ title of the terminal; an empty one gives the tab back its automatic title.</par
 <varlistentry>
 <term><function>addSession</function>(), <function>addSessionTwoHorizontal</function>(),
 <function>addSessionTwoVertical</function>(), <function>addSessionQuad</function>()</term>
-<listitem><para>Opens a session with one, two side by side, two above each other or four
+<listitem><para>Opens a session with one, two side by side, two stacked or four
 terminals and returns its number.</para></listitem>
 </varlistentry>
 <varlistentry>
@@ -143,7 +143,7 @@ terminals and returns its number.</para></listitem>
 <function>removeSession</function>(<parameter>session</parameter>),
 <function>removeTerminal</function>(<parameter>terminal</parameter>)</term>
 <listitem><para>Switches to a session, or closes a session or a terminal. Closing a
-locked session asks first; terminals of a locked session stay open.</para></listitem>
+locked session asks first, and terminals of a locked session stay open.</para></listitem>
 </varlistentry>
 <varlistentry>
 <term><function>splitSessionAuto</function>(<parameter>session</parameter>),
@@ -167,22 +167,22 @@ pixels it moved, or <literal>-1</literal> if it could not.</para></listitem>
 <function>sessionIdList</function>(), <function>terminalIdList</function>(),
 <function>terminalIdsForSessionId</function>(<parameter>session</parameter>),
 <function>sessionIdForTerminalId</function>(<parameter>terminal</parameter>)</term>
-<listitem><para>The numbers of sessions and terminals. Lists are returned as numbers
+<listitem><para>The numbers of sessions and terminals. Lists come as numbers
 separated by commas.</para></listitem>
 </varlistentry>
 <varlistentry>
 <term><function>runCommand</function>(<parameter>command</parameter>),
 <function>runCommandInTerminal</function>(<parameter>terminal</parameter>, <parameter>command</parameter>)</term>
 <listitem><para>Types a command into the active or a given terminal and presses
-<keycap>Enter</keycap>. Since this runs code as the user, it is refused unless
-<guilabel>Allow other programs to run commands</guilabel> is switched on in the security
+<keycap>Enter</keycap>. Since this runs code as the user, Kudari refuses it unless
+<guilabel>Allow other programs to run commands</guilabel> is on in the security
 settings.</para></listitem>
 </varlistentry>
 <varlistentry>
 <term><function>isSessionClosable</function>(<parameter>session</parameter>),
 <function>setSessionClosable</function>(<parameter>session</parameter>, <parameter>closable</parameter>),
 <function>hasUnclosableSessions</function>()</term>
-<listitem><para>Reads or changes whether a session is locked against closing.</para></listitem>
+<listitem><para>Reads or changes whether a lock keeps a session from closing.</para></listitem>
 </varlistentry>
 <varlistentry>
 <term><function>isSessionKeyboardInputEnabled</function>,
@@ -201,8 +201,8 @@ input.</para></listitem>
 <function>setTerminalMonitorActivityEnabled</function>,
 <function>hasTerminalsWithMonitorActivityEnabled</function>,
 <function>hasTerminalsWithMonitorActivityDisabled</function></term>
-<listitem><para>Reads or changes whether new output in a session or terminal is
-reported.</para></listitem>
+<listitem><para>Reads or changes whether Kudari reports new output in a session or
+terminal.</para></listitem>
 </varlistentry>
 <varlistentry>
 <term><function>isSessionMonitorSilenceEnabled</function>,
@@ -211,14 +211,14 @@ reported.</para></listitem>
 <function>setTerminalMonitorSilenceEnabled</function>,
 <function>hasTerminalsWithMonitorSilenceEnabled</function>,
 <function>hasTerminalsWithMonitorSilenceDisabled</function></term>
-<listitem><para>Reads or changes whether a session or terminal that stays silent is
-reported.</para></listitem>
+<listitem><para>Reads or changes whether Kudari reports a session or terminal that stays
+silent.</para></listitem>
 </varlistentry>
 </variablelist>
 </refsect1>
 
 <refsect1 id="agents">
-<title>AI Agents</title>
+<title>AI agents</title>
 <para>An AI agent, such as Claude Code, can read the terminals of
 <command>kudari</command> and, if allowed, type into them. Its client starts
 <command>kudari mcp</command>, which offers these tools over the Model Context Protocol:
@@ -227,15 +227,15 @@ reported.</para></listitem>
 <function>open_session</function> and <function>close_session</function>.</para>
 
 <para>Three settings under Settings → Security → AI Agents decide what agents may do.
-Reading the terminals is off by default; switched on, agents see everything the terminals
+Reading the terminals is off by default. Switched on, agents see everything the terminals
 show, including passwords or tokens. Controlling them, that is typing, pressing keys and
 opening and closing sessions, is off until switched on as well. While <quote>Ask before running their
 commands</quote> is on, as it is by default, agents type only at the shell prompt and never
 press <keycap>Return</keycap> or <keycap>Escape</keycap>: a command runs when the user
 presses Return. At the prompt means that the line editor of the shell is active, which bash,
-zsh and fish show with bracketed paste; typed text reaches it as a paste. Agents can close
+zsh and fish show with bracketed paste. Typed text reaches it as a paste. Agents can close
 only the sessions they opened themselves, and never type into a terminal whose keyboard
-input is locked.</para>
+input the user locked.</para>
 
 <para><command>kudari mcp</command> talks to the running <command>kudari</command>
 through the interface <literal>io.github.marcjose.kudari.Agent</literal> on
@@ -246,10 +246,10 @@ through the interface <literal>io.github.marcjose.kudari.Agent</literal> on
 interface, it is open to every program of the same user, so the settings alone are not
 enough: when a new connection calls it, <command>kudari</command> asks the user whether
 this agent may have access, naming the program that started <command>kudari
-mcp</command>. Only one agent is asked about at a time, and the tools of
+mcp</command>. Kudari asks about only one agent at a time, and the tools of
 <command>kudari mcp</command> wait up to 50 seconds for the answer. The answer holds until
-the agent disconnects; another program has to ask for itself. While an agent has access,
-an eye button in the bar shows it, and a click on it ends the access. Changing the settings
+the agent disconnects. Another program has to ask for itself. While an agent has access,
+an eye button in the bar shows it, and clicking it ends the access. Changing the settings
 for agents ends every access, so each agent asks again.</para>
 </refsect1>
 
@@ -268,12 +268,12 @@ which change what the keys send to the programs in the terminal.</para></listite
 <varlistentry>
 <term><filename>~/.config/yakuakerc</filename>,
 <filename>~/.local/share/konsole/</filename></term>
-<listitem><para>Read once, when the settings of Yakuake and Konsole are taken
-over.</para></listitem>
+<listitem><para>Read once, when Kudari takes over the settings of Yakuake and
+Konsole.</para></listitem>
 </varlistentry>
 </variablelist>
 <para>The directories follow <envar>XDG_CONFIG_HOME</envar> and
-<envar>XDG_DATA_HOME</envar> when they are set.</para>
+<envar>XDG_DATA_HOME</envar> where the environment sets them.</para>
 </refsect1>
 
 <refsect1>
@@ -288,7 +288,7 @@ over.</para></listitem>
 </refsect1>
 
 <refsect1>
-<title>See Also</title>
+<title>See also</title>
 <simplelist type="inline">
 <member><citerefentry><refentrytitle>konsole</refentrytitle><manvolnum>1</manvolnum></citerefentry></member>
 </simplelist>
