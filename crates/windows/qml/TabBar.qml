@@ -149,6 +149,10 @@ Controls.Pane {
 
             Layout.fillWidth: true
             Layout.maximumWidth: contentWidth
+            // As high as its tabs: the style gives the strip 48 pixels.
+            implicitHeight: contentHeight
+            topPadding: 0
+            bottomPadding: 0
             visible: bar.showTabs
             currentIndex: selected
             // The wheel switches tabs instead of scrolling the row of them; the row follows.
@@ -177,8 +181,14 @@ Controls.Pane {
 
                     width: implicitWidth
                     implicitWidth: leftPadding + contentItem.implicitWidth + rightPadding
+                    // As high as the tool buttons beside them, as in the tab rows of Windows:
+                    // the style makes tabs 40 pixels high, which the bar of a terminal that
+                    // is always on screen does not need.
+                    implicitHeight: 32
                     leftPadding: 12
                     rightPadding: closable ? 4 : 12
+                    topPadding: 4
+                    bottomPadding: 4
                     Accessible.name: title
                     opacity: bar.dragIndex === index ? 0.5 : 1
                     onClicked: bar.controller.selectTab(sessionId)
@@ -204,11 +214,16 @@ Controls.Pane {
                         }
 
                         Controls.ToolButton {
-                            Layout.preferredWidth: 24
-                            Layout.preferredHeight: 24
+                            Layout.preferredWidth: 20
+                            Layout.preferredHeight: 20
                             visible: tab.closable
                             flat: true
-                            padding: 0
+                            // The style sets each side on its own, which padding does not undo;
+                            // in a button this small, its 8 pixels would leave no room.
+                            topPadding: 0
+                            bottomPadding: 0
+                            leftPadding: 0
+                            rightPadding: 0
                             text: bar.iconFont.length > 0 ? "\uE711" : "✕"
                             font.family: bar.iconFont.length > 0 ? bar.iconFont : font.family
                             font.pixelSize: 10
