@@ -26,6 +26,17 @@ path = ["third_party/cxx-qt-build/Cargo.toml", "third_party/qt-build-utils/Cargo
 SPDX-FileCopyrightText = "Klarälvdalens Datakonsult AB, a KDAB Group company <info@kdab.com>"
 SPDX-License-Identifier = "MIT OR Apache-2.0"
 
+[[annotations]]
+path = ".vale/styles/config/**"
+SPDX-FileCopyrightText = "2026 Marc Jose <marc@hahn-jose.de>"
+SPDX-License-Identifier = "CC0-1.0"
+
+# The Google developer documentation style for Vale, v0.7.2 of github.com/errata-ai/Google.
+[[annotations]]
+path = ".vale/styles/Google/**"
+SPDX-FileCopyrightText = "2018 - 2019 Joseph Kato"
+SPDX-License-Identifier = "MIT"
+
 # The Contributor Covenant, with the reporting address and the scope filled in.
 [[annotations]]
 path = "CODE_OF_CONDUCT.md"

@@ -9,14 +9,14 @@ taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md). Security problems
 A bug report needs the version (`kudari --version`), the Plasma and Qt versions, and the
 steps that show the problem. Messages of Kudari appear when it is started from another
 terminal with `QT_LOGGING_RULES='*.warning=true'`. For a larger change, open an issue
-first, so we can agree on the way before you spend time on it.
+first, so that the way is agreed on before you spend time on it.
 
 ## Setting up
 
 Kudari builds on Linux with Rust, Qt 6 and KDE Frameworks 6. The packages the CI installs
 on Arch Linux are listed in `.github/arch-packages.txt`; other distributions name them
 similarly; `README.md` shows the command for Arch. With `lld` installed, the build links
-with it.
+with it. The checks need [Vale](https://vale.sh) as well, for the English of the texts.
 
 For development, Cargo builds and runs Kudari directly. If the source lies in a synced
 folder, keep the build output out of it:
@@ -43,7 +43,10 @@ git config core.hooksPath .githooks
   GUI test `tests/gui/run.sh` when it needs the window. Coverage of the Rust code stays at
   90 % or more; `tools/coverage.sh` measures it.
 - **Code.** `cargo fmt` formats, and clippy and the C++ compiler run with warnings as errors.
-  Code, comments and commit messages are in English. Comments say why, not what.
+  Code, comments and commit messages are in English. Comments say why, not what. Vale checks
+  the English of the documentation and the comments against the Google developer
+  documentation style, with the exceptions in `.vale.ini`; words of the project that it does
+  not know go into `.vale/styles/config/vocabularies/Kudari/accept.txt`.
 - **Layout.** What depends on no user interface and no platform belongs in `crates/core`;
   what needs Qt but not KDE, such as the terminal item and the controller, belongs in
   `crates/qt`; the package at the root is the KDE front end. The core reaches the clipboard,
@@ -75,7 +78,7 @@ git config core.hooksPath .githooks
 ## The checks
 
 ```sh
-tests/check.sh                                   # translations, formatting, lints, unit tests
+tests/check.sh                                   # translations, formatting, lints, prose, unit tests
 cargo build --features test-hooks && tests/gui/run.sh
 tools/coverage.sh --html                         # coverage of unit and GUI test together
 cargo clippy -p kudari-core --all-targets --target x86_64-pc-windows-gnu  # the core on Windows
