@@ -161,6 +161,10 @@ ApplicationWindow {
         // A window of its own, so that the menus of the bar reach below the window.
         Menu {
             popupType: Popup.Window
+            // The style lets a menu grow to its height as it opens. In a window of its own,
+            // that resizes the window with every frame, and the menu judders; so it opens
+            // at its full height at once.
+            enter: null
         }
     }
 
