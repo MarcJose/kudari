@@ -1,0 +1,116 @@
+# Blocks pull requests that introduce dependencies with licences that are not
+# allowed (and, with GitHub's dependency review, vulnerable dependencies).
+#
+#   GitHub dependency review available (public repository or GitHub Advanced Security)
+#     -> actions/dependency-review-action checks the dependency changes of the PR
+#   not available (private repository without GitHub Advanced Security)
+#     -> .github/scripts/sbom-license-check.py checks an SBOM: generated from package-lock.json
+#        for npm projects (committed SBOMs may lag behind the lockfile), otherwise the SBOM
+#        files in the repository
+#
+# Both use the same policy: ./.github/dependency-review-config.yml
+# Policy and checker are taken from the pull request's target branch, so a pull request
+# cannot weaken its own check; changes to them take effect once they are merged.
+# Do not add policy options here – they would override the policy file.
+# The job name "dependency-review" is a required status check (in the ruleset of main).
+name: dependency-review
+
+on:
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-review:
+    name: dependency-review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out policy and checker from the target branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .base
+          sparse-checkout: .github
+          persist-credentials: false
+
+      - name: Select policy and checker
+        id: policy
+        env:
+          POLICY: "./.github/dependency-review-config.yml"
+        run: |
+          checker=.github/scripts/sbom-license-check.py
+          policy=$POLICY
+          if [[ -f .base/$checker ]]; then
+            checker=.base/$checker
+          else
+            echo "::notice::The target branch has no licence checker yet – using the one from this pull request."
+          fi
+          if [[ $policy == ./* ]]; then
+            if [[ -f .base/${policy#./} ]]; then
+              policy=./.base/${policy#./}
+            else
+              echo "::notice::The target branch has no licence policy yet – using the one from this pull request."
+            fi
+          fi
+          echo "checker=$checker" >> "$GITHUB_OUTPUT"
+          echo "policy=$policy" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether GitHub dependency review is available
+        id: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          export GH_HOST="${GITHUB_SERVER_URL#https://}"
+          if err=$(gh api "repos/${GITHUB_REPOSITORY}/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}" --silent 2>&1); then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          elif [[ $err == *"HTTP 403"* || $err == *"HTTP 404"* ]]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::GitHub dependency review is not available for this repository – checking an SBOM instead."
+          else
+            echo "::error::Could not determine whether dependency review is available: ${err}"
+            exit 1
+          fi
+
+      - name: Dependency review (GitHub)
+        if: steps.probe.outputs.available == 'true'
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          config-file: ${{ steps.policy.outputs.policy }}
+
+      - name: Set up Node.js for the SBOM (fallback, npm)
+        if: steps.probe.outputs.available != 'true' && hashFiles('package-lock.json') != ''
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+
+      - name: Licence check against SBOM (fallback)
+        if: steps.probe.outputs.available != 'true'
+        env:
+          POLICY: ${{ steps.policy.outputs.policy }}
+          CHECKER: ${{ steps.policy.outputs.checker }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ -f package-lock.json ]]; then
+            # npm: SBOM from the lockfile, without development dependencies. Optional
+            # dependencies (e.g. native binaries) are shipped and therefore checked as well.
+            export SBOM_DIR="$RUNNER_TEMP/sbom" IGNORE_SCOPE=true REQUIRE_SBOM=true
+            mkdir -p "$SBOM_DIR"
+            npm sbom --package-lock-only --omit dev --sbom-format cyclonedx --sbom-type application \
+              > "$SBOM_DIR/bom.cyclonedx.json"
+          else
+            # SBOM files in the repository. "true": fail if there is none (default: warning only).
+            export REQUIRE_SBOM=false
+          fi
+          python3 "$CHECKER"
