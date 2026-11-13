@@ -62,3 +62,4 @@ makepkg
 namcap
 pacman
 PKGBUILDs?
+nosemgrep

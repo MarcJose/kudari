@@ -1,9 +1,11 @@
-# Dependency review policy for kudari (used by .github/workflows/dependency-review.yml –
-# by GitHub's dependency review and, without GitHub Advanced Security, by the SBOM check).
+# Dependency review policy for Kudari, used by .github/workflows/dependency-review.yml: by
+# GitHub's dependency review and, in a private repository without GitHub Advanced Security,
+# by .github/scripts/sbom-license-check.py.
 #
-# Marc Jose distributes proprietary B2B software. Only permissive licences are
-# allowed; copyleft licences (GPL, AGPL, LGPL, MPL, EPL, EUPL, SSPL, CDDL, …) are
-# blocked because they could oblige us to disclose or relicense our own code.
+# Kudari is under the MIT licence, and its packages carry the crates it depends on. Those
+# come under permissive licences only, as deny.toml demands for cargo-deny as well; copyleft
+# licences (GPL, AGPL, LGPL, MPL, EPL, EUPL, SSPL, CDDL, …) are blocked, so that the
+# packages stay under permissive terms.
 #
 # Behaviour of the check:
 #   - licence not on the allow list        -> pull request is blocked
@@ -12,8 +14,8 @@
 #   - vulnerability of "moderate" or higher -> pull request is blocked (GitHub dependency review only;
 #                                              otherwise Dependabot alerts report vulnerabilities)
 #
-# Changes need a code owner approval (.github/CODEOWNERS) – involve legal / OSS
-# compliance before allowing further licences or adding exceptions.
+# cargo-deny checks the crates against the shorter list in deny.toml as well; a further
+# licence goes into both.
 
 fail-on-severity: moderate
 
@@ -29,6 +31,7 @@ allow-licenses:
   - MIT
   - MIT-0
   - Apache-2.0
+  - Unlicense
   - BSD-2-Clause
   - BSD-3-Clause
   - ISC
@@ -42,7 +45,7 @@ allow-licenses:
   - Unicode-DFS-2016
   - BlueOak-1.0.0
 
-# Approved exceptions: package URL (purl) plus reference to the approval.
+# Exceptions: package URL (purl) plus the reason.
 # Example:
-#   - pkg:npm/some-package   # LGPL-2.1, dynamic linking only – approval LEGAL-123, 2026-10-18
+#   - pkg:cargo/some-crate   # LGPL-2.1, dynamic linking only
 allow-dependencies-licenses: []

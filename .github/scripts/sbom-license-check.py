@@ -86,7 +86,7 @@ def load_policy(spec):
             f"{api}/repos/{owner}/{repo}/contents/{path}?ref={ref}",
             headers={"Accept": "application/vnd.github.raw", "Authorization": f"Bearer {token}"},
         )
-        # The URL comes from the workflow environment (https only, checked above), not from the PR.
+        # The URL comes from the workflow environment (HTTPS only, checked above), not from the PR.
         # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         with urllib.request.urlopen(request, timeout=30) as response:
             return parse_policy(response.read().decode("utf-8"))
