@@ -6,8 +6,9 @@
 #   tools/security.sh
 #
 # Secrets in the whole history (gitleaks, trufflehog), known vulnerabilities and malicious
-# crates, licenses and sources of the dependencies (cargo-deny, osv-scanner), and the
-# workflows (actionlint, zizmor). A tool that is not installed is skipped and reported.
+# crates, licenses and sources of the dependencies (cargo-deny, osv-scanner), the workflows
+# (actionlint, zizmor) and the shell scripts (shellcheck). A tool that is not installed is
+# skipped and reported.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -40,6 +41,9 @@ echo "== Workflows"
 if have actionlint; then actionlint; fi
 # Without a token zizmor leaves out the audits that ask GitHub.
 if have zizmor; then zizmor --offline .github; fi
+
+echo "== Shell scripts"
+if have shellcheck; then git ls-files -z '*.sh' '.githooks/*' | xargs -0 shellcheck; fi
 
 if [ -n "$skipped" ]; then
     echo "Security checks passed, but these were skipped:$skipped"

@@ -135,7 +135,8 @@ coverage drops below 90 %.
 `tools/security.sh` runs the checks of the security workflow: `gitleaks` and `trufflehog`
 look for secrets in the whole history, `cargo-deny` and `osv-scanner` for vulnerable or
 malicious crates, unwanted licenses and crates from elsewhere than crates.io, and
-`actionlint` and `zizmor` for mistakes and weak spots in the workflows. It skips tools that
+`actionlint` and `zizmor` for mistakes and weak spots in the workflows, and `shellcheck` for
+the shell scripts. It skips tools that
 are not installed and names them at the end. The workflow also runs weekly, so that it finds
 new advisories without a push. Dependabot proposes updates only a week after their release,
 which keeps out most malicious versions. Security fixes come at once.
