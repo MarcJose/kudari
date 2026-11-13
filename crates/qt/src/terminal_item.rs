@@ -841,7 +841,7 @@ impl qobject::TerminalItem {
         let Some(painter) = (unsafe { painter.as_mut() }) else {
             return;
         };
-        // SAFETY: see above.
+        // SAFETY: Qt keeps the painter in place during this call.
         let mut painter = unsafe { Pin::new_unchecked(painter) };
         let scheme = colors::active();
         // A translucent background comes from the pane behind this item.

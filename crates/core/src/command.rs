@@ -66,7 +66,7 @@ impl Quoting {
         if cfg!(windows) { Self::PowerShell } else { Self::Posix }
     }
 
-    /// The quoting of a program by its file name, for a command of the settings.
+    /// The quoting of a program by its filename, for a command of the settings.
     #[must_use]
     pub fn of_program(program: &str) -> Self {
         let name = program.rsplit(['/', '\\']).next().unwrap_or_default().to_lowercase();

@@ -2,7 +2,7 @@
 
 ## What and why
 
-## How it was tested
+## How you tested it
 
 <!-- Which checks ran, and what you tried by hand, on which system. -->
 

@@ -2,7 +2,7 @@
 
 Kudari is to run on KDE Plasma and on Windows, each time with the look and the means of
 the system: Qt Quick with Kirigami and KDE Frameworks on Plasma, Qt Quick with the
-FluentWinUI3 style and Win32 on Windows. GTK and macOS may follow later; X11 is not
+FluentWinUI3 style and Win32 on Windows. GTK and macOS may follow later, X11 is not
 planned. This document describes where the code is going and in which steps, so that each
 step leaves a working, fully tested Kudari behind.
 
@@ -27,7 +27,7 @@ kudari-windows  later: FluentWinUI3 pages, Win32 services, a named pipe, an INI 
 The front end sends the core commands, such as a key press, closing a tab or a changed
 setting, and gets effects back, such as new tabs, a terminal to repaint, a notification or
 a question for the user. Questions are asynchronous: no dialog blocks the core, which today
-can leave the controller in use twice during a nested event loop. The core can be tested
+can leave the controller in use twice during a nested event loop. Tests can run the core
 without Qt, so logic that only the GUI test reaches today gets unit tests.
 
 The KDE front end is the package at the root of the workspace, so the build, the QML, the
@@ -58,12 +58,12 @@ and GUI tests pass, and the coverage stays at 90% or more.
 8. **Operating system.** Process information and signals go behind a trait. The CI builds
    and tests the core on Windows as well, so Unix assumptions show up early.
 
-All eight steps are done. The Windows front end comes next and builds on the same core.
+All eight steps are complete. The Windows front end comes next and builds on the same core.
 
 ## Windows
 
 The Windows front end offers what the KDE one does, in the way Windows does it. What has no
-counterpart there is left out: the D-Bus interface for scripts, the import from Yakuake and
+counterpart there stays out: the D-Bus interface for scripts, the import from Yakuake and
 the effects of KWin. It needs Windows 11: Windows 10 gets no updates since October 2025.
 
 ### Layout
@@ -80,10 +80,10 @@ crates/windows   kudari-windows: Fluent pages, Win32, the named pipe, an INI fil
 The controller is a QObject of cxx-qt and cannot be generic, so it reaches its front end
 through a trait object set at startup: the services of step 6, and what only the shell of a
 front end has, such as menus, actions with their shortcuts, the tray and the dialogs. All
-QML of today imports Kirigami; the terminal pane moves to kudari-qt and takes its colors
+QML of today imports Kirigami. The terminal pane moves to kudari-qt and takes its colors
 and spacing from a small theme object instead, while tabs and window get their own QML per
-front end. The settings pages are shared as well, with the parts of their forms per front
-end (step 9 below).
+front end. The front ends share the settings pages as well, with the parts of their forms
+per front end (step 9 below).
 
 ### Steps
 
@@ -98,15 +98,15 @@ Each step leaves the KDE version as it was, with all its tests passing.
    `alacritty_terminal`. `process::windows` implements `Programs` from the process tree
    (`CreateToolhelp32Snapshot`): busy while the shell has children, the name of the newest
    one. Only interrupting (Ctrl+C), terminating and killing exist there, so `Programs` says
-   which signals it supports and the menu shows only those; flow control does nothing. A
-   reader between the PTY and the emulator picks up OSC 7 and OSC 9;9 for the working
-   directory and OSC 133 for the prompt; Linux keeps `/proc` and uses the same marks where
+   which signals it supports and the menu shows only those. Flow control does nothing. A
+   reader between the PTY and the emulator picks up OSC 7 and `OSC 9;9` for the working
+   directory and OSC 133 for the prompt. Linux keeps `/proc` and uses the same marks where
    a shell sends them.
 4. **Shells.** New tabs start Command Prompt, Windows PowerShell 5, PowerShell 7 or a WSL
-   distribution (from `wsl.exe --list --quiet`); the setting names the default. Kudari sets
-   up shell integration itself: a `PROMPT` with OSC 133 and OSC 9;9 for the Command Prompt,
+   distribution (from `wsl.exe --list --quiet`), and the setting names the default. Kudari
+   sets up shell integration itself: a `PROMPT` with OSC 133 and `OSC 9;9` for the Command Prompt,
    and a prompt function for PowerShell. Their OSC 133 marks carry a random key of the
-   terminal, and where one is set, marks without it do not count: a file shown with `cat`
+   terminal, and where a terminal has a key, marks without it do not count: a file shown with `cat`
    or `Get-Content` cannot fake a prompt. A setting turns it off.
 5. **A window.** Kudari for Windows opens a borderless, topmost window with the
    FluentWinUI3 style, on the screen under the pointer and within its work area, with tabs,
@@ -114,7 +114,7 @@ Each step leaves the KDE version as it was, with all its tests passing.
    effect for it. Settings live in `%APPDATA%\Kudari\kudari.ini`, which needs a writer
    next to the INI reader of the core. The translations of `po/` go into the binary, read by
    a small gettext reader in the core that knows contexts.
-6. **Services.** The global shortcut through `RegisterHotKey`; F12 belongs to the debugger,
+6. **Services.** The global shortcut through `RegisterHotKey`. F12 belongs to the debugger,
    so the first start asks for another key. The clipboard of Qt, without a primary
    selection. Toast notifications, which need the identity of the MSIX package, falling back
    to the tray. Links through `ShellExecuteW`. Accent color and light or dark mode from the
@@ -126,16 +126,16 @@ Each step leaves the KDE version as it was, with all its tests passing.
    connection is one agent, and `GetNamedPipeClientProcessId` names its program for the
    question, which the window shows in its QML with a button in the tab bar that ends the
    access. `kudari mcp` connects with `SECURITY_IDENTIFICATION`, checks that the
-   server runs as the same user, and implements `mcp::Instance` over the pipe; the core
+   server runs as the same user, and implements `mcp::Instance` over the pipe. The core
    has the pipe in `pipe` and the lines that cross it in `remote`, with a Unix socket for
-   the same elsewhere. PSReadLine has no
-   bracketed paste, so while commands are to be confirmed, an agent types only between the
-   signed OSC 133 marks of the command line and of the command; the vi mode of PSReadLine
-   gets no mark of a command line, as keys act there instead of going into it. Without the
+   the same elsewhere. PSReadLine has no bracketed paste, so while commands wait for the
+   user's Return, an agent types only between the signed OSC 133 marks of the command line
+   and of the command. The vi mode of PSReadLine gets no mark of a command line, as keys act
+   there instead of going into it. Without the
    shell integration of Kudari, an agent cannot type.
 8. **Packages.** The program, `kudari.exe` in the packages and `kudari-windows.exe` as cargo
    builds it beside the `kudari` of KDE, is a program without a console, so that none opens with
-   the window; `mcp`, `--version` and `--help` write to the console they came from.
+   the window. `mcp`, `--version` and `--help` write to the console they came from.
    `tools/windows-package.ps1` gathers it with Qt (`windeployqt`), the runtime of Visual
    C++ and the licenses, signs it, and makes a ZIP archive and an MSIX package with the
    alias `kudari`. The certificate is self-signed for now: the CI signs with a throwaway
@@ -147,7 +147,7 @@ Each step leaves the KDE version as it was, with all its tests passing.
 9. **Parity with KDE.** What the KDE version offers in its window, Windows offers as well:
    the grip below the tab bar, a tab bar that does what the one of KDE does, and the
    settings. Their pages live in kudari-qt and are the
-   same for both; they import the directory `qrc:/qml/form`, where each front end puts the
+   same for both. They import the directory `qrc:/qml/form`, where each front end puts the
    parts of its forms with the API of Kirigami Addons' FormCard: thin wrappers around it on
    KDE (`qml/form`), Fluent controls on Windows (`crates/windows/qml/form`). `tests/check.sh`
    lints the pages against both. What belongs to one front end only, such as themes, D-Bus
@@ -162,9 +162,9 @@ Each step leaves the KDE version as it was, with all its tests passing.
 ### Decisions
 
 - The global shortcut is Ctrl+F12 by default. F12 alone belongs to the debugger, Win+` to
-  the drop-down window of Windows Terminal, and Ctrl+` to the terminal of VS Code; the first
+  the drop-down window of Windows Terminal, and Ctrl+` to the terminal of VS Code. The first
   start offers another key.
 - Windows 11 only, as Microsoft no longer updates Windows 10.
-- The packages are signed with a certificate of Kudari's own, without costs or a third
-  party. Users trust it once for the MSIX package; winget installs the ZIP archive, as it
-  trusts no self-signed package.
+- A certificate of Kudari's own signs the packages, without costs or a third party. Users
+  trust it once for the MSIX package. winget installs the ZIP archive, as it trusts no
+  self-signed package.

@@ -59,7 +59,7 @@ impl Drop for Pending {
 
 /// How the terminals reach their front end. They call it from the threads of their PTYs.
 pub trait Listener: Send + Sync {
-    /// Runs `work` soon on the thread of the user interface, which owns the terminals.
+    /// Runs `work` later on the thread of the user interface, which owns the terminals.
     fn run(&self, work: Box<dyn FnOnce() + Send>);
     /// Hands a report to the thread of the user interface.
     fn report(&self, terminal: TerminalId, report: Report);

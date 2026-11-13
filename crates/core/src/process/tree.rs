@@ -10,7 +10,7 @@
 pub struct Process {
     pub id: u32,
     pub parent: u32,
-    /// The file name of the program, such as `pwsh.exe`.
+    /// The filename of the program, such as `pwsh.exe`.
     pub name: String,
 }
 

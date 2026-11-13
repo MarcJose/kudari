@@ -1,7 +1,7 @@
 # Using Kudari
 
-F12 brings Kudari down and sends it away again; starting `kudari` a second time does the
-same. The settings are behind the menu button in the bar at the bottom. `man kudari`
+F12 brings Kudari down and sends it away again, and starting `kudari` a second time does
+the same. The settings are behind the menu button in the bar at the bottom. `man kudari`
 describes the command line, the D-Bus interface and the files.
 
 ## Coming from Yakuake
@@ -16,18 +16,18 @@ uses the same global shortcut, Kudari asks before taking it over.
 - There is a single bar at the bottom: Plasma's own tabs, which show the title of their
   terminal and scroll when they do not fit, and the buttons of the window, with icons from
   the icon theme. It looks like the rest of the desktop and follows it when it changes. The
-  height is changed at the slim grip below it.
+  slim grip below it changes the height.
 - The terminal takes its colors from the Plasma theme, so there are no color schemes to
   maintain. Colors that would be hard to read on its background get closer to the text color.
-  Under Settings → Appearance, a fixed Plasma theme can be chosen for the terminal instead.
+  Under Settings → Appearance, you can choose a fixed Plasma theme for the terminal instead.
 - The command and start directory of new terminals, the title format, mouse behavior
   and the terminal bell are under Settings → Terminal Behavior. The command understands
-  quotes and backslashes but no shell syntax; use `sh -c '...'` for that. If it cannot
+  quotes and backslashes but no shell syntax. Use `sh -c '...'` for that. If it cannot
   start, the terminal says so and opens the login shell.
 - Margins, line numbers, a vertical line, the badge, cursor and tab colors are under
   Settings → Terminal. A single tab gets its own color from its context menu.
-- Konsole's `.keytab` files go into `~/.local/share/kudari/keytabs/` and are chosen under
-  Settings → Terminal Behavior. They only change the keys they name.
+- Konsole's `.keytab` files go into `~/.local/share/kudari/keytabs/`, and you choose one
+  under Settings → Terminal Behavior. They only change the keys they name.
 - The context menu of a terminal adjusts its scrollback and mouse tracking for that
   terminal alone. "One-Shot Monitors" in the tab menu ends a monitor after its first alert.
 - A double click on the scrollbar sets or removes a marker. Search matches appear there
@@ -45,7 +45,7 @@ uses the same global shortcut, Kudari asks before taking it over.
   paste asks for confirmation.
 - Programs can write to the clipboard through OSC 52, but not read it.
 - Links open on Ctrl+click or from the context menu, and only for `http`, `https`
-  and `mailto`, unless the list under Settings → Terminal Behavior is changed. Paths to
+  and `mailto`, unless you change the list under Settings → Terminal Behavior. Paths to
   existing files work the same way, except executables and `.desktop` files, which are
   never started.
 
@@ -67,24 +67,24 @@ such as Ctrl+C, and open and close sessions of its own. Settings → Security �
 decides what it may do:
 
 - **Allow AI agents to read terminals** is off. Switched on, an agent sees everything the
-  terminals show, including passwords or tokens that were printed there.
+  terminals show, including passwords or tokens that appeared there.
 - **Allow AI agents to control terminals** is off. Switched on, an agent can type, press
-  keys, and open and close sessions; it can close only the sessions it opened, and never
+  keys, and open and close sessions. It can close only the sessions it opened, and never
   types into a terminal whose keyboard input you locked.
 - **Ask before running their commands** is on. An agent then types only at the shell
   prompt, not into a running program, and never presses Return: you see each command in
   the terminal and run it yourself. "At the prompt" means that the line editor of the shell
-  is active, which bash, zsh and fish show with bracketed paste; a script that asks a
+  is active, which bash, zsh and fish show with bracketed paste. A script that asks a
   question gets nothing from an agent, and shells without bracketed paste, such as dash,
   need this switched off. Escape is not available either, since together with the next text
   it could trigger a key binding of the shell that runs the line. Ctrl+C to stop a program always works. Switched off,
   an agent runs commands and answers prompts of programs on its own.
 
 Once switched on, Kudari still asks you before each new agent gets access. The question
-names the program that started `kudari mcp`, for example `claude`; allow it only if you
-started that agent yourself. The answer holds until the agent ends, so an agent that is
-started anew asks again, and so does every other program. While an agent has access, an
-eye button appears in the bar; a click on it ends the access. Changing the settings for
+names the program that started `kudari mcp`, for example `claude`. Allow it only if you
+started that agent yourself. The answer holds until the agent ends, so an agent that starts
+anew asks again, and so does every other program. While an agent has access, an eye button
+appears in the bar, and a click on it ends the access. Changing the settings for
 agents ends every access as well.
 
 `kudari mcp` has no rights of its own: it asks the running Kudari over D-Bus, through the

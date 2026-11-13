@@ -139,7 +139,7 @@ const NAMED_KEYS: [(&str, Key); 33] = [
     ("slash", Key::Character('/')),
 ];
 
-/// The key of a key name: a name above, `F1` to `F35`, or a single character.
+/// The key of a key name: a name of the list before, `F1` to `F35`, or a single character.
 fn key_code(name: &str) -> Option<Key> {
     let lower = name.to_ascii_lowercase();
     if let Some((_, key)) = NAMED_KEYS.iter().find(|(known, _)| *known == lower) {
