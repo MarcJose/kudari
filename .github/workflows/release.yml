@@ -1,7 +1,7 @@
 name: Release
 
-# tools/release.py raises the version, writes the changelog and tags; pushing the tag
-# starts this workflow. It publishes only when the checks pass and the package came out the
+# tools/release.py raises the version and writes the changelog on a branch, and tags the
+# release once its pull request is merged; pushing the tag starts this workflow. It publishes only when the checks pass and the package came out the
 # same in two separate builds. The Windows packages are signed with the self-signed
 # certificate in the secrets WINDOWS_CERTIFICATE and WINDOWS_CERTIFICATE_PASSWORD, which
 # tools/windows-certificate.sh makes.

@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: MIT
 """Prepares a release, or checks that the version is the same everywhere.
 
-    tools/release.py [VERSION] [--dry-run]   raise the version, write the changelog, tag
+    tools/release.py [VERSION] [--dry-run]   raise the version, write the changelog, commit
+    tools/release.py --finish VERSION        tag the release once it is merged into main
     tools/release.py --check [--tag vX.Y.Z]  the version agrees everywhere (and with a tag)
     tools/release.py --notes VERSION         the changelog section of a release
 
@@ -12,7 +13,11 @@ writes it into Cargo.lock, the release list of the metainfo and the man page, an
 section of the release into CHANGELOG.md. Without VERSION, git-cliff picks the next one from
 the Conventional Commits since the last tag; the first release keeps the version of
 Cargo.toml. A changelog section that exists already, written by hand, is kept and dated.
-The release is committed and tagged, but not pushed.
+
+main takes changes through pull requests only, so the release is committed on the branch
+release/VERSION, made from main if the release starts there, and not pushed. Once the pull
+request of that branch is merged, --finish tags the merge on main; the tag starts the
+release workflow. Tags of releases cannot move, so the tag waits for the merge.
 
 A pre-release such as 1.2.0-rc.1 takes the notes of the section of 1.2.0 if there is one,
 which stays unreleased, and enters the metainfo as 1.2.0~rc.1 of the type development, as
@@ -205,26 +210,50 @@ def release(requested, dry_run):
     if (key(version) < key(current) and not unreleased) or any(key(version) <= key(old) for old in released):
         sys.exit(f"release: {version} is not newer than {current} and the released versions")
     branch = run("git", "branch", "--show-current")
-    if branch != "main":
+    if branch not in ("main", f"release/{version}"):
         print(f"note: releasing from {branch or 'a detached HEAD'}, not main")
     date = datetime.datetime.now(datetime.UTC).date().isoformat()
 
     if dry_run:
         print(f"Would release {version} on {date}.")
         return
+    if branch == "main":
+        branch = f"release/{version}"
+        run("git", "switch", "--quiet", "--create", branch)
     write(version, date)
     problems = check(f"v{version}")
     if problems:
         sys.exit("release: the files disagree after the update:\n  " + "\n  ".join(problems))
     files = [str(path.relative_to(ROOT)) for path in (CARGO, LOCK, METAINFO, MAN, CHANGELOG)]
     run("git", "add", *files)
-    run("git", "commit", "--quiet", "-m", f"chore(release): {version}", capture=False)
+    run("git", "commit", "--quiet", "--signoff", "-m", f"chore(release): {version}", capture=False)
+    print(f"Committed {version} on {branch or 'a detached HEAD'}. Look over the commit, then:")
+    print(f"    git push origin {branch or 'HEAD'}")
+    print(f"    gh pr create --base main --title 'chore(release): {version}'")
+    print(f"and once the pull request is merged, on main: tools/release.py --finish {version}")
+    warn_about_images()
+
+
+def finish(version):
+    """Tags the merged release on main, as the commit there is the one that is published."""
+    tag = f"v{version}"
+    if run("git", "branch", "--show-current") != "main":
+        sys.exit("release: switch to main first, where the release is merged")
+    if run("git", "status", "--porcelain"):
+        sys.exit("release: commit or stash the changes first")
+    run("git", "fetch", "--quiet", "--tags", "origin", "main")
+    if run("git", "rev-parse", "HEAD") != run("git", "rev-parse", "origin/main"):
+        sys.exit("release: main differs from origin/main; pull it first, so the tag names what is published")
+    if tag in run("git", "tag", "--list", "v*").split():
+        sys.exit(f"release: the tag {tag} exists already")
+    problems = check(tag)
+    if problems:
+        sys.exit(f"release: main is not at {version}:\n  " + "\n  ".join(problems))
     # Verbatim, or Git would take the headings of the notes for comments and drop them.
     message = f"Kudari {version}\n\n{notes(version)}"
-    run("git", "tag", "--annotate", "--cleanup=verbatim", f"v{version}", "-m", message)
-    print(f"Tagged v{version}. Look over the commit, then publish it with:")
-    print(f"    git push origin {branch or 'HEAD'} v{version}")
-    warn_about_images()
+    run("git", "tag", "--annotate", "--cleanup=verbatim", tag, "-m", message)
+    print(f"Tagged {tag} on main. Publish it with:")
+    print(f"    git push origin {tag}")
 
 
 def main():
@@ -234,6 +263,7 @@ def main():
     parser.add_argument("--check", action="store_true", help="check that the version agrees everywhere")
     parser.add_argument("--tag", help="with --check: the tag being released")
     parser.add_argument("--notes", metavar="VERSION", help="print the changelog section of VERSION")
+    parser.add_argument("--finish", metavar="VERSION", help="tag VERSION once its pull request is merged")
     arguments = parser.parse_args()
     if arguments.check:
         problems = check(arguments.tag)
@@ -242,6 +272,9 @@ def main():
         sys.exit(1 if problems else 0)
     if arguments.notes:
         sys.stdout.write(notes(arguments.notes))
+        return
+    if arguments.finish:
+        finish(arguments.finish)
         return
     release(arguments.version, arguments.dry_run)
 

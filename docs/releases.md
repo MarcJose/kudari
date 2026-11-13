@@ -88,7 +88,7 @@ that with two builds on separate runners before it publishes.
 
 Commit messages follow Conventional Commits, as [CONTRIBUTING.md](../CONTRIBUTING.md)
 describes, so that the changelog and the next version can come from them. To prepare a
-release, run
+release, run on `main`
 
 ```sh
 tools/release.py            # or tools/release.py 1.2.0 to choose the version
@@ -97,8 +97,24 @@ tools/release.py            # or tools/release.py 1.2.0 to choose the version
 It takes the next version from the commits since the last release (git-cliff), writes it
 into `Cargo.toml`, `Cargo.lock`, the metainfo and the man page (CMake and the program read it
 from `Cargo.toml`), adds the section of the release to `CHANGELOG.md` from the commits, and
-commits and tags. It keeps a section written by hand beforehand. `tools/release.py --check`
-tells whether all of these agree, and `tests/check.sh` runs it.
+commits on the new branch `release/VERSION`. It keeps a section written by hand beforehand.
+`tools/release.py --check` tells whether all of these agree, and `tests/check.sh` runs it.
+
+`main` takes changes through pull requests only, the release too:
+
+```sh
+git push origin release/1.2.0
+gh pr create --base main --title 'chore(release): 1.2.0'
+# once the checks pass and the pull request is merged:
+git switch main && git pull
+tools/release.py --finish 1.2.0
+git push origin v1.2.0
+```
+
+`--finish` tags the merge on `main` once it matches `origin/main`, with the changelog section
+as the message. The tag waits for the merge, as the rules of the repository keep tags of
+releases from moving: a tag pushed before a correction to the pull request would cost the
+version.
 
 Pushing the tag starts `.github/workflows/release.yml`. It runs the CI and security checks,
 builds the source tarball with all crates and its SBOMs, builds the package from it twice on
