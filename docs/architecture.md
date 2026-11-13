@@ -1,10 +1,10 @@
 # Architecture
 
-Kudari is to run on KDE Plasma and on Windows, each time with the look and the means of
-the system: Qt Quick with Kirigami and KDE Frameworks on Plasma, Qt Quick with the
-FluentWinUI3 style and Win32 on Windows. GTK and macOS may follow later, X11 is not
-planned. This document describes where the code is going and in which steps, so that each
-step leaves a working, fully tested Kudari behind.
+Kudari runs on KDE Plasma and on Windows, each time with the look and the means of the
+system: Qt Quick with Kirigami and KDE Frameworks on Plasma, Qt Quick with the FluentWinUI3
+style and Win32 on Windows. GTK and macOS may follow later, X11 is not planned. This
+document describes the layout of the code and the steps that got it there, each of which
+left a working, fully tested Kudari behind.
 
 ## Layers
 
@@ -15,24 +15,24 @@ kudari-core     plain Rust: no Qt, no windows, no platform calls outside traits
   view           selection, selection mode, search, links, hints, scrolling, in cells
   render         a frame per terminal: rows with resolved colors and styles, cursor,
                  underlines, box drawing, markers; a front end only paints it
-  app            what the controller does today: sessions, monitors, bell, auto save,
+  app            the logic behind the controller: sessions, monitors, bell, auto save,
                  actions, window state, the access of AI agents
   settings       the model and a storage trait
   agent, mcp     the rules for AI agents and the protocol, without a transport
 kudari (KDE)    Qt Quick, Kirigami, the KDE Frameworks bridge, layer shell, D-Bus, KConfig
-kudari-qt       later: the Qt parts both front ends share, above all the terminal item
-kudari-windows  later: FluentWinUI3 pages, Win32 services, a named pipe, an INI file
+kudari-qt       the Qt parts both front ends share, above all the terminal item
+kudari-windows  FluentWinUI3 pages, Win32 services, a named pipe, an INI file
 ```
 
 The front end sends the core commands, such as a key press, closing a tab or a changed
 setting, and gets effects back, such as new tabs, a terminal to repaint, a notification or
-a question for the user. Questions are asynchronous: no dialog blocks the core, which today
-can leave the controller in use twice during a nested event loop. Tests can run the core
-without Qt, so logic that only the GUI test reaches today gets unit tests.
+a question for the user. Questions are asynchronous: no dialog blocks the core, which could
+otherwise leave the controller in use twice during a nested event loop. Tests can run the
+core without Qt, so logic that only the GUI test reached before has unit tests.
 
 The KDE front end is the package at the root of the workspace, so the build, the QML, the
-C++ bridge and the translations keep their places. Shared Qt parts move into `kudari-qt`
-once the Windows front end needs them.
+C++ bridge and the translations keep their places. The Qt parts that the Windows front end
+shares with it are in `kudari-qt`.
 
 ## Steps
 
@@ -58,7 +58,7 @@ and GUI tests pass, and the coverage stays at 90% or more.
 8. **Operating system.** Process information and signals go behind a trait. The CI builds
    and tests the core on Windows as well, so Unix assumptions show up early.
 
-All eight steps are complete. The Windows front end comes next and builds on the same core.
+All eight steps are complete, and the Windows front end below builds on the same core.
 
 ## Windows
 
@@ -79,10 +79,10 @@ crates/windows   kudari-windows: Fluent pages, Win32, the named pipe, an INI fil
 
 The controller is a QObject of cxx-qt and cannot be generic, so it reaches its front end
 through a trait object set at startup: the services of step 6, and what only the shell of a
-front end has, such as menus, actions with their shortcuts, the tray and the dialogs. All
-QML of today imports Kirigami. The terminal pane moves to kudari-qt and takes its colors
-and spacing from a small theme object instead, while tabs and window get their own QML per
-front end. The front ends share the settings pages as well, with the parts of their forms
+front end has, such as menus, actions with their shortcuts, the tray and the dialogs. The
+QML of KDE imports Kirigami, so the terminal pane in kudari-qt does without it and takes its
+colors and spacing from a small theme object instead, while tabs and window have their own
+QML per front end. The front ends share the settings pages as well, with the parts of their forms
 per front end (step 9 below).
 
 ### Steps
@@ -158,6 +158,8 @@ Each step leaves the KDE version as it was, with all its tests passing.
    through `QStyleHints::setColorScheme`. The menus of the bar are windows of their own
    (`Popup.Window`), so that they reach beyond the window, and open upwards at the bottom
    of the screen.
+
+All nine steps are complete.
 
 ### Decisions
 
