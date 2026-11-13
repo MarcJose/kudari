@@ -142,6 +142,24 @@ Controls.Pane {
         anchors.fill: parent
         spacing: 2
 
+        // New sessions on the left of the tabs, as in the KDE version and in Yakuake.
+        IconButton {
+            glyph: "\uE710"
+            fallback: "+"
+            label: bar.controller.translate("@action", "New Session")
+            onClicked: bar.controller.addSessionAction()
+        }
+
+        IconButton {
+            glyph: "\uE70D"
+            fallback: "⌄"
+            label: bar.controller.translate("@title:menu", "New Session With")
+            onClicked: {
+                const point = mapToItem(null, 0, 0);
+                bar.controller.popupSessionMenu(point.x, point.y);
+            }
+        }
+
         Controls.TabBar {
             id: tabStrip
 
@@ -309,23 +327,6 @@ Controls.Pane {
         }
 
         IconButton {
-            glyph: "\uE710"
-            fallback: "+"
-            label: bar.controller.translate("@action", "New Session")
-            onClicked: bar.controller.addSessionAction()
-        }
-
-        IconButton {
-            glyph: "\uE70D"
-            fallback: "⌄"
-            label: bar.controller.translate("@title:menu", "New Session With")
-            onClicked: {
-                const point = mapToItem(null, 0, 0);
-                bar.controller.popupSessionMenu(point.x, point.y);
-            }
-        }
-
-        IconButton {
             checkable: true
             checked: bar.keepOpen
             glyph: bar.keepOpen ? "\uE840" : "\uE718"
@@ -345,8 +346,8 @@ Controls.Pane {
         }
 
         IconButton {
-            glyph: "\uE7E8"
-            fallback: "⏻"
+            glyph: "\uE8BB"
+            fallback: "✕"
             label: bar.controller.translate("@info:tooltip Quits the application", "Quit")
             onClicked: bar.controller.trigger("file_quit")
         }
