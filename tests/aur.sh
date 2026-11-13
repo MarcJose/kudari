@@ -35,10 +35,8 @@ cp "$root/packaging/aur/$name/PKGBUILD" "$work/"
 if [ "$name" = kudari-git ]; then
     # This commit instead of main on GitHub; makepkg clones it as the user who builds. In the
     # CI, the checkout belongs to another user than root, which git distrusts without the
-    # safe.directory. pkgver() needs the tags and the history back to them.
+    # safe.directory.
     commit=$(git -c safe.directory="$root" -C "$root" rev-parse HEAD)
-    git -c safe.directory="$root" -C "$root" describe --tags --match 'v[0-9]*' > /dev/null ||
-        die "the checkout lacks the tags that pkgver() of kudari-git describes it with"
     sed -i "s|^source=(\"git+\$url.git\")|source=(\"kudari::git+file://$root#commit=$commit\")|" "$work/PKGBUILD"
     grep -q "^source=(\"kudari::git+file://$root#commit=$commit\")" "$work/PKGBUILD" ||
         die "the source of kudari-git did not change"

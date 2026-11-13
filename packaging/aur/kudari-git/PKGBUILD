@@ -30,7 +30,13 @@ sha256sums=('SKIP')
 
 pkgver() {
   cd kudari
-  git describe --long --tags --abbrev=7 --match 'v[0-9]*' | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+  # Before the first release, the count of commits and the commit, which pacman puts below
+  # every release.
+  if version=$(git describe --long --tags --abbrev=7 --match 'v[0-9]*' 2> /dev/null); then
+    echo "$version" | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+  else
+    printf '0.r%s.g%s\n' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+  fi
 }
 
 prepare() {
