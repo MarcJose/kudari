@@ -98,9 +98,19 @@ try {
     # Users know the program as kudari; its crate needs another name next to the one of KDE.
     Copy-Item (Join-Path $target 'release\kudari-windows.exe') (Join-Path $stage 'kudari.exe')
 
-    # Qt, with the QML modules that the pages import; Windows brings Direct3D along.
+    # Qt, with the QML modules that the pages import; Windows brings Direct3D along. Neither
+    # the QML debugger (`qmltooling`) nor touch input over the network (`generic`) is used, and
+    # the translations of Qt are needed only for the languages of Kudari.
     windeployqt --release --no-compiler-runtime --no-opengl-sw --no-system-d3d-compiler `
+        --skip-plugin-types qmltooling,generic --translations de,en `
         --qmldir crates\windows\qml --qmldir crates\qt\qml --dir $stage (Join-Path $stage 'kudari.exe')
+    # windeployqt takes every style that QtQuick.Controls might load. Kudari sets FluentWinUI3,
+    # which builds on Fusion and Basic, so the other styles and the native one stay out.
+    foreach ($style in 'Material', 'Imagine', 'Universal', 'Windows') {
+        Remove-Item -Recurse (Join-Path $stage "qml\QtQuick\Controls\$style")
+        Remove-Item (Join-Path $stage "Qt6QuickControls2$style*.dll")
+    }
+    Remove-Item -Recurse (Join-Path $stage 'qml\QtQuick\NativeStyle')
 
     # The runtime of Visual C++ next to the program, as the package cannot run its installer.
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
