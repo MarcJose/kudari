@@ -8,7 +8,9 @@
 #   tests/aur.sh bin    kudari-bin, from the release that its PKGBUILD names
 #
 # makepkg does not run as root, so a user of its own builds. With SRCDEST set, makepkg takes
-# downloads from there, such as a package of a release that is not published yet.
+# downloads from there, such as a package of a release that is not published yet. Without it,
+# kudari-bin is skipped while GitHub does not know its release, which happens between a new
+# first release and the update of the PKGBUILD by tools/aur.py.
 set -eu
 die() { echo "aur: $*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || die "needs root, to install the dependencies and the package"
@@ -18,15 +20,26 @@ case ${1:-} in
 esac
 
 root=$(cd "$(dirname "$0")/.." && pwd)
+if [ "$name" = kudari-bin ] && [ -z "${SRCDEST:-}" ]; then
+    source=$(sed -n 's/^\tsource_x86_64 = //p' "$root/packaging/aur/$name/.SRCINFO")
+    status=$(curl --silent --head --location --output /dev/null --write-out '%{http_code}' "$source")
+    if [ "$status" = 404 ]; then
+        echo "::notice::kudari-bin skipped: $source is not published (yet)"
+        exit 0
+    fi
+fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 id builder > /dev/null 2>&1 || useradd --create-home builder
 cp "$root/packaging/aur/$name/PKGBUILD" "$work/"
 if [ "$name" = kudari-git ]; then
-    # This commit instead of main on GitHub; makepkg clones it as the user who builds.
-    sed -i "s|^source=(\"git+\$url.git\")|source=(\"kudari::git+file://$root#commit=$(git -C "$root" rev-parse HEAD)\")|" \
-        "$work/PKGBUILD"
-    grep -q '^source=("kudari::git+file://' "$work/PKGBUILD" || die "the source of kudari-git did not change"
+    # This commit instead of main on GitHub; makepkg clones it as the user who builds. In the
+    # CI, the checkout belongs to another user than root, which git distrusts without the
+    # safe.directory.
+    commit=$(git -c safe.directory="$root" -C "$root" rev-parse HEAD)
+    sed -i "s|^source=(\"git+\$url.git\")|source=(\"kudari::git+file://$root#commit=$commit\")|" "$work/PKGBUILD"
+    grep -q "^source=(\"kudari::git+file://$root#commit=$commit\")" "$work/PKGBUILD" ||
+        die "the source of kudari-git did not change"
     runuser -u builder -- git config --global --add safe.directory "$root"
 fi
 chmod -R a+rwX "$work"
