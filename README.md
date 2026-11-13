@@ -158,7 +158,7 @@ line, the D-Bus interface and the files.
   settings
 - [CHANGELOG.md](CHANGELOG.md): what changed in each release
 - [CONTRIBUTING.md](CONTRIBUTING.md): building, testing and submitting changes
-- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): how we treat each other
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): how to treat each other
 - [SECURITY.md](SECURITY.md): reporting vulnerabilities privately
 - [docs/releases.md](docs/releases.md): how releases are made, checked and rebuilt
 

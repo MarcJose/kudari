@@ -63,7 +63,7 @@ fn main() {
         .qt_module("PrintSupport")
         .qt_module("DBus")
         .qt_module("Network");
-    // SAFETY: the closure only adds include paths, flags and our own source file. It
+    // SAFETY: the closure only adds include paths, flags and the crate's own source file. It
     // changes none of the settings cxx-qt relies on for the generated code.
     let builder = unsafe {
         builder.cc_builder(|cc| {

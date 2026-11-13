@@ -59,14 +59,14 @@ Window {
             app.afterShow();
         }
     }
-    // F3 only belongs to the search while it is open; programs such as mc use it, too.
+    // F3 only belongs to the search while it is open; programs such as `mc` use it, too.
     property bool searchActive: false
 
     // True while the grip is being dragged. Terminals then only learn their new size on
     // release; every resize makes shells redraw their prompt.
     property bool gripDragged: false
 
-    // A menu or dialog of ours takes the window focus; the cursor stays solid meanwhile.
+    // A menu or dialog of Kudari takes the window focus; the cursor stays solid meanwhile.
     property bool applicationFocused: false
 
     onActiveChanged: {

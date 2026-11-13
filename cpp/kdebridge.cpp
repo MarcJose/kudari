@@ -629,7 +629,7 @@ QString rk_foreign_toggle_shortcut()
 void rk_set_toggle_shortcut(const QString &sequence)
 {
     const QKeySequence key(sequence);
-    // The daemon counts the key of our own action as taken as well, so only other owners are asked about.
+    // The daemon counts the key of Kudari's own action as taken as well, so only other owners are asked about.
     QList<KGlobalShortcutInfo> others = KGlobalAccel::globalShortcutsByKey(key);
     others.removeIf([](const KGlobalShortcutInfo &info) {
         return info.componentUniqueName() == QCoreApplication::applicationName();

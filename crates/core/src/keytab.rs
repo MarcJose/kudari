@@ -7,7 +7,7 @@
 //! Each rule is one line: `key`, a key name, conditions, a colon, and what the key does.
 //!
 //! ```text
-//! keyboard "My keys"
+//! keyboard "Custom keys"
 //! key Up+Shift-AppCuKeys : "\E[1;2A"
 //! key PgUp+Shift : scrollPageUp
 //! ```

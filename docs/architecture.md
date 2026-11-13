@@ -95,7 +95,7 @@ Each step leaves the KDE version as it was, with all its tests passing.
 2. **kudari-qt.** The shared Qt parts move out of the KDE package, and the controller gets
    its trait object. The KDE version behaves as before, which the GUI test shows.
 3. **The terminal on Windows.** The backend builds on Windows, with ConPTY through
-   alacritty_terminal. `process::windows` implements `Programs` from the process tree
+   `alacritty_terminal`. `process::windows` implements `Programs` from the process tree
    (`CreateToolhelp32Snapshot`): busy while the shell has children, the name of the newest
    one. Only interrupting (Ctrl+C), terminating and killing exist there, so `Programs` says
    which signals it supports and the menu shows only those; flow control does nothing. A

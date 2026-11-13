@@ -3,7 +3,7 @@
 
 //! What the operating system tells about the programs in a terminal, the signals it sends
 //! them, and the little else Kudari asks of it: the user, the host, the home directory and
-//! files only the user can read. Linux answers through `/proc` and the PTY; Windows will
+//! files only the user can read. Linux answers through `/proc` and the PTY, Windows
 //! through the process tree of the console.
 
 use std::path::{Path, PathBuf};

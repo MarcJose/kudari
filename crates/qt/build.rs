@@ -28,7 +28,7 @@ fn main() {
         .qt_module("QuickControls2")
         .qt_module("Widgets")
         .qt_module("PrintSupport");
-    // SAFETY: the closure only adds an include path and our own source file. It changes none
+    // SAFETY: the closure only adds an include path and the crate's own source file. It changes none
     // of the settings cxx-qt relies on for the generated code.
     let builder = unsafe {
         builder.cc_builder(|cc| {

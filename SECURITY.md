@@ -18,7 +18,7 @@ that show the problem, and what an attacker gains by it. A rough report is bette
 You can expect an answer within a week. Once the problem is confirmed, it is fixed in a new
 release, and a GitHub security advisory describes it, with a CVE where one fits. Unless you
 prefer otherwise, the advisory and the changelog name you. Please keep the details private
-until the release is out; if a fix takes longer than 90 days, we agree on a date together.
+until the release is out; if a fix takes longer than 90 days, the date is agreed on with you.
 
 ## Supported versions
 
@@ -47,7 +47,7 @@ allowed:
 
 Not a vulnerability of Kudari is what a program running in the terminal does with the rights
 the user gave it, or a flaw in Qt, KDE Frameworks or a Rust crate; please report those to
-their projects, and tell us as well if Kudari should work around it.
+their projects, and report it here as well if Kudari should work around it.
 
 ## Checking a release
 

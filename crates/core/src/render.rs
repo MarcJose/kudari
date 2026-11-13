@@ -183,7 +183,7 @@ fn cursor_rects(geometry: &Geometry, column: i32, line: i32, shape: CursorShape)
         CursorShape::Block => vec![rect(x, y, w, h)],
         CursorShape::Underline => vec![rect(x, y + h - 2.0, w, 2.0)],
         CursorShape::Beam => vec![rect(x, y, 2.0, h)],
-        // The hollow block that alacritty_terminal asks for when the terminal has no focus:
+        // The hollow block that `alacritty_terminal` asks for when the terminal has no focus:
         // a frame of one pixel around the cell.
         _ => vec![
             rect(x, y, w, 1.0),

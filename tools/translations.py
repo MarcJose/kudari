@@ -93,7 +93,7 @@ def po_string(lines):
 
 
 def read_po(path):
-    """Entries as dicts with context, text, translations, fuzzy, and their text."""
+    """Entries as dictionaries with context, text, translations, fuzzy, and their text."""
     entries, block = [], []
     for line in path.read_text(encoding="utf-8").split("\n") + [""]:
         if line.strip():
