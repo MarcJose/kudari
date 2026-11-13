@@ -365,10 +365,16 @@ ApplicationWindow {
             activityColor: root.settings.config.TabActivityColor
             keepOpen: root.settings.keepOpen
             showTabs: root.settings.showTabBar
+            // The grip below has the color of the bar, so it is the space below the buttons;
+            // the same above them keeps them in the middle.
+            topPadding: grip.Layout.preferredHeight
+            bottomPadding: 0
         }
 
         // Dragging the grip moves the bottom edge of the window.
         Rectangle {
+            id: grip
+
             Layout.fillWidth: true
             Layout.preferredHeight: 5
             color: root.palette.window
