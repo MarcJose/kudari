@@ -44,9 +44,9 @@ git config core.hooksPath .githooks
   90 % or more, as `tools/coverage.sh` measures it.
 - **Code.** `cargo fmt` formats, and clippy and the C++ compiler run with warnings as errors.
   Code, comments and commit messages are in English. Comments say why, not what. Vale checks
-  the English of the documentation and the comments against the Google developer
-  documentation style, with the exceptions in `.vale.ini`. Words of the project that it does
-  not know go into `.vale/styles/config/vocabularies/Kudari/accept.txt`.
+  the English of the documentation, the man page and the comments against the Google
+  developer documentation style, with the exceptions in `.vale.ini`. Words of the project
+  that it does not know go into `.vale/styles/config/vocabularies/Kudari/accept.txt`.
 - **Layout.** What depends on no user interface and no platform belongs in `crates/core`.
   What needs Qt but not KDE, such as the terminal item and the controller, belongs in
   `crates/qt`, and the package at the root is the KDE front end. The core reaches the clipboard,

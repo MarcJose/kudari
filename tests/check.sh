@@ -90,5 +90,16 @@ git ls-files -z '*.md' '*.rs' '*.cpp' '*.h' '*.py' '*.qml' '*.ps1' ':(exclude,gl
 
 echo "== Man page"
 checkXML6 docs/man-kudari.1.docbook
+# Its English as well, turned into HTML with the entities of KDocTools resolved. xsltproc
+# reports an entity it cannot resolve but still succeeds, so any message of it fails here.
+man=$(mktemp -d)
+XML_CATALOG_FILES=/usr/share/kf6/kdoctools/customization/catalog.xml \
+    xsltproc --nonet .vale/docbook.xsl docs/man-kudari.1.docbook > "$man/page.html" 2> "$man/errors"
+if [ -s "$man/errors" ]; then
+    cat "$man/errors"
+    exit 1
+fi
+vale --ext=.html --no-wrap < "$man/page.html"
+rm -r "$man"
 
 echo "All checks passed."
