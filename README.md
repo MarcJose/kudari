@@ -102,7 +102,17 @@ On other distributions, build the source of the release as described next.
 
 On Windows 11, the release has an MSIX package and a ZIP archive, both signed
 with a certificate of Kudari's own rather than one of a certification authority. To install
-the MSIX package, trust its certificate once, in an administrator PowerShell, then install:
+the MSIX package, trust its certificate once, then open the package. Windows looks for the
+certificate of a package only in the store of the computer, so one in the store of the user
+does not help, and installing it there takes the rights of an administrator:
+
+1. Open `kudari-1.2.0-x86_64-windows.cer` and choose *Install Certificate…*.
+2. As the store location, choose *Local Machine*.
+3. Choose *Place all certificates in the following store*, then *Browse…* and
+   *Trusted People*, and finish.
+4. Open `kudari-1.2.0-x86_64-windows.msix` and install it.
+
+Or the same in a PowerShell as administrator:
 
 ```powershell
 Import-Certificate -FilePath kudari-1.2.0-x86_64-windows.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
