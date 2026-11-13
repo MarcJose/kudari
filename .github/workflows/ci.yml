@@ -32,6 +32,9 @@ jobs:
       - run: |
           # shellcheck disable=SC2046 # the package list is meant to split
           pacman -S --noconfirm --needed rust vale $(grep -v '^#' .github/arch-packages.txt)
+      # The checkout belongs to another user than the container's root, and Vale gets its
+      # files from git.
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - run: tests/check.sh
 
   # The core is meant for every front end, so it has to build and pass its tests on Windows
