@@ -167,11 +167,10 @@ The title of a pull request follows the same form, since it becomes the commit w
 maintainer squashes the pull request. A workflow checks the title and every commit, and the
 commit-msg hook does the same locally. Keep a pull request to one topic, and describe how you tested it.
 
-Branch off `develop` and open the pull request against it; only `develop`, `release/*` and
-`hotfix/*` go into `main`. Name the branch after the type of the change, such as
-`fix/short-name` or `feature/123-short-name`. Sign off every commit with `git commit -s`, which
-certifies the [Developer Certificate of Origin](https://developercertificate.org), and sign it
-with your key: `main` and `develop` take signed commits only.
+Branch off `main` and open the pull request against it. Name the branch after the type of the
+change, such as `fix/short-name` or `feature/123-short-name`. Sign off every commit with
+`git commit -s`, which certifies the [Developer Certificate of Origin](https://developercertificate.org),
+and sign it with your key: `main` takes signed commits only.
 
 ## Licenses
 

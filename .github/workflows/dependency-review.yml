@@ -12,7 +12,7 @@
 # Policy and checker are taken from the pull request's target branch, so a pull request
 # cannot weaken its own check; changes to them take effect once they are merged.
 # Do not add policy options here – they would override the policy file.
-# The job name "dependency-review" is a required status check (ruleset "protect-main-develop").
+# The job name "dependency-review" is a required status check (in the ruleset of main).
 name: dependency-review
 
 on:

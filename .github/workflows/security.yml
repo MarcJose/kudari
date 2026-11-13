@@ -69,8 +69,7 @@ jobs:
       - run: osv-scanner scan source --lockfile Cargo.lock
 
   # The workflows themselves: mistakes, and the shell scripts, which the CI runs as well.
-  # The job names "actionlint" and "zizmor" are required status checks (ruleset
-  # "protect-main-develop").
+  # The job names "actionlint" and "zizmor" are required status checks in the ruleset of main.
   actionlint:
     runs-on: ubuntu-latest
     container: archlinux:base-20261101.0.620205@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9

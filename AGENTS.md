@@ -5,8 +5,8 @@ Instructions for AI coding agents working in this repository. People who contrib
 
 ## Ground rules
 
-- Work on a branch created from `develop`. Never push to `main` or `develop` directly;
-  always open a pull request. A person must review and approve it.
+- Work on a branch created from `main`. Never push to `main` directly; always open a pull
+  request against it. A person must review and approve it.
 - Keep changes minimal and focused on the task. Do not refactor unrelated code.
 - Never commit secrets, credentials, tokens, personal or customer data, not even in tests,
   fixtures, logs or examples. Use obvious placeholders.

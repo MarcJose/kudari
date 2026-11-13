@@ -1,6 +1,6 @@
 # Checks the title, the branch and the commits of every pull request, with
-# .github/scripts/pr-lint.sh. The job name "pr-lint" is a required status check (ruleset
-# "protect-main-develop"). The title becomes the commit when a pull request is squashed, and
+# .github/scripts/pr-lint.sh. The job name "pr-lint" is a required status check in the
+# ruleset of main. The title becomes the commit when a pull request is squashed, and
 # git-cliff writes the changelog from the commits.
 name: pr-lint
 
