@@ -68,22 +68,36 @@ jobs:
       - run: cargo deny --locked check
       - run: osv-scanner scan source --lockfile Cargo.lock
 
-  # The workflows themselves: mistakes, and openings for attacks on the CI. And the shell
-  # scripts, which the CI runs as well.
-  workflows:
+  # The workflows themselves: mistakes, and the shell scripts, which the CI runs as well.
+  # The job names "actionlint" and "zizmor" are required status checks (ruleset
+  # "protect-main-develop").
+  actionlint:
     runs-on: ubuntu-latest
     container: archlinux:base-20261101.0.620205@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9
     timeout-minutes: 15
     permissions:
       contents: read
     steps:
-      - run: pacman -Syu --noconfirm --needed git actionlint shellcheck zizmor
+      - run: pacman -Syu --noconfirm --needed git actionlint shellcheck
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - run: actionlint
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - run: git ls-files -z '*.sh' '.githooks/*' | xargs -0 shellcheck
+
+  # Openings for attacks on the CI in the workflows.
+  zizmor:
+    runs-on: ubuntu-latest
+    container: archlinux:base-20261101.0.620205@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - run: pacman -Syu --noconfirm --needed zizmor
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # With a token, zizmor also checks that pinned commits belong to their actions.
       - run: zizmor --format github .github
         env:

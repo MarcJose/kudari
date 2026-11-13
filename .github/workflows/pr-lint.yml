@@ -1,21 +1,24 @@
-# Checks naming conventions and the changelog of every pull request.
-# The job names "pr-lint" and "changelog" are required status checks (ruleset "protect-main-develop").
+# Checks the title, the branch and the commits of every pull request, with
+# .github/scripts/pr-lint.sh. The job name "pr-lint" is a required status check (ruleset
+# "protect-main-develop"). The title becomes the commit when a pull request is squashed, and
+# git-cliff writes the changelog from the commits.
 name: pr-lint
 
 on:
   pull_request:
-    types: [opened, edited, reopened, synchronize, labeled, unlabeled]
+    types: [opened, edited, reopened, synchronize]
 
 permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   pr-lint:
     name: pr-lint
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
     steps:
@@ -31,23 +34,4 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: bash .github/scripts/pr-lint.sh conventions
-
-  changelog:
-    name: changelog
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Check CHANGELOG.md
-        env:
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: bash .github/scripts/pr-lint.sh changelog
+        run: bash .github/scripts/pr-lint.sh
