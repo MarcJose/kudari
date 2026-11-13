@@ -57,3 +57,4 @@ POSIX
 PNG
 QMAKE
 CLI
+Datakonsult

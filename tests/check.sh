@@ -86,7 +86,7 @@ done
 
 echo "== Prose"
 # The English of the documentation and of the comments, as .vale.ini describes.
-git ls-files -z '*.md' '*.rs' '*.cpp' '*.h' '*.py' '*.qml' '*.ps1' ':!:third_party/' | xargs -0 vale --no-wrap
+git ls-files -z '*.md' '*.rs' '*.cpp' '*.h' '*.py' '*.qml' '*.ps1' ':(exclude,glob)third_party/*/**' | xargs -0 vale --no-wrap
 
 echo "== Man page"
 checkXML6 docs/man-kudari.1.docbook
