@@ -27,6 +27,11 @@ SPDX-FileCopyrightText = "Klarälvdalens Datakonsult AB, a KDAB Group company <i
 SPDX-License-Identifier = "MIT OR Apache-2.0"
 
 [[annotations]]
+path = "packaging/aur/*/.SRCINFO"
+SPDX-FileCopyrightText = "2026 Marc Jose <marc@hahn-jose.de>"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
 path = ".vale/styles/config/**"
 SPDX-FileCopyrightText = "2026 Marc Jose <marc@hahn-jose.de>"
 SPDX-License-Identifier = "CC0-1.0"

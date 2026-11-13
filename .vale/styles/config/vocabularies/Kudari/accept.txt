@@ -58,3 +58,7 @@ PNG
 QMAKE
 CLI
 Datakonsult
+makepkg
+namcap
+pacman
+PKGBUILDs?

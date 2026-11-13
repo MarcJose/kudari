@@ -57,6 +57,21 @@ submits them on its own: a pull request to
 [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) under
 `manifests/m/MarcJose/Kudari/X.Y.Z/` takes them in.
 
+## The packages for Arch Linux
+
+`packaging/aur/` holds two packages for the AUR, which exclude each other:
+
+- `kudari-bin` installs the package of a release, as the release workflow built it.
+- `kudari-git` builds the newest state of `main` from source.
+
+After a release, `tools/aur.py 1.2.0` sets the version of `kudari-bin` and the checksum of
+its package from the `SHA256SUMS` of the release, and writes the `.SRCINFO` of both. A
+pre-release stays out, as pacman would order it after the release. To publish a package,
+push its directory, with `PKGBUILD` and `.SRCINFO`, to
+`ssh://aur@aur.archlinux.org/kudari-bin.git` or `kudari-git.git`. `tests/check.sh` checks
+the PKGBUILDs with `namcap` and that each `.SRCINFO` is up to date. The CI builds both
+packages with `tests/aur.sh`, installs them and starts the program.
+
 ## Rebuilding the package
 
 The package is reproducible. On Arch Linux, it can be rebuilt from the source tarball:

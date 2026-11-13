@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de>
+# SPDX-License-Identifier: CC0-1.0
+# What makepkg leaves behind when a package is built here.
+*/src/
+*/pkg/
+*/kudari/
+*.pkg.tar.*
+*.tar.xz
