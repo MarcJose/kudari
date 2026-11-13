@@ -125,9 +125,11 @@ check() { # name, expected, actual
     fi
 }
 service=io.github.marcjose.kudari
-window() { qdbus6 "$service" /kudari/window "io.github.marcjose.kudari.$@"; }
-sessions() { qdbus6 "$service" /kudari/sessions "io.github.marcjose.kudari.$@"; }
-hook() { qdbus6 "$service" /kudari/test "io.github.marcjose.kudari.Test.$@"; }
+# Calls method $2 of object $1 with the remaining arguments.
+call() { call_object=$1 call_method=$2; shift 2; qdbus6 "$service" "/kudari/$call_object" "io.github.marcjose.kudari.$call_method" "$@"; }
+window() { call window "$@"; }
+sessions() { call sessions "$@"; }
+hook() { call_method=$1; shift; call test "Test.$call_method" "$@"; }
 input() { "$work/input" "$@"; }
 # With KUDARI_GUI_GRABS set to a directory, saves images of the window there, to find where
 # the checks have to click.
@@ -282,7 +284,7 @@ input key 1; sleep 0.5
 
 # The actions of the menus and shortcuts, each checked where its effect can be seen.
 active() { sessions activeSessionId; }
-tabs() { qdbus6 "$service" /kudari/tabs "io.github.marcjose.kudari.$@"; }
+tabs() { call tabs "$@"; }
 count() { sessions terminalIdsForSessionId "$1" | tr ',' '\n' | grep -c .; }
 first=$(active)
 hook Trigger new-session-two-horizontal; sleep 1; left_right=$(active)
@@ -539,19 +541,21 @@ send() { # tool, arguments as JSON
     calls=$((calls + 1))
     request "$calls" "$1" "$2" | if [ "$calls" -eq 1 ]; then cat; else tail -n 1; fi >&7
 }
+# The next answer of the agent, past its notifications; nothing after a minute without one.
+# A shell of its own reads each line, as plain sh has no timeout for `read`; it reads a pipe
+# byte by byte, so nothing of the next line gets lost.
 receive() {
-    local line
-    while IFS= read -r -t 60 line <&8; do
-        case $line in *'"id":0'*) ;; *) echo "$line" | result; return ;; esac
+    # shellcheck disable=SC2016 # the inner shell expands $line
+    while agent_line=$(timeout 60 sh -c 'IFS= read -r line && printf "%s\n" "$line"' <&8); do
+        case $agent_line in *'"id":0'*) ;; *) echo "$agent_line" | result; return ;; esac
     done
 }
 agent() { send "$1" "$2"; receive; }
 agent_once() { request 1 "$1" "$2" | "$binary" mcp 2>> "$work/mcp.log" | result; }
 question() {
-    local text
     for _ in $(seq 50); do
-        text=$(hook AgentQuestion)
-        [ -n "$text" ] && { echo "$text"; return; }
+        question_text=$(hook AgentQuestion)
+        [ -n "$question_text" ] && { echo "$question_text"; return; }
         sleep 0.1
     done
 }
