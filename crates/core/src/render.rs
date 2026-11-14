@@ -194,9 +194,11 @@ fn cursor_rects(geometry: &Geometry, column: i32, line: i32, shape: CursorShape)
     }
 }
 
-/// Everything to paint over the background of the terminal: cells with their backgrounds,
-/// underlines, strikeouts, box drawing and glyphs, then the cursor, the numbers of links, the
-/// vertical line and the line numbers.
+/// Everything to paint over the background of the terminal: the backgrounds, underlines,
+/// strikeouts and box drawing of the cells, then their glyphs, then the cursor, the numbers of
+/// links, the vertical line and the line numbers. The glyphs come after all backgrounds, so
+/// that the painter can draw them together, and so that the neighbour's background does not cut
+/// off a glyph that reaches into the next cell, such as an italic one.
 #[must_use]
 pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene) -> Vec<Paint> {
     let scheme = scene.scheme;
@@ -211,6 +213,7 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
     let mut paints = Vec::new();
     let fill = |rect: Rect, color: Rgb, paints: &mut Vec<Paint>| paints.push(Paint::Fill(rect, color));
 
+    let mut glyphs = Vec::new();
     let mut cursor_glyph = None;
     for cell in content.display_iter {
         let flags = cell.flags;
@@ -289,7 +292,7 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
                 text.extend(zero_width);
             }
             let (x, y) = geometry.baseline(column, line);
-            paints.push(Paint::Text {
+            glyphs.push(Paint::Text {
                 x,
                 y,
                 text,
@@ -301,6 +304,7 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             cursor_glyph = Some((cell.c, flags));
         }
     }
+    paints.append(&mut glyphs);
 
     if cursor.shape != CursorShape::Hidden && !scene.cursor_hidden {
         let line = cursor.point.line.0 + offset;
@@ -528,6 +532,23 @@ mod tests {
         // Only the inverse cell has a background of its own, besides the cursor.
         let backgrounds = fills(&paints);
         assert!(backgrounds.contains(&(GEOMETRY.cell_rect(3, 0, 1.0), scheme.foreground)));
+    }
+
+    #[test]
+    fn glyphs_come_after_the_backgrounds_of_all_cells() {
+        let scheme = colors::active();
+        let term = term_with("\x1b[41ma\x1b[42mb\x1b[0m\r\n\x1b[43mc\x1b[0m");
+        let mut quiet = scene(&scheme, &[], &[]);
+        quiet.cursor_hidden = true;
+        let paints = frame(&term, &Options::default(), &quiet);
+        let kinds: Vec<&str> = paints
+            .iter()
+            .map(|paint| match paint {
+                Paint::Fill(..) => "fill",
+                Paint::Text { text, .. } => text.as_str(),
+            })
+            .collect();
+        assert_eq!(kinds, ["fill", "fill", "fill", "a", "b", "c"]);
     }
 
     #[test]

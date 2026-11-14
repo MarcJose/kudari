@@ -4,9 +4,17 @@
 // What the front ends need of Qt itself, for `src/qt.rs`.
 #pragma once
 
+#include <QPointF>
 #include <QQuickItem>
+#include <QRawFont>
 #include <QString>
 
+#include <cstdint>
+#include <memory>
+
+#include "rust/cxx.h"
+
+class QColor;
 class QFont;
 class QInputMethodEvent;
 class QPainter;
@@ -38,6 +46,13 @@ void rk_draw_badge(QPainter &painter,
                    const QFont &terminalFont,
                    int cellHeight);
 void rk_font_rendering(QFont &font, bool antiAlias, bool hinting);
+std::unique_ptr<QRawFont> rk_raw_font(const QPainter &painter, const QFont &font);
+std::uint32_t rk_glyph_index(const QRawFont &font, std::uint32_t character);
+void rk_draw_glyphs(QPainter &painter,
+                    const QRawFont &font,
+                    const QColor &color,
+                    rust::Slice<const std::uint32_t> glyphs,
+                    rust::Slice<const QPointF> positions);
 void rk_font_family(QFont &font, const QString &family);
 QString rk_color_from_text(const QString &text);
 void rk_ask_save_file(int terminal, int purpose, const QString &suggestion);
