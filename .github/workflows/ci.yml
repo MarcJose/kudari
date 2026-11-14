@@ -24,6 +24,10 @@ concurrency:
 # into a cache that main or a release would use. A cache belongs to the compiler, the Qt and
 # Cargo.lock of its run: code that cxx-qt generates for one version of Qt does not fit another.
 # The run of a release, for a tag, builds without any cache.
+#
+# Cargo takes the crates in third_party/ for changed when their files are newer than what it
+# built, as after every checkout, and then builds cxx-qt and all that depends on it again. So
+# those files get a fixed old time, and the key of each cache holds their content instead.
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -44,6 +48,7 @@ jobs:
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - id: versions
         run: echo "hash=$({ rustc -V; pacman -Q qt6-base qt6-declarative; } | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - run: find third_party -type f -exec touch -d 2000-01-01T00:00:00Z {} +
       - id: cache
         if: github.ref_type != 'tag'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -52,8 +57,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: check-${{ steps.versions.outputs.hash }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: check-${{ steps.versions.outputs.hash }}-
+          key: check-${{ steps.versions.outputs.hash }}-${{ hashFiles('third_party/**') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: check-${{ steps.versions.outputs.hash }}-${{ hashFiles('third_party/**') }}-
       - run: tests/check.sh
       - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -62,7 +67,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: check-${{ steps.versions.outputs.hash }}-${{ hashFiles('Cargo.lock') }}
+          key: check-${{ steps.versions.outputs.hash }}-${{ hashFiles('third_party/**') }}-${{ hashFiles('Cargo.lock') }}
 
   # The core is meant for every front end, so it has to build and pass its tests on Windows
   # as well; Unix assumptions show up here before the Windows front end exists.
@@ -117,6 +122,8 @@ jobs:
       - id: versions
         run: echo "hash=$(rustc +stable -V | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
         shell: bash
+      - run: find third_party -type f -exec touch -d 2000-01-01T00:00:00Z {} +
+        shell: bash
       - id: cache
         if: github.ref_type != 'tag'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -125,8 +132,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: windows-${{ steps.versions.outputs.hash }}-qt-${{ env.QT_VERSION }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: windows-${{ steps.versions.outputs.hash }}-qt-${{ env.QT_VERSION }}-
+          key: windows-${{ steps.versions.outputs.hash }}-${{ hashFiles('third_party/**') }}-qt-${{ env.QT_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: windows-${{ steps.versions.outputs.hash }}-${{ hashFiles('third_party/**') }}-qt-${{ env.QT_VERSION }}-
       - run: cargo +stable clippy --locked --package kudari-qt --package kudari-windows --all-targets -- --deny warnings
       - run: cargo +stable test --locked --package kudari-qt --package kudari-windows
       - run: cargo +stable build --locked --package kudari-windows
@@ -142,7 +149,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: windows-${{ steps.versions.outputs.hash }}-qt-${{ env.QT_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          key: windows-${{ steps.versions.outputs.hash }}-${{ hashFiles('third_party/**') }}-qt-${{ env.QT_VERSION }}-${{ hashFiles('Cargo.lock') }}
       # The archive brings only the platform of Windows; the test needs the one without a screen.
       - run: |
           mkdir unpacked
@@ -174,6 +181,7 @@ jobs:
       - id: versions
         run: echo "hash=$({ rustc -V; pacman -Q qt6-base qt6-declarative; } | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
       # CMake has Cargo build into build/cargo.
+      - run: find third_party -type f -exec touch -d 2000-01-01T00:00:00Z {} +
       - id: cache
         if: github.ref_type != 'tag'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -182,8 +190,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             build/cargo
-          key: build-${{ steps.versions.outputs.hash }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: build-${{ steps.versions.outputs.hash }}-
+          key: build-${{ steps.versions.outputs.hash }}-${{ hashFiles('third_party/**') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: build-${{ steps.versions.outputs.hash }}-${{ hashFiles('third_party/**') }}-
       - run: |
           cmake -B build -DCMAKE_INSTALL_PREFIX=/usr
           cmake --build build
@@ -195,7 +203,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             build/cargo
-          key: build-${{ steps.versions.outputs.hash }}-${{ hashFiles('Cargo.lock') }}
+          key: build-${{ steps.versions.outputs.hash }}-${{ hashFiles('third_party/**') }}-${{ hashFiles('Cargo.lock') }}
       - run: tools/dist.sh verify package
 
   # The packages for the AUR, built as an AUR helper would, installed and started: kudari-git
@@ -245,6 +253,7 @@ jobs:
             rustup default stable && rustup component add llvm-tools'
       - id: versions
         run: echo "hash=$(docker exec arch sh -c '{ rustc -V; pacman -Q qt6-base qt6-declarative; }' | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - run: find third_party -type f -exec touch -d 2000-01-01T00:00:00Z {} +
       - id: cache
         if: github.ref_type != 'tag'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -253,8 +262,8 @@ jobs:
             target/cargo-home/registry
             target/cargo-home/git
             target/coverage
-          key: coverage-${{ steps.versions.outputs.hash }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: coverage-${{ steps.versions.outputs.hash }}-
+          key: coverage-${{ steps.versions.outputs.hash }}-${{ hashFiles('third_party/**') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: coverage-${{ steps.versions.outputs.hash }}-${{ hashFiles('third_party/**') }}-
       - run: docker exec arch bash -euo pipefail -c 'tools/coverage.sh --html --fail-under 90 | tee coverage.txt'
       # The container wrote as root; the steps after it read as the user of the runner.
       - if: always()
@@ -266,7 +275,7 @@ jobs:
             target/cargo-home/registry
             target/cargo-home/git
             target/coverage
-          key: coverage-${{ steps.versions.outputs.hash }}-${{ hashFiles('Cargo.lock') }}
+          key: coverage-${{ steps.versions.outputs.hash }}-${{ hashFiles('third_party/**') }}-${{ hashFiles('Cargo.lock') }}
       - if: always()
         run: |
           {
