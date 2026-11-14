@@ -1,5 +1,10 @@
 # Kudari
 
+[![CI](https://github.com/MarcJose/kudari/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/MarcJose/kudari/actions/workflows/ci.yml?query=branch%3Amain)
+[![Security](https://github.com/MarcJose/kudari/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/MarcJose/kudari/actions/workflows/security.yml?query=branch%3Amain)
+[![Release](https://img.shields.io/github/v/release/MarcJose/kudari)](https://github.com/MarcJose/kudari/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/MarcJose/kudari)](LICENSE)
+
 A drop-down terminal for KDE Plasma on Wayland and for Windows. A key, F12 by default on KDE
 and Ctrl+F12 on Windows, slides a terminal down from the top of the screen, over whatever
 window is open. The same key sends it away again, and the shells in it keep running. Kudari
