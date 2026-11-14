@@ -86,6 +86,7 @@ cargo build -p kudari-windows && tests/windows/run.sh  # the Windows front end, 
 tools/windows-package.ps1 -Out dist && tests/windows/package.ps1 dist  # the packages, on Windows
 tests/windows/gui.ps1 path\to\kudari.exe  # the window, on a Windows desktop
 tools/security.sh                                # secrets, dependencies, workflows
+tools/bench.sh                                   # speed of output and drawing, against other terminals
 ```
 
 On Windows, `tools/windows-package.ps1` builds the Windows front end and packs it, as the
