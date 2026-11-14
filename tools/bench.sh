@@ -4,14 +4,15 @@
 # Measures how fast terminals take in output and, for Kudari, how long Qt Quick needs for
 # each frame meanwhile, to compare terminals and a change to the drawing before and after:
 #
-#   tools/bench.sh [--binary PATH] [--runs N] [--loads LOAD,...] [--keep] [TERMINAL...]
+#   tools/bench.sh [--binary PATH] [--runs N] [--loads LOAD,...] [--scale N] [--keep] [TERMINAL...]
 #
 # The terminals are kudari, yakuake, konsole, alacritty, kitty, ghostty, contour and xterm;
 # without any, every one of them that is installed. Kudari is the installed one, or else the
 # release build (cargo build --release); --binary names another. Each run measures every
 # terminal once, five runs by default, and the report shows the average, the fastest and the
-# slowest run of each load. --loads picks some of plain, color, frames and seq, and --keep
-# keeps the data and the logs of the terminals.
+# slowest run of each load. --loads picks some of plain, color, frames and seq, --scale
+# scales the screen as for a HiDPI display, and --keep keeps the data and the logs of the
+# terminals.
 #
 # All of them run full screen in a virtual KWin of 2560x1440, xterm through Xwayland, on a
 # D-Bus and with settings of their own, so the desktop and its settings stay out of it. The
@@ -19,7 +20,7 @@
 # every cell, as a busy program draws them, and the numbers up to 2,000,000. Each terminal
 # keeps its own font, so the number of cells differs between them. The graphics card of the
 # computer draws, so compare only runs on the same computer. Needs kwin_wayland with
-# Xwayland, qdbus6, dbus-run-session and python3.
+# Xwayland, qdbus6, dbus-run-session and python3, and kscreen-doctor for --scale.
 set -eu
 tools=$(cd "$(dirname "$0")" && pwd)
 all="kudari yakuake konsole alacritty kitty ghostty contour xterm"
@@ -70,6 +71,13 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
         done
         sleep 2
     }
+    # KWin's --scale only enlarges the virtual screen; the scale that programs see is a setting
+    # of the screen.
+    if [ "$KUDARI_BENCH_SCALE" != 1 ]; then
+        output=$(kscreen-doctor -o 2> /dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk '/^Output:/ { print $3; exit }')
+        kscreen-doctor "output.$output.scale.$KUDARI_BENCH_SCALE" > /dev/null 2>&1 || fail "could not scale the screen to $KUDARI_BENCH_SCALE"
+        sleep 1
+    fi
     run=1
     while [ "$run" -le "$KUDARI_BENCH_RUNS" ]; do
         for terminal in $KUDARI_BENCH_TERMINALS; do
@@ -133,6 +141,7 @@ fi
 
 binary=
 runs=5
+scale=1
 loads="plain color frames seq"
 keep=
 terminals=
@@ -141,6 +150,7 @@ while [ $# -gt 0 ]; do
         --binary) binary=$2; shift 2 ;;
         --runs) runs=$2; shift 2 ;;
         --keep) keep=1; shift ;;
+        --scale) scale=$2; shift 2 ;;
         --loads)
             loads=$(echo "$2" | tr ',' ' ')
             for load in $loads; do
@@ -152,12 +162,13 @@ while [ $# -gt 0 ]; do
         *)
             case " $all " in
                 *" $1 "*) terminals="$terminals $1"; shift ;;
-                *) die "usage: tools/bench.sh [--binary PATH] [--runs N] [--loads LOAD,...] [--keep] [TERMINAL...]; the terminals are: $all" ;;
+                *) die "usage: tools/bench.sh [--binary PATH] [--runs N] [--loads LOAD,...] [--scale N] [--keep] [TERMINAL...]; the terminals are: $all" ;;
             esac
             ;;
     esac
 done
 case $runs in '' | *[!0-9]* | 0) die "--runs needs a number of 1 or more" ;; esac
+case $scale in '' | *[!0-9.]* | *.*.* | .* | *.) die "--scale needs a number such as 2 or 1.5" ;; esac
 if [ -z "$binary" ]; then
     binary=$(command -v kudari || echo "${CARGO_TARGET_DIR:-$tools/../target}/release/kudari")
 fi
@@ -184,17 +195,18 @@ if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
     for program in kwin_wayland Xwayland qdbus6 dbus-run-session python3; do
         command -v "$program" > /dev/null || die "needs $program"
     done
+    [ "$scale" = 1 ] || command -v kscreen-doctor > /dev/null || die "--scale needs kscreen-doctor"
     # Some 400 MB of data and logs, kept only when the measurement fails.
     work=$(mktemp -d "${TMPDIR:-/tmp}/kudari-bench.XXXXXX")
     trap 'rm -rf "$work"; exit 1' INT TERM
-    echo "Terminals:$terminals; Kudari: $binary; $runs runs"
+    echo "Terminals:$terminals; Kudari: $binary; $runs runs; scale $scale"
     echo "Making the data ..."
     python3 "$tools/bench.py" data "$work"
     # The bus and the portals it starts complain about what the virtual session lacks; that
     # goes to a file, and the measurement itself writes to file descriptor 3.
     # shellcheck disable=SC2086 # the terminals are words of their own
     if env -u WAYLAND_DISPLAY -u DISPLAY KUDARI_BENCH_WORK="$work" \
-        dbus-run-session -- "$0" --binary "$binary" --runs "$runs" --loads "$(echo $loads | tr " " ",")" $terminals \
+        dbus-run-session -- "$0" --binary "$binary" --runs "$runs" --scale "$scale" --loads "$(echo $loads | tr " " ",")" $terminals \
         < /dev/null 3>&2 2> "$work/dbus.log"; then
         python3 "$tools/bench.py" report "$work" $terminals
         if [ -n "$keep" ]; then echo "The data and the logs are in $work"; else rm -rf "$work"; fi
@@ -220,13 +232,13 @@ printf '[General]\ncount=1\nrules=1\n\n[1]\nDescription=full screen\nfullscreen=
     > "$XDG_CONFIG_HOME/kwinrulesrc"
 export QT_QPA_PLATFORM=wayland QT_FORCE_STDERR_LOGGING=1
 export KUDARI_BENCH_RUNS="$runs" KUDARI_BENCH_TERMINALS="$terminals" KUDARI_BENCH_BINARY="$binary"
-export KUDARI_BENCH_LOADS="$loads"
+export KUDARI_BENCH_LOADS="$loads" KUDARI_BENCH_SCALE="$scale"
 : > "$work/progress.log"
 tail -f "$work/progress.log" &
 progress=$!
 trap 'kill "$progress" 2> /dev/null; rm -rf "$XDG_RUNTIME_DIR"' EXIT
 KUDARI_BENCH_ROLE=session kwin_wayland --virtual --xwayland --no-lockscreen --socket=kudari-bench \
-    --width 2560 --height 1440 --exit-with-session "$tools/bench.sh" > "$work/kwin.log" 2>&1 || true
+    --width 2560 --height 1440 --scale "$scale" --exit-with-session "$tools/bench.sh" > "$work/kwin.log" 2>&1 || true
 sleep 0.5
 if [ -e "$work/failed" ]; then
     die "$(cat "$work/failed")"
