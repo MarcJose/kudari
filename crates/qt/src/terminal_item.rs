@@ -836,13 +836,30 @@ impl qobject::TerminalItem {
     /// # Safety
     ///
     /// `painter` must be null or valid for the duration of the call, which Qt guarantees.
-    pub unsafe fn paint(self: Pin<&mut Self>, painter: *mut qobject::QPainter) {
+    pub unsafe fn paint(mut self: Pin<&mut Self>, painter: *mut qobject::QPainter) {
         // SAFETY: Qt passes null or a painter that is valid during this call and stays in place.
         let Some(painter) = (unsafe { painter.as_mut() }) else {
             return;
         };
         // SAFETY: Qt keeps the painter in place during this call.
-        let mut painter = unsafe { Pin::new_unchecked(painter) };
+        let mut target = unsafe { Pin::new_unchecked(painter) };
+        // Text draws much faster into the image of `rk_frame_begin` than into the item's own.
+        let opaque = *self.opaque();
+        let mut frame = kde::rk_frame_begin(target.as_mut(), opaque);
+        let drawn = if let Some(inner) = frame.as_mut() {
+            self.as_mut().paint_frame(kde::rk_frame_painter(inner));
+            true
+        } else {
+            false
+        };
+        if drawn {
+            kde::rk_frame_end(target, frame, opaque);
+        } else {
+            self.paint_frame(target);
+        }
+    }
+
+    fn paint_frame(self: Pin<&mut Self>, mut painter: Pin<&mut qobject::QPainter>) {
         let scheme = colors::active();
         // A translucent background comes from the pane behind this item.
         if *self.opaque() {
