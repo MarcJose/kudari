@@ -4,6 +4,8 @@
 // What the front ends need of Qt itself, for `src/qt.rs`.
 #pragma once
 
+#include <QImage>
+#include <QPainter>
 #include <QPointF>
 #include <QQuickItem>
 #include <QRawFont>
@@ -46,6 +48,15 @@ void rk_draw_badge(QPainter &painter,
                    const QFont &terminalFont,
                    int cellHeight);
 void rk_font_rendering(QFont &font, bool antiAlias, bool hinting);
+/// A frame of a terminal on its way to the item; see `rk_frame_begin`.
+struct RkFrame {
+    QImage *image;
+    QSize size;
+    QPainter painter;
+};
+std::unique_ptr<RkFrame> rk_frame_begin(QPainter &target, bool opaque);
+QPainter &rk_frame_painter(RkFrame &frame);
+void rk_frame_end(QPainter &target, std::unique_ptr<RkFrame> frame, bool opaque);
 std::unique_ptr<QRawFont> rk_raw_font(const QPainter &painter, const QFont &font);
 std::uint32_t rk_glyph_index(const QRawFont &font, std::uint32_t character);
 void rk_draw_glyphs(QPainter &painter,

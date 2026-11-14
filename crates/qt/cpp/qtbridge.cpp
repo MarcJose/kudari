@@ -7,6 +7,7 @@
 #include "kudari-qt/src/qt.cxx.h"
 
 #include <QClipboard>
+#include <cstring>
 #include <QCursor>
 #include <QDesktopServices>
 #include <QDir>
@@ -150,6 +151,56 @@ std::uint32_t rk_glyph_index(const QRawFont &font, std::uint32_t character)
         return 0;
     }
     return glyphs[0];
+}
+
+// Qt Quick has an item paint into an image in RGBA8888, for which the raster engine of Qt has
+// no fast way to draw text: it converts every pixel of every glyph to 64 bits and back. Into
+// ARGB32_Premultiplied it draws text several times faster, so a frame goes there first and
+// then to the item in one piece. One image per thread serves all terminals of a window: it
+// grows to the largest of them, and each draws into its top left corner. Null when the target
+// has no size.
+std::unique_ptr<RkFrame> rk_frame_begin(QPainter &target, bool opaque)
+{
+    thread_local QImage image;
+    QPaintDevice *device = target.device();
+    if (device == nullptr || device->width() <= 0 || device->height() <= 0) {
+        return nullptr;
+    }
+    const QSize size(device->width(), device->height());
+    if (image.width() < size.width() || image.height() < size.height()) {
+        image = QImage(size.expandedTo(image.size()), QImage::Format_ARGB32_Premultiplied);
+    }
+    image.setDevicePixelRatio(device->devicePixelRatioF());
+    // An opaque terminal paints its background over all of it first.
+    if (!opaque) {
+        for (int y = 0; y < size.height(); ++y) {
+            std::memset(image.scanLine(y), 0, size_t(size.width()) * 4);
+        }
+    }
+    auto frame = std::make_unique<RkFrame>();
+    frame->image = &image;
+    frame->size = size;
+    frame->painter.begin(&image);
+    frame->painter.setTransform(target.transform());
+    frame->painter.setRenderHints(target.renderHints());
+    return frame;
+}
+
+QPainter &rk_frame_painter(RkFrame &frame)
+{
+    return frame.painter;
+}
+
+void rk_frame_end(QPainter &target, std::unique_ptr<RkFrame> frame, bool opaque)
+{
+    frame->painter.end();
+    target.save();
+    target.resetTransform();
+    if (opaque) {
+        target.setCompositionMode(QPainter::CompositionMode_Source);
+    }
+    target.drawImage(QPointF(), *frame->image, QRectF(QPointF(), frame->size));
+    target.restore();
 }
 
 // Positions on the baseline. One run per font and color spares the text layout that
