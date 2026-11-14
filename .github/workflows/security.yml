@@ -1,9 +1,10 @@
 name: Security
 
 on:
-  # Tags are left to release.yml, which runs this workflow before it publishes.
+  # Other branches are checked through their pull requests, which would otherwise run every
+  # job twice. Tags are left to release.yml, which runs this workflow before it publishes.
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
   # New advisories concern code that has not changed, so the checks also run weekly.
   schedule:
