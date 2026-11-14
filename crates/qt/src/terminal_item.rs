@@ -18,7 +18,7 @@ use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{ClearMode, Handler, Rgb};
 use cxx_qt::CxxQtType;
-use cxx_qt_lib::{QColor, QFont, QPen, QPoint, QRectF, QString, QVariant};
+use cxx_qt_lib::{QColor, QFont, QPen, QPoint, QPointF, QRectF, QString, QVariant};
 
 use crate::colors;
 use crate::frontend::frontend;
@@ -905,11 +905,16 @@ impl qobject::TerminalItem {
                 *self.cell_height() as i32,
             );
         }
+        let mut runs = GlyphRuns::default();
         for paint in paints {
             match paint {
-                Paint::Fill(rect, color) => painter
-                    .as_mut()
-                    .fill_rect(&QRectF::new(rect.x, rect.y, rect.width, rect.height), &qcolor(color)),
+                Paint::Fill(rect, color) => {
+                    // What comes before a fill stays under it.
+                    runs.draw(painter.as_mut());
+                    painter
+                        .as_mut()
+                        .fill_rect(&QRectF::new(rect.x, rect.y, rect.width, rect.height), &qcolor(color));
+                }
                 Paint::Text {
                     x,
                     y,
@@ -917,13 +922,107 @@ impl qobject::TerminalItem {
                     color,
                     font,
                 } => {
-                    painter.as_mut().set_font(fonts.pick(font));
-                    painter.as_mut().set_pen(&QPen::from(&qcolor(color)));
-                    painter
-                        .as_mut()
-                        .draw_text(&QPoint::new(x, y), &QString::from(text.as_str()));
+                    let slot = fonts.slot(font);
+                    if !runs.add(&painter, &fonts, slot, &text, (x, y), color) {
+                        painter.as_mut().set_font(fonts.get(slot));
+                        painter.as_mut().set_pen(&QPen::from(&qcolor(color)));
+                        painter
+                            .as_mut()
+                            .draw_text(&QPoint::new(x, y), &QString::from(text.as_str()));
+                    }
                 }
             }
+        }
+        runs.draw(painter.as_mut());
+    }
+}
+
+/// The glyphs of a frame by font and color, so that each group takes one call of
+/// `QPainter::drawGlyphRun` instead of one `drawText` per cell, which costs a text layout each
+/// time. Glyphs of one group do not overlap, so their order within it does not matter.
+#[derive(Default)]
+struct GlyphRuns {
+    /// The fonts of `Fonts::get`, made on first use.
+    fonts: [Option<cxx::UniquePtr<kde::QRawFont>>; Fonts::SLOTS],
+    /// The glyph of each character in each font so far; 0 when the font has none.
+    glyphs: std::collections::HashMap<(usize, char), u32>,
+    /// The groups in the order of their first glyph, which keeps the drawing the same from
+    /// frame to frame.
+    runs: Vec<Run>,
+    /// The index in `runs` by font and color, as `0xRRGGBB`.
+    by_key: std::collections::HashMap<(usize, u32), usize>,
+}
+
+struct Run {
+    slot: usize,
+    color: Rgb,
+    glyphs: Vec<u32>,
+    positions: Vec<QPointF>,
+}
+
+impl GlyphRuns {
+    /// Adds a glyph at a point on its baseline. False if `text` is not one character of the
+    /// font, such as a character with combining marks or one that only a fallback font has:
+    /// those need `drawText`.
+    fn add(
+        &mut self,
+        painter: &qobject::QPainter,
+        fonts: &Fonts,
+        slot: usize,
+        text: &str,
+        (x, y): (i32, i32),
+        color: Rgb,
+    ) -> bool {
+        let mut characters = text.chars();
+        let (Some(character), None) = (characters.next(), characters.next()) else {
+            return false;
+        };
+        let Some(raw) = self.fonts.get_mut(slot) else {
+            return false;
+        };
+        let Some(raw) = raw
+            .get_or_insert_with(|| kde::rk_raw_font(painter, fonts.get(slot)))
+            .as_ref()
+        else {
+            return false;
+        };
+        let glyph = *self
+            .glyphs
+            .entry((slot, character))
+            .or_insert_with(|| kde::rk_glyph_index(raw, character.into()));
+        if glyph == 0 {
+            return false;
+        }
+        let key = (slot, u32::from_be_bytes([0, color.r, color.g, color.b]));
+        let index = *self.by_key.entry(key).or_insert_with(|| {
+            self.runs.push(Run {
+                slot,
+                color,
+                glyphs: Vec::new(),
+                positions: Vec::new(),
+            });
+            self.runs.len() - 1
+        });
+        let Some(run) = self.runs.get_mut(index) else {
+            return false;
+        };
+        run.glyphs.push(glyph);
+        run.positions.push(QPointF::new(f64::from(x), f64::from(y)));
+        true
+    }
+
+    /// Draws the glyphs so far and empties the groups.
+    fn draw(&mut self, mut painter: Pin<&mut qobject::QPainter>) {
+        for run in &mut self.runs {
+            if run.glyphs.is_empty() {
+                continue;
+            }
+            let font = self.fonts.get(run.slot).and_then(Option::as_ref);
+            if let Some(font) = font.and_then(|font| font.as_ref()) {
+                kde::rk_draw_glyphs(painter.as_mut(), font, &qcolor(run.color), &run.glyphs, &run.positions);
+            }
+            run.glyphs.clear();
+            run.positions.clear();
         }
     }
 }
@@ -959,15 +1058,25 @@ impl Fonts {
         }
     }
 
-    fn pick(&self, style: FontStyle) -> &QFont {
-        if let Some(emoji) = self.emoji.as_ref().filter(|_| style.emoji) {
-            return emoji;
+    /// How many fonts `get` tells apart.
+    const SLOTS: usize = 5;
+
+    /// The number of the font for `style`, for `get`.
+    fn slot(&self, style: FontStyle) -> usize {
+        if style.emoji && self.emoji.is_some() {
+            4
+        } else {
+            usize::from(style.bold) + 2 * usize::from(style.italic)
         }
-        match (style.bold, style.italic) {
-            (true, true) => &self.bold_italic,
-            (true, false) => &self.bold,
-            (false, true) => &self.italic,
-            (false, false) => &self.regular,
+    }
+
+    fn get(&self, slot: usize) -> &QFont {
+        match slot {
+            1 => &self.bold,
+            2 => &self.italic,
+            3 => &self.bold_italic,
+            4 => self.emoji.as_ref().unwrap_or(&self.regular),
+            _ => &self.regular,
         }
     }
 }

@@ -18,6 +18,7 @@
 #include <QFont>
 #include <QFontDatabase>
 #include <QFontMetricsF>
+#include <QGlyphRun>
 #include <QGuiApplication>
 #include <QInputDialog>
 #include <QInputMethodEvent>
@@ -130,6 +131,40 @@ void rk_font_rendering(QFont &font, bool antiAlias, bool hinting)
     if (hinting) {
         font.setHintingPreference(QFont::PreferFullHinting);
     }
+}
+
+// The font as the painter would draw with it: `QPainter` resolves a font against its device.
+std::unique_ptr<QRawFont> rk_raw_font(const QPainter &painter, const QFont &font)
+{
+    return std::make_unique<QRawFont>(QRawFont::fromFont(QFont(font, painter.device())));
+}
+
+// 0 when the font lacks the character, which then needs the fallback of `QPainter::drawText`.
+std::uint32_t rk_glyph_index(const QRawFont &font, std::uint32_t character)
+{
+    const char32_t ucs4 = character;
+    const QString text = QString::fromUcs4(&ucs4, 1);
+    quint32 glyphs[2] = {0, 0};
+    int count = 2;
+    if (!font.glyphIndexesForChars(text.constData(), int(text.size()), glyphs, &count) || count != 1) {
+        return 0;
+    }
+    return glyphs[0];
+}
+
+// Positions on the baseline. One run per font and color spares the text layout that
+// `QPainter::drawText` does for every call.
+void rk_draw_glyphs(QPainter &painter,
+                    const QRawFont &font,
+                    const QColor &color,
+                    rust::Slice<const std::uint32_t> glyphs,
+                    rust::Slice<const QPointF> positions)
+{
+    QGlyphRun run;
+    run.setRawFont(font);
+    run.setRawData(glyphs.data(), positions.data(), int(qMin(glyphs.size(), positions.size())));
+    painter.setPen(color);
+    painter.drawGlyphRun(QPointF(), run);
 }
 
 void rk_font_family(QFont &font, const QString &family)

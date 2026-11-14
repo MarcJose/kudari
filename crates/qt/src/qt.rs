@@ -17,6 +17,13 @@ pub mod ffi {
         type QPainter = cxx_qt_lib::QPainter;
         include!("cxx-qt-lib/qfont.h");
         type QFont = cxx_qt_lib::QFont;
+        include!("cxx-qt-lib/qcolor.h");
+        type QColor = cxx_qt_lib::QColor;
+        include!("cxx-qt-lib/qpointf.h");
+        type QPointF = cxx_qt_lib::QPointF;
+        include!(<QtGui/QRawFont>);
+        /// A font that turns characters into glyphs without the text layout of `QPainter`.
+        type QRawFont;
     }
 
     unsafe extern "C++" {
@@ -36,6 +43,17 @@ pub mod ffi {
             cell_height: i32,
         );
         fn rk_font_rendering(font: &mut QFont, anti_alias: bool, hinting: bool);
+        fn rk_raw_font(painter: &QPainter, font: &QFont) -> UniquePtr<QRawFont>;
+        /// The glyph of `character` in `font`, or 0 when the font has none.
+        fn rk_glyph_index(font: &QRawFont, character: u32) -> u32;
+        /// Draws each glyph with its point on the baseline, all in one color.
+        fn rk_draw_glyphs(
+            painter: Pin<&mut QPainter>,
+            font: &QRawFont,
+            color: &QColor,
+            glyphs: &[u32],
+            positions: &[QPointF],
+        );
         fn rk_font_family(font: &mut QFont, family: &QString);
         /// A color from `#rgb` notation or a name as `#rrggbb`, or an empty string.
         fn rk_color_from_text(text: &QString) -> QString;
