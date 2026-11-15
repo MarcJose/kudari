@@ -40,12 +40,16 @@ impl Handler for Agents {
     fn request(&self, agent: &str, request: Request) -> Result<String, Error> {
         let (sender, receiver) = mpsc::channel();
         let agent = agent.to_string();
+        // A request that timed out never runs later, so trying again cannot type twice.
+        let (handoff, claim) = kudari_core::handoff::handoff();
         queue(move |controller| {
-            let _ = sender.send(controller.agent_request(Some(&agent), request));
+            if claim.start() {
+                let _ = sender.send(controller.agent_request(Some(&agent), request));
+            }
         });
-        receiver
-            .recv_timeout(QT_TIMEOUT)
-            .unwrap_or_else(|_| Err(Error::Failed("Kudari did not answer in time.".to_string())))
+        handoff
+            .wait(&receiver, QT_TIMEOUT)
+            .unwrap_or_else(|| Err(Error::Failed("Kudari did not answer in time.".to_string())))
     }
 
     fn gone(&self, agent: &str) {

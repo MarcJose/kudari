@@ -37,16 +37,21 @@ static POINTER_REPLY: Mutex<Option<mpsc::Sender<String>>> = Mutex::new(None);
 /// a reply on this connection, so an unlimited wait could block both for good.
 const QT_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// Runs `action` on the Qt thread and waits for the result.
+/// Runs `action` on the Qt thread and waits for the result, or gives `fallback` when the Qt
+/// thread did not start it within [`QT_TIMEOUT`]. Then it never runs, so a caller that hears
+/// of a failure can try again without the first attempt happening as well.
 pub fn ask<T: Send + 'static>(
     action: impl FnOnce(std::pin::Pin<&mut Controller>) -> T + Send + 'static,
     fallback: T,
 ) -> T {
+    let (handoff, claim) = kudari_core::handoff::handoff();
     let (sender, receiver) = mpsc::channel();
     queue(move |controller| {
-        let _ = sender.send(action(controller));
+        if claim.start() {
+            let _ = sender.send(action(controller));
+        }
     });
-    receiver.recv_timeout(QT_TIMEOUT).unwrap_or(fallback)
+    handoff.wait(&receiver, QT_TIMEOUT).unwrap_or(fallback)
 }
 
 fn ids(values: impl IntoIterator<Item = i32>) -> String {

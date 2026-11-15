@@ -15,6 +15,7 @@ pub mod command;
 #[cfg(any(test, feature = "fuzz"))]
 pub mod fuzz;
 pub mod gettext;
+pub mod handoff;
 pub mod i18n;
 pub mod ini;
 pub mod input;
