@@ -69,7 +69,7 @@ Window {
         }
     }
     // F3 only belongs to the search while it is open; programs such as `mc` use it, too.
-    property bool searchActive: false
+    readonly property bool searchActive: sessionArea.activeSearchOpen
 
     // True while the grip is being dragged. Terminals then only learn their new size on
     // release; every resize makes shells redraw their prompt.
@@ -322,7 +322,6 @@ Window {
 
         onWidthChanged: root.reportGeometry()
         onHeightChanged: root.reportGeometry()
-        onSearchOpenChanged: open => root.searchActive = open
     }
 
     function reportGeometry() {

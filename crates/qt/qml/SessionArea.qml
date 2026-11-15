@@ -22,8 +22,14 @@ Item {
     property PaneTheme paneTheme: PaneTheme {}
     property color splitterColor: Qt.rgba(0.5, 0.5, 0.5, 1)
     property var panes: ({})
+    // Whether the active terminal has its search open, which gives F3 to its search. One flag
+    // for all panes took the state of whichever pane changed last.
+    property bool activeSearchOpen: false
 
-    signal searchOpenChanged(bool open)
+    function refreshActiveSearch() {
+        const pane = panes[layoutData.active];
+        activeSearchOpen = !!pane && pane.searchOpen;
+    }
 
     function update() {
         const ids = JSON.parse(controller.terminalIdsJson);
@@ -39,6 +45,7 @@ Item {
             }
         }
         arrange();
+        refreshActiveSearch();
     }
 
     function arrange() {
@@ -83,7 +90,10 @@ Item {
         flash.visible = false;
     }
 
-    onLayoutDataChanged: arrange()
+    onLayoutDataChanged: {
+        arrange();
+        refreshActiveSearch();
+    }
 
     Component {
         id: paneComponent
@@ -100,7 +110,7 @@ Item {
             fontZoom: area.layoutData.fontZoom?.[terminalId] ?? 0
             resizePaused: area.resizePaused || area.dragging
             config: area.settings.config
-            onSearchOpenChanged: area.searchOpenChanged(searchOpen)
+            onSearchOpenChanged: area.refreshActiveSearch()
             focusFollowsMouse: area.settings.focusFollowsMouse
         }
     }
