@@ -6,6 +6,7 @@
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::Point;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::search::Match;
@@ -220,6 +221,18 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
 
     let mut glyphs = Vec::new();
     let mut cursor_glyph = None;
+    // The matches come in the order of the cells, so one index walks along with them; a
+    // search over all matches for each cell took long with a frequent pattern.
+    let mut next_match = 0;
+    let mut in_match = |point: Point| {
+        while scene.matches.get(next_match).is_some_and(|found| *found.end() < point) {
+            next_match += 1;
+        }
+        scene
+            .matches
+            .get(next_match)
+            .is_some_and(|found| found.contains(&point))
+    };
     for cell in content.display_iter {
         let flags = cell.flags;
         if flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
@@ -241,7 +254,7 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
         }
         if selection.is_some_and(|range| range.contains(point)) {
             (foreground, back) = selection_colors(foreground, back, scheme, options.invert_selection);
-        } else if scene.matches.iter().any(|found| found.contains(&point)) {
+        } else if in_match(point) {
             back = SEARCH_HIGHLIGHT;
             foreground = BLACK;
         }
@@ -499,6 +512,33 @@ mod tests {
         let term = term_with("e\u{301}");
         let paints = frame(&term, &Options::default(), &scene(&scheme, &[], &[]));
         assert!(texts(&paints).iter().any(|(text, _, _)| *text == "e\u{301}"));
+    }
+
+    #[test]
+    fn many_matches_highlight_the_cells_they_cover() {
+        // Every other cell matches, in the order a search gives them.
+        let scheme = crate::colors::active();
+        let term = term_with("ababababab\r\nbababababa");
+        let matches: Vec<Match> = (0..2_usize)
+            .flat_map(|line| (0..10_usize).map(move |column| (line, column)))
+            .filter(|(line, column)| (line + column) % 2 == 0)
+            .map(|(line, column)| {
+                let point = Point::new(Line(line as i32), Column(column));
+                point..=point
+            })
+            .collect();
+        let paints = frame(&term, &Options::default(), &scene(&scheme, &[], &matches));
+        let highlighted: Vec<String> = texts(&paints)
+            .into_iter()
+            .filter(|(_, color, _)| *color == BLACK)
+            .map(|(text, _, _)| text.to_string())
+            .collect();
+        assert_eq!(highlighted.concat(), "aaaaaaaaaa");
+        let backgrounds = fills(&paints)
+            .into_iter()
+            .filter(|(_, color)| *color == SEARCH_HIGHLIGHT)
+            .count();
+        assert_eq!(backgrounds, 10);
     }
 
     #[test]
