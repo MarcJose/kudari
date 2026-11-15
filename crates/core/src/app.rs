@@ -196,6 +196,13 @@ pub struct Model {
     pub font_zoom: Vec<(TerminalId, i32)>,
 }
 
+/// The session of an open tab menu, and the session that was active when it opened.
+#[derive(Clone, Copy, Debug)]
+struct MenuSession {
+    session: SessionId,
+    active: Option<SessionId>,
+}
+
 /// A terminal to start, in the area of its pane.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Start {
@@ -223,7 +230,7 @@ pub struct App {
     area: (i32, i32),
     cell: (f64, f64),
     /// The tab a context menu was opened on; its actions apply to that session.
-    menu_session: Option<SessionId>,
+    menu_session: Option<MenuSession>,
     /// Where new terminals start.
     pending_directories: Vec<(TerminalId, Option<PathBuf>)>,
     /// The shells chosen for terminals; a split starts the shell of the terminal it splits.
@@ -320,9 +327,16 @@ impl App {
     }
 
     /// The session the actions of a menu apply to: the one of the tab menu, or the active one.
+    /// A front end that does not say when the tab menu closed leaves its session behind; it
+    /// counts only while the tab that was active then still is, and the session still exists,
+    /// so that a shortcut after another tab was chosen does not close the tab of the menu.
     #[must_use]
     pub fn context_session(&self) -> Option<SessionId> {
-        self.menu_session.or(self.stack.active_id())
+        let active = self.stack.active_id();
+        self.menu_session
+            .filter(|menu| menu.active == active && self.stack.session(menu.session).is_some())
+            .map(|menu| menu.session)
+            .or(active)
     }
 
     #[must_use]
@@ -556,6 +570,7 @@ impl App {
     ) -> (SessionId, Vec<Effect>) {
         let directory = self.active_directory(host);
         let id = self.stack.add_session(kind);
+        self.forget_stale_menu();
         let terminals = self
             .stack
             .session(id)
@@ -941,18 +956,21 @@ impl App {
     pub fn raise(&mut self, session: SessionId) -> Vec<Effect> {
         self.rearm_activity();
         self.stack.raise_session(session);
+        self.forget_stale_menu();
         self.refresh()
     }
 
     pub fn select_next_tab(&mut self) -> Vec<Effect> {
         self.rearm_activity();
         self.stack.select_next_tab();
+        self.forget_stale_menu();
         self.refresh()
     }
 
     pub fn select_previous_tab(&mut self) -> Vec<Effect> {
         self.rearm_activity();
         self.stack.select_previous_tab();
+        self.forget_stale_menu();
         self.refresh()
     }
 
@@ -1220,8 +1238,20 @@ impl App {
 
     /// A tab menu opened for a session, whose actions then apply to it.
     pub fn menu_opened(&mut self, session: SessionId) -> Vec<Effect> {
-        self.menu_session = Some(session);
+        self.menu_session = Some(MenuSession {
+            session,
+            active: self.stack.active_id(),
+        });
         vec![Effect::UpdateActions]
+    }
+
+    /// Another tab became active, so a tab menu left open no longer counts, even when that
+    /// tab comes back.
+    fn forget_stale_menu(&mut self) {
+        let active = self.stack.active_id();
+        if self.menu_session.is_some_and(|menu| menu.active != active) {
+            self.menu_session = None;
+        }
     }
 
     /// The tab menu closed; its triggered action has run already.
@@ -1834,6 +1864,40 @@ mod tests {
         assert!(app.session_actions().contains(&("move-session-right", false, true)));
         app.menu_closed();
         assert_ne!(app.context_session(), Some(first));
+    }
+
+    #[test]
+    fn a_tab_menu_left_open_does_not_steer_shortcuts_after_another_tab() {
+        // Windows: a tab menu closed with Esc, which no front end may report.
+        let mut app = fresh();
+        let first = app.stack().active_id().unwrap();
+        app.add_session(SessionType::Single, &Here);
+        app.add_session(SessionType::Single, &Here);
+        let third = app.stack().active_id().unwrap();
+        app.menu_opened(first);
+        assert_eq!(app.context_session(), Some(first));
+        // Another tab is chosen: Ctrl+Shift+W closes that one, not the tab of the menu.
+        let second = app.stack().sessions().nth(1).map(|session| session.id).unwrap();
+        app.raise(second);
+        assert_ne!(app.context_session(), Some(first));
+        app.raise(third);
+        assert_eq!(app.context_session(), Some(third));
+        app.trigger("close-session", false, &Table::default(), &Here);
+        assert!(app.stack().session(first).is_some(), "the tab of the menu was closed");
+        assert!(app.stack().session(third).is_none(), "the chosen tab stayed");
+    }
+
+    #[test]
+    fn the_tab_menu_of_a_closed_tab_leaves_the_actions_to_the_active_one() {
+        let mut app = fresh();
+        let first = app.stack().active_id().unwrap();
+        app.add_session(SessionType::Single, &Here);
+        let second = app.stack().active_id().unwrap();
+        app.raise(first);
+        app.menu_opened(first);
+        app.trigger("close-session", false, &Table::default(), &Here);
+        // The menu never reported that it closed, and its tab is gone.
+        assert_eq!(app.context_session(), Some(second));
     }
 
     #[test]

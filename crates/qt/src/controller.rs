@@ -132,6 +132,10 @@ pub mod qobject {
         #[qinvokable]
         fn popup_tab_menu(self: Pin<&mut Self>, session: i32, x: i32, y: i32);
 
+        /// A menu built in QML closed, which ends the session of a tab menu.
+        #[qinvokable]
+        fn menu_closed(self: Pin<&mut Self>);
+
         #[qinvokable]
         fn popup_terminal_menu(self: Pin<&mut Self>, x: i32, y: i32, can_copy: bool, link: &QString);
 
