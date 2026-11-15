@@ -104,6 +104,9 @@ const SEARCH_HIGHLIGHT: Rgb = Rgb {
     g: 0xbc,
     b: 0x4b,
 };
+/// The combining characters drawn on one cell. Accents, variation selectors and the joined
+/// emoji take a few; more only make every frame slower.
+const MAX_ZERO_WIDTH: usize = 16;
 const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
 const WHITE: Rgb = Rgb { r: 255, g: 255, b: 255 };
 
@@ -291,7 +294,8 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             // cells sit on whole pixels so that columns line up.
             let mut text = String::from(cell.c);
             if let Some(zero_width) = cell.zerowidth() {
-                text.extend(zero_width);
+                // A program can pile up any number on one cell, which every frame would shape.
+                text.extend(zero_width.iter().take(MAX_ZERO_WIDTH));
             }
             let (x, y) = geometry.baseline(column, line);
             glyphs.push(Paint::Text {
@@ -477,6 +481,24 @@ mod tests {
             cursor_rects(&GEOMETRY, 2, 0, 2.0, CursorShape::Underline)[0].width,
             2.0 * GEOMETRY.cell_width
         );
+    }
+
+    #[test]
+    fn a_pile_of_combining_characters_is_cut() {
+        let scheme = crate::colors::active();
+        let accents: String = std::iter::repeat_n('\u{301}', 1000).collect();
+        let term = term_with(&format!("a{accents}"));
+        let paints = frame(&term, &Options::default(), &scene(&scheme, &[], &[]));
+        let drawn = texts(&paints)
+            .into_iter()
+            .find(|(text, _, _)| text.starts_with('a'))
+            .unwrap()
+            .0;
+        assert_eq!(drawn.chars().count(), 1 + MAX_ZERO_WIDTH);
+        // An ordinary accent stays as it is.
+        let term = term_with("e\u{301}");
+        let paints = frame(&term, &Options::default(), &scene(&scheme, &[], &[]));
+        assert!(texts(&paints).iter().any(|(text, _, _)| *text == "e\u{301}"));
     }
 
     #[test]
