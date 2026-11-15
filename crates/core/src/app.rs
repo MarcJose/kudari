@@ -76,9 +76,17 @@ pub struct Question {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Pending {
     CloseSession(SessionId),
-    CloseTerminal(SessionId),
+    /// The terminal that was active when the user asked, which may no longer be by the
+    /// time of the answer.
+    CloseTerminal {
+        session: SessionId,
+        terminal: TerminalId,
+    },
     Quit,
-    Paste { terminal: TerminalId, text: String },
+    Paste {
+        terminal: TerminalId,
+        text: String,
+    },
     Import,
 }
 
@@ -622,19 +630,23 @@ impl App {
         })]
     }
 
-    fn ask_close(&mut self, session: SessionId, terminal_only: bool) -> Vec<Effect> {
+    /// Asks before closing a protected session, or with `terminal` one of its terminals.
+    fn ask_close(&mut self, session: SessionId, terminal: Option<TerminalId>) -> Vec<Effect> {
         let intro = tr("@info", "<warning>This session is protected from closing.</warning>");
-        let (question, pending) = if terminal_only {
-            (
+        let (question, pending) = match terminal {
+            Some(terminal) => (
                 tr("@info", "Close this terminal anyway?"),
-                Pending::CloseTerminal(session),
-            )
-        } else {
-            (
+                Pending::CloseTerminal { session, terminal },
+            ),
+            None => (
                 tr("@info", "Close this session anyway?"),
                 Pending::CloseSession(session),
-            )
+            ),
         };
+        // The same question once: two answers would close two terminals.
+        if self.questions.values().any(|asked| *asked == pending) {
+            return Vec::new();
+        }
         let title = tr("@title:window", "Close Protected Session");
         self.ask(pending, title, format!("{intro}<br/><br/>{question}"), Confirm::Close)
     }
@@ -643,7 +655,7 @@ impl App {
     pub fn remove_session(&mut self, session: SessionId) -> Vec<Effect> {
         match self.stack.session(session).map(|found| found.closable) {
             Some(true) => self.finish_session_removal(session),
-            Some(false) => self.ask_close(session, false),
+            Some(false) => self.ask_close(session, None),
             None => Vec::new(),
         }
     }
@@ -656,7 +668,7 @@ impl App {
             .map(|found| (found.closable, found.active_terminal))
         {
             Some((true, terminal)) => self.close_terminal(terminal),
-            Some((false, _)) => self.ask_close(session, true),
+            Some((false, terminal)) => self.ask_close(session, Some(terminal)),
             None => Vec::new(),
         }
     }
@@ -718,10 +730,12 @@ impl App {
             Pending::CloseSession(session) if self.stack.session(session).is_some() => {
                 self.finish_session_removal(session)
             }
-            Pending::CloseTerminal(session) => match self.stack.session(session).map(|found| found.active_terminal) {
-                Some(terminal) => self.close_terminal(terminal),
-                None => Vec::new(),
-            },
+            // The terminal the user was asked about, not the one active now.
+            Pending::CloseTerminal { session, terminal }
+                if self.stack.session_for_terminal(terminal) == Some(session) =>
+            {
+                self.close_terminal(terminal)
+            }
             Pending::Quit => vec![Effect::Quit],
             // The keyboard may have been locked while the user read the question.
             Pending::Paste { terminal, text } if self.accepts_input(terminal) => vec![Effect::Terminal {
@@ -729,7 +743,7 @@ impl App {
                 command: TerminalCommand::Paste(text),
             }],
             Pending::Import => vec![Effect::Import],
-            Pending::CloseSession(_) | Pending::Paste { .. } => Vec::new(),
+            Pending::CloseSession(_) | Pending::CloseTerminal { .. } | Pending::Paste { .. } => Vec::new(),
         }
     }
 
@@ -1863,6 +1877,31 @@ mod tests {
         assert!(actions.contains(&("move-session-left", false, false)));
         assert_eq!(Monitor::named("once"), Some(Monitor::Once));
         assert_eq!(Monitor::named("bogus"), None);
+    }
+
+    fn question_id(effects: &[Effect]) -> Option<u32> {
+        effects.iter().find_map(|effect| match effect {
+            Effect::Ask(question) => Some(question.id),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn closing_a_protected_terminal_closes_the_one_asked_about() {
+        let mut app = fresh();
+        let (session, _) = app.add_session(SessionType::TwoHorizontal, &Here);
+        app.stack_mut().session_mut(session).unwrap().closable = false;
+        let terminals = app.stack().session(session).unwrap().terminal_ids();
+        let (asked, other) = (app.stack().session(session).unwrap().active_terminal, terminals[1]);
+        assert_ne!(asked, other);
+        let id = question_id(&app.close_active_terminal(session)).unwrap();
+        // Asked again before the answer: no second question that would close a second one.
+        assert_eq!(question_id(&app.close_active_terminal(session)), None);
+        // The user moves to the other terminal before answering.
+        app.activate_terminal(other);
+        let _ = app.answer(id, true);
+        let left = app.stack().session(session).unwrap().terminal_ids();
+        assert_eq!(left, [other], "closed the wrong terminal");
     }
 
     #[test]
