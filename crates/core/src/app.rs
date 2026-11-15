@@ -875,7 +875,9 @@ impl App {
 
     /// A terminal rang its bell. A program that rings in a loop must not flood the
     /// notifications.
-    pub fn terminal_bell(&mut self, terminal: TerminalId) -> Vec<Effect> {
+    /// A terminal rang its bell. `has_focus` tells whether Kudari has the keyboard: only then,
+    /// with the window shown and the session on it, is the bell seen and stays quiet.
+    pub fn terminal_bell(&mut self, terminal: TerminalId, has_focus: bool) -> Vec<Effect> {
         if self.last_bell.is_some_and(|last| last.elapsed() < BELL_INTERVAL) {
             return Vec::new();
         }
@@ -890,10 +892,12 @@ impl App {
             }
             _ => {}
         }
-        let visible = self
-            .stack
-            .active()
-            .is_some_and(|session| session.terminals.contains_key(&terminal));
+        let visible = self.window_visible
+            && has_focus
+            && self
+                .stack
+                .active()
+                .is_some_and(|session| session.terminals.contains_key(&terminal));
         let event = if visible { "BellVisible" } else { "BellInvisible" };
         vec![self.notify(
             event,
@@ -1754,14 +1758,15 @@ mod tests {
     #[test]
     fn the_bell_rings_as_configured_but_not_in_a_burst() {
         let mut app = fresh();
+        app.toggle_window(true);
         let terminal = app.active_terminal().unwrap();
-        let rung = notified(&app.terminal_bell(terminal));
+        let rung = notified(&app.terminal_bell(terminal, true));
         assert_eq!(rung, [("BellVisible", "Bell in session \"Shell\".".to_string())]);
-        assert!(app.terminal_bell(terminal).is_empty(), "too soon");
+        assert!(app.terminal_bell(terminal, true).is_empty(), "too soon");
         let mut visual = app_with(&[("BellMode", "visual")]);
         let terminal = visual.active_terminal().unwrap();
         assert_eq!(
-            visual.terminal_bell(terminal),
+            visual.terminal_bell(terminal, true),
             [Effect::Highlight {
                 terminal,
                 persistent: false
@@ -1769,11 +1774,29 @@ mod tests {
         );
         let mut silent = app_with(&[("BellMode", "none")]);
         let terminal = silent.active_terminal().unwrap();
-        assert!(silent.terminal_bell(terminal).is_empty());
+        assert!(silent.terminal_bell(terminal, true).is_empty());
         let mut hidden = fresh();
+        hidden.toggle_window(true);
         let terminal = hidden.active_terminal().unwrap();
         hidden.add_session(SessionType::Single, &Here);
-        assert_eq!(notified(&hidden.terminal_bell(terminal))[0].0, "BellInvisible");
+        assert_eq!(notified(&hidden.terminal_bell(terminal, true))[0].0, "BellInvisible");
+    }
+
+    #[test]
+    fn the_bell_of_a_retracted_or_unfocused_window_is_heard() {
+        // The active session rings after a long command, while the window is retracted.
+        let mut retracted = fresh();
+        let terminal = retracted.active_terminal().unwrap();
+        assert!(!retracted.window_visible());
+        assert_eq!(notified(&retracted.terminal_bell(terminal, true))[0].0, "BellInvisible");
+        // Or the window stays open, and the user works in another program.
+        let mut elsewhere = fresh();
+        elsewhere.toggle_window(true);
+        let terminal = elsewhere.active_terminal().unwrap();
+        assert_eq!(
+            notified(&elsewhere.terminal_bell(terminal, false))[0].0,
+            "BellInvisible"
+        );
     }
 
     #[test]

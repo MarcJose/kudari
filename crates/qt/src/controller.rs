@@ -701,7 +701,8 @@ impl qobject::Controller {
     }
 
     pub fn terminal_bell(self: Pin<&mut Self>, terminal: TerminalId) {
-        self.update(|app| app.terminal_bell(terminal));
+        let has_focus = Terminals.has_focus();
+        self.update(|app| app.terminal_bell(terminal, has_focus));
     }
 
     fn answer_question(self: Pin<&mut Self>, id: i32, accepted: bool) {
