@@ -475,12 +475,14 @@ impl App {
                         "A title has at most {MAX_TITLE} characters and no control characters."
                     )));
                 }
-                let (session, added) = self.add_session(SessionType::Single, host);
+                // Behind the tabs: the user may be typing elsewhere, a password even, which
+                // must not go on in the new session that the agent reads.
+                let (session, added) = self.add_session_behind(SessionType::Single, host);
                 effects.extend(added);
                 self.add_agent_session(session, agent);
                 if !title.is_empty() {
                     self.stack_mut().set_tab_title(session, &title, true);
-                    effects.extend(self.refresh());
+                    effects.push(Effect::Publish);
                 }
                 let terminal = self.stack().session(session).map_or(-1, |found| found.active_terminal);
                 Ok(json!({ "session": session, "terminal": terminal }).to_string())
@@ -1138,6 +1140,27 @@ mod tests {
             assert!(app.stack().session(session).is_some());
             assert_eq!(ask(&mut app, Request::Close { session }, &host), Ok(String::new()));
             assert!(app.stack().session(session).is_none());
+        }
+
+        #[test]
+        fn a_session_of_an_agent_opens_behind_the_tab_of_the_user() {
+            // The user types in the active tab, a password perhaps.
+            let mut app = allowed();
+            let _ = app.set_geometry(800, 400, 8.0, 16.0);
+            let host = running(false, true);
+            let user = app.stack().active_id();
+            let (opened, effects) = app.agent_request(Some("a"), Request::Open { title: "build".into() }, &host);
+            let opened: Value = serde_json::from_str(&opened.unwrap()).unwrap();
+            let session = i32::try_from(opened["session"].as_i64().unwrap()).unwrap();
+            assert_eq!(app.stack().active_id(), user, "the agent took the tab of the user");
+            assert!(
+                !effects.iter().any(|effect| matches!(effect, Effect::Focus(_))),
+                "the agent took the keyboard: {effects:?}"
+            );
+            // Its terminal starts all the same, so that the agent can use it.
+            let terminal = app.stack().session(session).unwrap().active_terminal;
+            assert!(app.pending_starts().iter().any(|start| start.terminal == terminal));
+            assert_eq!(opened["terminal"], terminal);
         }
 
         #[test]

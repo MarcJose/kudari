@@ -164,6 +164,7 @@ end_input() { input key 28; sleep 0.2; input key 29 32; sleep 0.4; }
 
 window toggleWindowState; sleep 1.5
 check "the window opens" visible=1 "$(state)"
+
 input click 600 150; sleep 0.5
 
 run "echo blocked > $work/blocked"
@@ -587,6 +588,7 @@ check "another agent has to ask for itself" yes "$( (agent_once list_terminals '
 check "agents may not type by default" yes "$(agent type_text '{"text": "ls"}' | refused 'Controlling terminals is switched off')"
 hook SetSetting AllowAgentControl true; sleep 0.3
 check "more rights end the access granted before" false "$(hook AgentAccess)"
+users=$(sessions activeSessionId)
 send open_session '{"title": "Agent"}'
 check "the question names the new rights" yes "$(question | grep -q 'read and control' && echo yes)"
 hook AnswerAgent true
@@ -594,6 +596,10 @@ opened=$(receive)
 own=$(echo "$opened" | field session)
 mine=$(echo "$opened" | field terminal)
 check "an agent opens a session of its own" Agent "$(tabs tabTitle "$own")"
+# The user may be typing elsewhere, a password even: the new session stays behind.
+check "the session of an agent opens behind the tab of the user" "$users" "$(sessions activeSessionId)"
+# The user goes there to confirm the commands of the agent.
+sessions raiseSession "$own"; sleep 0.5
 agent type_text "{\"terminal\": $mine, \"text\": \"echo typed > $work/agent-typed\", \"execute\": true}" > "$work/answer"
 sleep 0.6
 check "the command of an agent waits for Return" "no yes" \

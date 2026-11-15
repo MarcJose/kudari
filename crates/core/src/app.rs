@@ -568,9 +568,22 @@ impl App {
         shell: Option<&str>,
         host: &dyn Host,
     ) -> (SessionId, Vec<Effect>) {
-        let directory = self.active_directory(host);
-        let id = self.stack.add_session(kind);
+        let id = self.add_session_unseen(kind, shell, host);
+        self.stack.raise_session(id);
         self.forget_stale_menu();
+        (id, self.refresh())
+    }
+
+    /// Opens a session behind the tabs: the active one and the keyboard stay where the user
+    /// is, as when an agent opens a session while the user types a password elsewhere.
+    pub fn add_session_behind(&mut self, kind: SessionType, host: &dyn Host) -> (SessionId, Vec<Effect>) {
+        let id = self.add_session_unseen(kind, None, host);
+        (id, vec![Effect::Publish])
+    }
+
+    fn add_session_unseen(&mut self, kind: SessionType, shell: Option<&str>, host: &dyn Host) -> SessionId {
+        let directory = self.active_directory(host);
+        let id = self.stack.add_session_behind(kind);
         let terminals = self
             .stack
             .session(id)
@@ -581,7 +594,7 @@ impl App {
         }
         self.pending_directories
             .extend(terminals.into_iter().map(|terminal| (terminal, directory.clone())));
-        (id, self.refresh())
+        id
     }
 
     /// Splits the active terminal of a session, in `orientation` or the longer side.
