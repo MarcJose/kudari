@@ -95,7 +95,12 @@ for crate in . crates/windows; do
 done
 
 echo "== Prose"
-# The English of the documentation and of the comments, as .vale.ini describes.
+# The English of the documentation and of the comments, as .vale.ini describes. Vale 3.27
+# and later read the comments in code through grammars that `vale sync` downloads once.
+if [ ! -d .vale/styles/config/grammars ] &&
+    vale --version | awk '{ split($3, v, "."); exit !(v[1] > 3 || (v[1] == 3 && v[2] >= 27)) }'; then
+    vale sync
+fi
 git ls-files -z '*.md' '*.rs' '*.cpp' '*.h' '*.py' '*.qml' '*.ps1' ':(exclude,glob)third_party/*/**' | xargs -0 vale --no-wrap
 
 echo "== Man page"

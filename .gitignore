@@ -581,4 +581,7 @@ FodyWeavers.xsd
 /TODO.md
 /AGENTS.md
 
+# The grammars of Vale 3.27 and later, which vale sync downloads
+/.vale/styles/config/grammars/
+
 # End of custom ignore block
