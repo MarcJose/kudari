@@ -57,6 +57,15 @@ Window {
     onVisibleChanged: {
         if (visible) {
             app.afterShow();
+        } else if (app.windowVisible) {
+            // KWin closes the window when a screen is unplugged or switched off, also one
+            // the window is not on. Once that holds, the next shortcut has to show it again.
+            Qt.callLater(root.checkLost);
+        }
+    }
+    function checkLost() {
+        if (!visible && app.windowVisible) {
+            app.windowLost();
         }
     }
     // F3 only belongs to the search while it is open; programs such as `mc` use it, too.
