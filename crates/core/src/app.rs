@@ -239,6 +239,10 @@ pub struct App {
     cell: (f64, f64),
     /// The tab a context menu was opened on; its actions apply to that session.
     menu_session: Option<MenuSession>,
+    /// The terminal that got the keyboard last. Only a change of the active terminal moves
+    /// the keyboard on its own, so that output, a shell ending in another tab or a call over
+    /// D-Bus do not take it from the search field or from a tab being renamed.
+    focused: std::cell::Cell<Option<TerminalId>>,
     /// Where new terminals start.
     pending_directories: Vec<(TerminalId, Option<PathBuf>)>,
     /// The shells chosen for terminals; a split starts the shell of the terminal it splits.
@@ -279,6 +283,7 @@ impl App {
             area: (0, 0),
             cell: (1.0, 1.0),
             menu_session: None,
+            focused: std::cell::Cell::new(None),
             pending_directories: Vec::new(),
             shells: BTreeMap::new(),
             running: BTreeSet::new(),
@@ -531,15 +536,21 @@ impl App {
         actions
     }
 
+    /// Gives the active terminal the keyboard.
     fn focus_active(&self) -> Vec<Effect> {
-        self.active_terminal().map(Effect::Focus).into_iter().collect()
+        let active = self.active_terminal();
+        self.focused.set(active);
+        active.map(Effect::Focus).into_iter().collect()
     }
 
-    /// Publishes the model and gives the active terminal the keyboard.
+    /// Publishes the model, and gives the active terminal the keyboard if another one is
+    /// active now.
     #[must_use]
     pub fn refresh(&self) -> Vec<Effect> {
         let mut effects = vec![Effect::Publish];
-        effects.extend(self.focus_active());
+        if self.active_terminal() != self.focused.get() {
+            effects.extend(self.focus_active());
+        }
         effects
     }
 
@@ -722,7 +733,14 @@ impl App {
     }
 
     /// The answer to a question. Questions about sessions that are gone meanwhile do nothing.
+    /// The answer to a question. The terminal gets the keyboard back from the question.
     pub fn answer(&mut self, id: u32, accepted: bool) -> Vec<Effect> {
+        let mut effects = self.answered(id, accepted);
+        effects.extend(self.focus_active());
+        effects
+    }
+
+    fn answered(&mut self, id: u32, accepted: bool) -> Vec<Effect> {
         let Some(pending) = self.questions.remove(&id).filter(|_| accepted) else {
             return Vec::new();
         };
@@ -1045,6 +1063,8 @@ impl App {
 
     pub fn activate_terminal(&mut self, terminal: TerminalId) -> Vec<Effect> {
         self.stack.set_active_terminal(terminal);
+        // It has the keyboard already: the user clicked it.
+        self.focused.set(self.active_terminal());
         vec![Effect::Publish]
     }
 
@@ -1257,8 +1277,10 @@ impl App {
     }
 
     /// A dialog of the front end closed.
-    pub fn dialog_closed(&mut self) {
+    pub fn dialog_closed(&mut self) -> Vec<Effect> {
         self.focus_toggle_lock = true;
+        // The terminal gets the keyboard back from the dialog.
+        self.focus_active()
     }
 
     /// A tab menu opened for a session, whose actions then apply to it.
@@ -1403,6 +1425,24 @@ mod tests {
         app
     }
 
+    /// The effects without the keyboard going back to the terminal, which every answer ends
+    /// with.
+    fn unfocused(effects: Vec<Effect>) -> Vec<Effect> {
+        effects
+            .into_iter()
+            .filter(|effect| !matches!(effect, Effect::Focus(_)))
+            .collect()
+    }
+
+    #[test]
+    fn an_answered_question_gives_the_keyboard_back() {
+        let mut app = fresh();
+        let terminal = app.active_terminal().unwrap();
+        let asked = question(&app.ask_import()).unwrap();
+        assert_eq!(app.answer(asked.id, false), [Effect::Focus(terminal)]);
+        assert_eq!(app.dialog_closed(), [Effect::Focus(terminal)]);
+    }
+
     fn fresh() -> App {
         app_with(&[])
     }
@@ -1527,13 +1567,16 @@ mod tests {
         let asked = question(&effects).expect("asks");
         assert_eq!(asked.confirm, Confirm::Close);
         assert!(asked.text.contains("Close this session anyway?"));
-        assert!(app.answer(asked.id, false).is_empty());
+        assert!(unfocused(app.answer(asked.id, false)).is_empty());
         assert!(app.stack().session(second).is_some());
         let asked = question(&app.remove_session(second)).unwrap();
-        let closed = app.answer(asked.id, true);
+        let closed = unfocused(app.answer(asked.id, true));
         assert!(closed.iter().any(|effect| matches!(effect, Effect::Stop(_))));
         assert!(app.stack().session(second).is_none());
-        assert!(app.answer(asked.id, true).is_empty(), "an answer counts once");
+        assert!(
+            unfocused(app.answer(asked.id, true)).is_empty(),
+            "an answer counts once"
+        );
         assert!(app.remove_session(second).is_empty());
     }
 
@@ -1570,14 +1613,14 @@ mod tests {
         assert_eq!(asked.confirm, Confirm::Continue);
         assert!(asked.text.contains("line breaks"));
         assert_eq!(
-            app.answer(asked.id, true),
+            unfocused(app.answer(asked.id, true)),
             [Effect::Terminal {
                 terminal,
                 command: TerminalCommand::Paste("ls\nrm x\n".into())
             }]
         );
         let declined = question(&app.ask_paste(terminal, "ls\n".into())).unwrap();
-        assert!(app.answer(declined.id, false).is_empty());
+        assert!(unfocused(app.answer(declined.id, false)).is_empty());
     }
 
     #[test]
@@ -1586,9 +1629,9 @@ mod tests {
         let terminal = app.stack().active().unwrap().active_terminal;
         let asked = question(&app.ask_paste(terminal, "ls\n".into())).unwrap();
         let _ = app.terminal_toggled(Monitor::Keyboard, terminal, true);
-        assert!(app.answer(asked.id, true).is_empty());
+        assert!(unfocused(app.answer(asked.id, true)).is_empty());
         let asked = question(&app.ask_paste(99, "ls\n".into())).unwrap();
-        assert!(app.answer(asked.id, true).is_empty());
+        assert!(unfocused(app.answer(asked.id, true)).is_empty());
     }
 
     #[test]
@@ -1597,9 +1640,9 @@ mod tests {
         let asked = question(&app.ask_import()).unwrap();
         assert_eq!(asked.confirm, Confirm::Continue);
         assert!(asked.text.contains("Yakuake"));
-        assert_eq!(app.answer(asked.id, true), [Effect::Import]);
+        assert_eq!(unfocused(app.answer(asked.id, true)), [Effect::Import]);
         let asked = question(&app.ask_import()).unwrap();
-        assert!(app.answer(asked.id, false).is_empty());
+        assert!(unfocused(app.answer(asked.id, false)).is_empty());
     }
 
     #[test]
@@ -1609,7 +1652,7 @@ mod tests {
         app.stack_mut().session_mut(session).unwrap().closable = false;
         let asked = question(&app.close_active_terminal(session)).unwrap();
         assert!(asked.text.contains("Close this terminal anyway?"));
-        app.answer(asked.id, true);
+        unfocused(app.answer(asked.id, true));
         assert_eq!(app.stack().session(session).map(|found| found.terminals.len()), Some(1));
         app.stack_mut().session_mut(session).unwrap().closable = true;
         let closed = app.close_active_terminal(session);
@@ -1653,7 +1696,7 @@ mod tests {
         let asked = question(&busy.quit()).unwrap();
         assert_eq!(asked.confirm, Confirm::Quit);
         assert!(asked.text.contains("Several sessions are open.") && asked.text.ends_with("Quit Kudari?"));
-        assert_eq!(busy.answer(asked.id, true), [Effect::Quit]);
+        assert_eq!(unfocused(busy.answer(asked.id, true)), [Effect::Quit]);
         let session = busy.stack().active_id().unwrap();
         busy.stack_mut().session_mut(session).unwrap().closable = false;
         assert!(
@@ -1879,6 +1922,32 @@ mod tests {
         assert_eq!(Monitor::named("bogus"), None);
     }
 
+    fn focuses(effects: &[Effect]) -> Vec<TerminalId> {
+        effects
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::Focus(terminal) => Some(*terminal),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn events_elsewhere_leave_the_keyboard_where_the_user_types() {
+        // The user types in the search field or renames a tab of the active session.
+        let mut app = fresh();
+        app.add_session(SessionType::Single, &Here);
+        let background = app.stack().active_id().unwrap();
+        let (user, _) = app.add_session(SessionType::Single, &Here);
+        let _ = app.refresh();
+        let shell = app.stack().session(background).unwrap().active_terminal;
+        app.started(&[shell]);
+        // The shell of another tab ends, or a script renames a tab over D-Bus.
+        assert_eq!(focuses(&app.terminal_exited(shell)), [] as [TerminalId; 0]);
+        app.stack_mut().set_tab_title(user, "renamed", true);
+        assert_eq!(focuses(&app.refresh()), [] as [TerminalId; 0]);
+    }
+
     fn question_id(effects: &[Effect]) -> Option<u32> {
         effects.iter().find_map(|effect| match effect {
             Effect::Ask(question) => Some(question.id),
@@ -1902,6 +1971,20 @@ mod tests {
         let _ = app.answer(id, true);
         let left = app.stack().session(session).unwrap().terminal_ids();
         assert_eq!(left, [other], "closed the wrong terminal");
+    }
+
+    #[test]
+    fn a_change_of_the_active_terminal_moves_the_keyboard() {
+        let mut app = fresh();
+        let first = app.stack().active_id().unwrap();
+        let (second, effects) = app.add_session(SessionType::Single, &Here);
+        let second_terminal = app.stack().session(second).unwrap().active_terminal;
+        assert_eq!(focuses(&effects), [second_terminal]);
+        let first_terminal = app.stack().session(first).unwrap().active_terminal;
+        assert_eq!(focuses(&app.raise(first)), [first_terminal]);
+        // The active terminal ends: its neighbour gets the keyboard.
+        app.started(&[first_terminal]);
+        assert_eq!(focuses(&app.terminal_exited(first_terminal)), [second_terminal]);
     }
 
     #[test]

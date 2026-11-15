@@ -1220,7 +1220,7 @@ impl qobject::Controller {
     pub fn dialog_active(mut self: Pin<&mut Self>, active: bool) {
         self.as_mut().set_dialog_open(active);
         if !active {
-            self.as_mut().rust_mut().app.dialog_closed();
+            self.update(App::dialog_closed);
         }
     }
 
