@@ -73,8 +73,13 @@ Item {
     }
 
     function search(backwards) {
-        searchBar.failed = searchField.text.length > 0
-            && !terminal.find(searchField.text, backwards, caseButton.checked, regexButton.checked, highlightButton.checked);
+        if (searchField.text.length === 0) {
+            // An empty field finds nothing, and the matches of the text before go.
+            terminal.clearSearch();
+            searchBar.failed = false;
+            return;
+        }
+        searchBar.failed = !terminal.find(searchField.text, backwards, caseButton.checked, regexButton.checked, highlightButton.checked);
     }
 
     // F3 and Shift+F3 work with the bar closed, too.
