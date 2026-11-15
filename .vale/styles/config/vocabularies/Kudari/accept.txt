@@ -17,6 +17,7 @@ signtool
 winget
 Sigstore
 Alacritty
+vte
 [Aa]utostart
 borderless
 [Cc]lippy
