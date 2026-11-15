@@ -196,6 +196,13 @@ hook SetSetting EditorCommand "$work/editor PATH:LINE"; hook SetSetting OpenLink
 run "clear; printf 'see notes.txt:12:3 end\n'"
 input click 130 8
 check "a plain click opens a file link in the editor" "$work/home/notes.txt:12|" "$(content "$work/edited")"
+# The link numbers find the file on a thread of their own, and a number opens it.
+rm -f "$work/edited"
+hook SetSetting UrlHintsModifier ctrl+alt; sleep 0.3
+run "clear; printf 'see notes.txt:12:3 end\n'"
+input key 29 56 2; sleep 0.5
+check "a link number opens the file it shows" "$work/home/notes.txt:12|" "$(content "$work/edited")"
+hook SetSetting UrlHintsModifier none; sleep 0.3
 hook SetSetting OpenLinksByClick false; hook SetSetting EditorCommand ""; sleep 0.3
 
 run "clear; cat > $work/pasted"

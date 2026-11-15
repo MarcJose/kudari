@@ -5,7 +5,9 @@
 //! search, links and their numbers, scrolling, and the mouse. Positions are cells; the front
 //! end turns pixels into cells and carries out the [`Effect`]s.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::{Dimensions, Scroll};
@@ -81,6 +83,8 @@ pub struct View {
     pressed_button: Option<MouseButton>,
     /// The cell of the last motion report, so a program learns about each cell once.
     last_motion: Option<Point>,
+    /// The links that the link numbers show, as [`hint_links`] found them.
+    hints: Vec<(String, i32, i32)>,
 }
 
 /// Whether the selection mode is on: it uses alacritty's vi mode.
@@ -192,6 +196,16 @@ pub fn scroll<T: EventListener>(term: &mut Term<T>, lines: i32) -> i32 {
 }
 
 impl View {
+    /// The links that the link numbers show and that the digits open.
+    #[must_use]
+    pub fn hints(&self) -> &[(String, i32, i32)] {
+        &self.hints
+    }
+
+    pub fn set_hints(&mut self, hints: Vec<(String, i32, i32)>) {
+        self.hints = hints;
+    }
+
     /// The matches of the search on the screen, for "Highlight All Matches".
     #[must_use]
     pub fn matches(&self) -> &[Match] {
@@ -218,9 +232,9 @@ impl View {
         let hints_held = !options.url_hints_modifiers.is_empty() && modifiers.held() == options.url_hints_modifiers;
         let mut effects = vec![Effect::Hints(hints_held)];
         if let (true, Key::Character(digit @ '1'..='9')) = (hints_held, key) {
-            let links = links_on_screen(term, (context.directory)().as_deref());
+            // The numbers that are shown, not a new look at the files under the lock.
             let index = digit as usize - '1' as usize;
-            if let Some(link) = pick_hint(&links, index, options.reverse_url_hints) {
+            if let Some(link) = pick_hint(&self.hints, index, options.reverse_url_hints) {
                 effects.push(Effect::OpenLink(link.0.clone()));
                 effects.push(Effect::Hints(false));
                 return effects;
@@ -604,24 +618,76 @@ pub fn color_word(line: &str, column: usize) -> Option<&str> {
     valid.then_some(word)
 }
 
-/// Links on the screen, top to bottom, as `(target, screen line, column)`.
+/// A word on the screen that can be a link: a web address is one at once, a file only the
+/// file system can tell.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HintWord {
+    pub word: String,
+    pub url: Option<String>,
+    pub line: i32,
+    pub column: i32,
+}
+
+/// The words on the screen, top to bottom, for the link numbers. Reads no file, so it can
+/// run under the lock of the terminal.
 #[must_use]
-pub fn links_on_screen<T>(term: &Term<T>, directory: Option<&Path>) -> Vec<(String, i32, i32)> {
+pub fn hint_words<T>(term: &Term<T>) -> Vec<HintWord> {
     let offset = term.grid().display_offset() as i32;
-    let mut links = Vec::new();
+    let mut words = Vec::new();
     for screen_line in 0..term.screen_lines() as i32 {
         let row = &term.grid()[Line(screen_line - offset)];
         let text: String = (0..term.columns()).map(|column| row[Column(column)].c).collect();
         let mut column = 0;
         while let Some((start, end, word)) = next_word(&text, column) {
-            let target = url_in(&word).or_else(|| directory.and_then(|directory| existing_file(&word, directory)));
-            if let Some(target) = target {
-                links.push((target, screen_line, start as i32));
-            }
+            words.push(HintWord {
+                url: url_in(&word),
+                word,
+                line: screen_line,
+                column: start as i32,
+            });
             column = end;
         }
     }
+    words
+}
+
+/// The links among `words`, top to bottom, as `(target, screen line, column)`. `file` looks
+/// up the names that are no web address until `deadline`, each name once; those after it
+/// are left out. On a slow or hanging network drive a look can take seconds, so this runs
+/// on a thread of its own, without the lock of the terminal.
+pub fn hint_links(
+    words: &[HintWord],
+    deadline: Option<Instant>,
+    mut file: impl FnMut(&str) -> Option<String>,
+) -> Vec<(String, i32, i32)> {
+    let mut known: HashMap<&str, Option<String>> = HashMap::new();
+    let mut links = Vec::new();
+    for word in words {
+        let target = match &word.url {
+            Some(url) => Some(url.clone()),
+            None => match known.get(word.word.as_str()) {
+                Some(found) => found.clone(),
+                None if deadline.is_none_or(|deadline| Instant::now() < deadline) => {
+                    let found = file(&word.word);
+                    known.insert(&word.word, found.clone());
+                    found
+                }
+                None => None,
+            },
+        };
+        if let Some(target) = target {
+            links.push((target, word.line, word.column));
+        }
+    }
     links
+}
+
+/// Links on the screen, top to bottom, as `(target, screen line, column)`.
+#[must_use]
+pub fn links_on_screen<T>(term: &Term<T>, directory: Option<&Path>) -> Vec<(String, i32, i32)> {
+    hint_links(&hint_words(term), None, |word| {
+        directory.and_then(|directory| existing_file(word, directory))
+    })
 }
 
 fn next_word(line: &str, from: usize) -> Option<(usize, usize, String)> {
@@ -689,7 +755,8 @@ fn url_at(line: &str, index: usize) -> Option<String> {
 
 /// Resolves a word to an existing file. Text printed by a program must not start other
 /// programs through a click, so executables and desktop entries do not count.
-fn existing_file(word: &str, directory: &Path) -> Option<String> {
+#[must_use]
+pub fn existing_file(word: &str, directory: &Path) -> Option<String> {
     let word = word.trim_end_matches(['.', ',', ';', ')', ']']);
     let name = word.split(':').next().filter(|name| !name.is_empty())?;
     // Even looking at a file on a share would make Windows log in to its server.
@@ -1217,6 +1284,8 @@ mod tests {
             view.key(&mut term, Key::Other, held, "", &context),
             [Effect::Hints(true)]
         );
+        // The terminal item shows the numbers and hands their links to the view.
+        view.set_hints(links_on_screen(&term, None));
         assert_eq!(
             view.key(&mut term, Key::Character('2'), held, "", &context),
             [
@@ -1229,6 +1298,89 @@ mod tests {
         let effects = view.key(&mut term, Key::Character('3'), held, "3", &context);
         assert_eq!(effects.first(), Some(&Effect::Hints(true)));
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::OpenLink(_))));
+    }
+
+    #[test]
+    fn a_number_opens_the_link_it_shows_without_looking_at_files() {
+        let mut term = term_with("notes.txt here");
+        let mut view = View::default();
+        let options = Options {
+            url_hints_modifiers: Modifiers::ALT,
+            ..Options::default()
+        };
+        // Looking at the directory is what hung on a network drive.
+        let looked = std::cell::Cell::new(false);
+        let directory = || {
+            looked.set(true);
+            None
+        };
+        let context = context(&options, true, &directory);
+        view.set_hints(vec![("/srv/notes.txt".into(), 0, 0)]);
+        assert_eq!(
+            view.key(&mut term, Key::Character('1'), Modifiers::ALT, "", &context),
+            [
+                Effect::Hints(true),
+                Effect::OpenLink("/srv/notes.txt".into()),
+                Effect::Hints(false)
+            ]
+        );
+        assert!(!looked.get(), "the number looked at the files again");
+    }
+
+    fn word(word: &str, line: i32) -> HintWord {
+        HintWord {
+            word: word.to_string(),
+            url: url_in(word),
+            line,
+            column: 0,
+        }
+    }
+
+    #[test]
+    fn slow_lookups_of_files_stop_at_the_deadline() {
+        let mut words: Vec<HintWord> = (0..20).map(|line| word(&format!("file{line}"), line)).collect();
+        words.push(word("https://kde.org", 20));
+        let looks = std::cell::Cell::new(0);
+        let started = Instant::now();
+        let links = hint_links(&words, Some(started + std::time::Duration::from_millis(100)), |name| {
+            looks.set(looks.get() + 1);
+            // A network drive that takes 40 ms for each file.
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            Some(format!("/remote/{name}"))
+        });
+        assert!(looks.get() <= 4, "{} looks", looks.get());
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(400),
+            "{:?}",
+            started.elapsed()
+        );
+        // The web address after the deadline still counts: it needs no look.
+        assert_eq!(links.last(), Some(&("https://kde.org".to_string(), 20, 0)));
+        assert_eq!(links.len(), looks.get() + 1);
+    }
+
+    #[test]
+    fn each_name_is_looked_up_once() {
+        let words: Vec<HintWord> = (0..50).map(|line| word("notes.txt", line)).collect();
+        let looks = std::cell::Cell::new(0);
+        let links = hint_links(&words, None, |name| {
+            looks.set(looks.get() + 1);
+            Some(name.to_string())
+        });
+        assert_eq!(looks.get(), 1);
+        assert_eq!(links.len(), 50);
+    }
+
+    #[test]
+    fn the_words_for_the_numbers_need_no_files() {
+        let term = term_with("see https://a.org/x\r\nnotes.txt:3 x");
+        let words = hint_words(&term);
+        assert_eq!(
+            words.iter().map(|word| word.word.as_str()).collect::<Vec<_>>(),
+            ["see", "https://a.org/x", "notes.txt:3", "x"]
+        );
+        assert_eq!(words[1].url.as_deref(), Some("https://a.org/x"));
+        assert_eq!((words[2].line, words[2].column), (1, 0));
     }
 
     #[test]
