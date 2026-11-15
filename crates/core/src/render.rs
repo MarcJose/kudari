@@ -174,10 +174,12 @@ fn underline_rects(geometry: &Geometry, column: i32, line: i32, cells: f64, flag
 }
 
 /// The rectangles a cursor of this shape fills.
-fn cursor_rects(geometry: &Geometry, column: i32, line: i32, shape: CursorShape) -> Vec<Rect> {
+/// The shapes of the cursor over `cells` cells: two on a wide character, so that its glyph
+/// shows whole.
+fn cursor_rects(geometry: &Geometry, column: i32, line: i32, cells: f64, shape: CursorShape) -> Vec<Rect> {
     let x = geometry.origin_x + f64::from(column) * geometry.cell_width;
     let y = geometry.origin_y + f64::from(line) * geometry.cell_height;
-    let (w, h) = (geometry.cell_width, geometry.cell_height);
+    let (w, h) = (cells * geometry.cell_width, geometry.cell_height);
     let rect = |x, y, width, height| Rect { x, y, width, height };
     match shape {
         CursorShape::Block => vec![rect(x, y, w, h)],
@@ -320,7 +322,11 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             scheme.background,
             fade,
         );
-        for rect in cursor_rects(geometry, column, line, shape) {
+        let cells = match cursor_glyph {
+            Some((_, flags)) if flags.contains(Flags::WIDE_CHAR) => 2.0,
+            _ => 1.0,
+        };
+        for rect in cursor_rects(geometry, column, line, cells, shape) {
             fill(rect, color, &mut paints);
         }
         if shape == CursorShape::Block
@@ -457,6 +463,23 @@ mod tests {
     }
 
     #[test]
+    fn the_block_cursor_covers_a_wide_character_whole() {
+        // 你好 and the cursor moved back onto 好.
+        let scheme = crate::colors::active();
+        let term = term_with("\u{4f60}\u{597d}\x1b[2D");
+        let paints = frame(&term, &Options::default(), &scene(&scheme, &[], &[]));
+        let cursor = fills(&paints)
+            .into_iter()
+            .find(|(_, color)| *color == scheme.foreground)
+            .map(|(rect, _)| rect);
+        assert_eq!(cursor.map(|rect| rect.width), Some(2.0 * GEOMETRY.cell_width));
+        assert_eq!(
+            cursor_rects(&GEOMETRY, 2, 0, 2.0, CursorShape::Underline)[0].width,
+            2.0 * GEOMETRY.cell_width
+        );
+    }
+
+    #[test]
     fn geometry_places_cells_on_the_grid() {
         assert_eq!(GEOMETRY.cell_rect(1, 2, 2.0), rect(14.0, 42.0, 20.0, 20.0));
         assert_eq!(GEOMETRY.baseline(1, 2), (14, 57));
@@ -500,18 +523,18 @@ mod tests {
     #[test]
     fn cursors_fill_their_shape() {
         assert_eq!(
-            cursor_rects(&GEOMETRY, 1, 0, CursorShape::Block),
+            cursor_rects(&GEOMETRY, 1, 0, 1.0, CursorShape::Block),
             vec![rect(14.0, 2.0, 10.0, 20.0)]
         );
         assert_eq!(
-            cursor_rects(&GEOMETRY, 1, 0, CursorShape::Underline),
+            cursor_rects(&GEOMETRY, 1, 0, 1.0, CursorShape::Underline),
             vec![rect(14.0, 20.0, 10.0, 2.0)]
         );
         assert_eq!(
-            cursor_rects(&GEOMETRY, 1, 0, CursorShape::Beam),
+            cursor_rects(&GEOMETRY, 1, 0, 1.0, CursorShape::Beam),
             vec![rect(14.0, 2.0, 2.0, 20.0)]
         );
-        let hollow = cursor_rects(&GEOMETRY, 1, 0, CursorShape::HollowBlock);
+        let hollow = cursor_rects(&GEOMETRY, 1, 0, 1.0, CursorShape::HollowBlock);
         assert_eq!(hollow.len(), 4);
         let thin = |length: f64| (length - 1.0).abs() < f64::EPSILON;
         assert!(hollow.iter().all(|rect| thin(rect.width) || thin(rect.height)));
