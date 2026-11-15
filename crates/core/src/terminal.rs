@@ -18,7 +18,7 @@ use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::{Config, Term, TermMode};
+use alacritty_terminal::term::{Config, MIN_COLUMNS, Term, TermMode};
 use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::{CursorStyle, Handler, Processor, StdSyncHandler};
 
@@ -183,9 +183,16 @@ pub fn grid_size(width: i32, height: i32, cell_width: f64, cell_height: f64) -> 
     let columns = (f64::from(width) - scrollbar_space() - 2.0 * margin_x) / cell_width;
     let lines = (f64::from(height) - 2.0 * margin_y) / cell_height;
     (
-        (columns as i32).clamp(1, 4096) as u16,
+        least_columns((columns as i32).clamp(1, 4096) as u16),
         (lines as i32).clamp(1, 4096) as u16,
     )
+}
+
+/// At least the columns that `alacritty_terminal` needs: with fewer, it wraps a line with a
+/// wide character again and again when it shrinks, and the window freezes while the memory runs out.
+/// A pane that narrow cuts off the second column, which does no harm.
+fn least_columns(columns: u16) -> u16 {
+    columns.max(MIN_COLUMNS as u16)
 }
 
 #[derive(Clone)]
@@ -276,6 +283,7 @@ impl Backend {
         working_directory: Option<PathBuf>,
         shell: Option<&str>,
     ) -> Result<Arc<Self>, String> {
+        let columns = least_columns(columns);
         let proxy = Proxy {
             id,
             repaint_queued: Arc::default(),
@@ -436,6 +444,7 @@ impl Backend {
     }
 
     pub fn resize(&self, columns: u16, lines: u16, cell_width: u16, cell_height: u16) {
+        let columns = least_columns(columns);
         let mut term = self.term.lock();
         if term.columns() == usize::from(columns) && term.screen_lines() == usize::from(lines) {
             return;
@@ -785,5 +794,27 @@ mod tests {
     #[test]
     fn grid_matches_konsole_for_a_quad_pane() {
         assert_eq!(grid_size(574, 173, 8.0, 15.0), (68, 11));
+    }
+
+    #[test]
+    fn the_narrowest_pane_has_the_columns_the_emulator_needs() {
+        // A pane dragged to its least width of 40 pixels, with the scroll bar.
+        assert_eq!(grid_size(40, 100, 9.0, 18.0).0, MIN_COLUMNS as u16);
+        assert_eq!(grid_size(0, 100, 9.0, 18.0).0, MIN_COLUMNS as u16);
+        assert_eq!(least_columns(1), 2);
+        assert_eq!(least_columns(80), 80);
+    }
+
+    #[test]
+    fn shrinking_with_a_wide_character_in_the_history_comes_back() {
+        // An emoji in the prompt and CJK in the output, and the pane as narrow as it gets.
+        let mut term = term_with("\u{1f680} ready\n日本語のテキスト\nascii\n$ ", 40, 3, 100);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            term.resize(TermSize::new(usize::from(least_columns(1)), 3));
+            let _ = sender.send(term.columns());
+        });
+        let columns = receiver.recv_timeout(std::time::Duration::from_secs(2));
+        assert_eq!(columns, Ok(MIN_COLUMNS), "the resize did not come back");
     }
 }
