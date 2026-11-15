@@ -113,9 +113,20 @@ fn mouse_report<T>(term: &Term<T>, event: MouseEvent, modifiers: Modifiers, poin
     input::mouse_report(*term.mode(), event, modifiers, point.column.0, line.max(0) as usize).map(Effect::Write)
 }
 
+/// Whether a cell is on the grid as it is now. A point from before the program switched to
+/// the alternate screen or cleared the scrollback can be outside it, and reading it there
+/// would end Kudari with all terminals.
+fn on_grid<T>(term: &Term<T>, point: Point) -> bool {
+    let grid = term.grid();
+    (grid.topmost_line()..=grid.bottommost_line()).contains(&point.line) && point.column.0 < term.columns()
+}
+
 /// The link at a cell: a hyperlink the program set, a web address, or with `files` the path
 /// of an existing file. Only safe schemes count, and files that would start a program do not.
 pub fn link_at<T>(term: &Term<T>, point: Point, files: bool, context: &Context) -> Option<Link> {
+    if !on_grid(term, point) {
+        return None;
+    }
     let grid = term.grid();
     let columns = term.columns();
     let cell = &grid[point.line][point.column];
@@ -183,6 +194,9 @@ pub fn select_all<T>(term: &mut Term<T>) {
 
 /// The color named by the word at a cell, such as `#3daee9` or `tomato`.
 pub fn color_word_at<T>(term: &Term<T>, point: Point) -> Option<String> {
+    if !on_grid(term, point) {
+        return None;
+    }
     let line = &term.grid()[point.line];
     let text: String = (0..term.columns()).map(|column| line[Column(column)].c).collect();
     color_word(&text, point.column.0).map(str::to_string)
@@ -1201,6 +1215,53 @@ mod tests {
             let _ = trim_lines(&input, true, true);
             let _ = is_safe_link(&input, &OPTIONS.link_schemes);
         }
+    }
+
+    /// A terminal with more scrollback than the cache of `alacritty_terminal` keeps when it
+    /// clears it, and a point far up in it, as the mouse found it before the next output.
+    fn scrolled_back() -> (Term<VoidListener>, Point) {
+        use std::fmt::Write as _;
+
+        let mut lines = String::new();
+        for line in 0..1500 {
+            let _ = write!(lines, "#3daee9 https://kde.org/{line}\r\n");
+        }
+        (term_of(40, &lines), Point::new(Line(-20), Column(2)))
+    }
+
+    #[test]
+    fn a_point_from_before_the_alternate_screen_finds_nothing() {
+        use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        let (mut term, point) = scrolled_back();
+        let options = Options::default();
+        let context = context(&options, false, &nowhere);
+        let link = Point::new(point.line, Column(12));
+        assert_eq!(
+            link_at(&term, link, false, &context).map(|link| link.target),
+            Some("https://kde.org/1476".to_string())
+        );
+        assert_eq!(color_word_at(&term, point).as_deref(), Some("#3daee9"));
+        // less, vim or a dialog of apt switches to the alternate screen, which has no history.
+        Processor::<StdSyncHandler>::new().advance(&mut term, b"\x1b[?1049h");
+        assert_eq!(link_at(&term, link, false, &context), None);
+        assert_eq!(color_word_at(&term, point), None);
+    }
+
+    #[test]
+    fn a_point_from_before_the_scrollback_was_cleared_finds_nothing() {
+        use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        // clear sends CSI 3 J.
+        let (mut term, point) = scrolled_back();
+        Processor::<StdSyncHandler>::new().advance(&mut term, b"\x1b[3J");
+        let options = Options::default();
+        assert_eq!(link_at(&term, point, false, &context(&options, false, &nowhere)), None);
+        assert_eq!(color_word_at(&term, point), None);
+        // And a column past the edge of a terminal that got narrower.
+        let narrow = Point::new(Line(0), Column(term.columns()));
+        assert_eq!(color_word_at(&term, narrow), None);
+        assert_eq!(link_at(&term, narrow, false, &context(&options, false, &nowhere)), None);
     }
 
     fn context<'a>(

@@ -666,6 +666,35 @@ check "quitting ends the program" no "$(kill -0 "$kudari" 2>/dev/null && echo ye
 # Skins used to be images made at runtime; the bars are drawn now.
 check "no skin directory is created" "" "$(find "$XDG_RUNTIME_DIR" -maxdepth 1 -type d -name 'kudari-*' -print -quit)"
 
+# Started from the menu, the bus starts Kudari and activates it as soon as it has its name,
+# before its window exists. The window opens, and stays open where the start opens it anyway.
+early_activation() { # settings
+    rm -rf "$work/early"
+    mkdir -p "$work/early"
+    printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n%s' "$1" > "$work/early/kudarirc"
+    XDG_CONFIG_HOME="$work/early" "$binary" > "$work/early.log" 2>&1 &
+    early=$!
+    # Only listed: a call to a name nobody owns would start another Kudari.
+    tries=0
+    until qdbus6 2>/dev/null | grep -q 'io\.github\.marcjose\.kudari$'; do
+        tries=$((tries + 1))
+        if [ "$tries" -ge 500 ] || ! kill -0 "$early" 2>/dev/null; then
+            break
+        fi
+    done
+    gdbus call --session --dest "$service" --object-path /io/github/marcjose/kudari \
+        --method org.freedesktop.Application.Activate '@a{sv} {}' > /dev/null
+    sleep 3
+    state
+    hook Trigger file_quit
+    tries=0
+    while kill -0 "$early" 2>/dev/null && [ "$tries" -lt 50 ]; do sleep 0.1; tries=$((tries + 1)); done
+    kill -9 "$early" 2>/dev/null
+}
+check "activating Kudari while it starts opens the window" visible=1 "$(early_activation '')"
+check "activating it while it starts keeps a window open that the start opens" visible=1 \
+    "$(early_activation '[Behavior]\nOpenAfterStart=true\n')"
+
 # A first start: the welcome dialog keeps the shortcut and takes over the settings of Yakuake.
 mkdir "$work/first"
 printf '[Window]\nWidth=80\n' > "$work/first/yakuakerc"

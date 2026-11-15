@@ -372,27 +372,54 @@ pub fn drop_into(terminal: TerminalId, text: String, are_files: bool) {
     }
 }
 
-impl qobject::TerminalItem {
-    fn backend(&self) -> Option<std::sync::Arc<terminal::Backend>> {
-        terminal::backend(*self.terminal_id())
-    }
+/// The size of a terminal item and of its cells.
+#[derive(Clone, Copy)]
+struct Cells {
+    width: f64,
+    height: f64,
+    cell_width: f64,
+    cell_height: f64,
+}
 
-    /// Converts item coordinates into a grid cell and the side within it.
-    fn cell_at(&self, x: f64, y: f64) -> Option<(Point, Side)> {
-        let backend = self.backend()?;
-        let term = backend.term.lock();
-        let (cell_w, cell_h) = (*self.cell_width(), *self.cell_height());
-        let (origin_x, origin_y) = self.text_origin(term.columns(), term.screen_lines());
+impl Cells {
+    /// The cell at item coordinates, and the side within it. It has to come from the same
+    /// lock of `term` as what reads the cell: in between, the program can switch to the
+    /// alternate screen or clear the scrollback, and the point would be off the grid.
+    fn at<T>(self, term: &Term<T>, x: f64, y: f64) -> (Point, Side) {
+        let (columns, lines) = (term.columns(), term.screen_lines());
+        let (origin_x, origin_y) = terminal::text_origin(
+            self.width,
+            self.height,
+            columns as f64 * self.cell_width,
+            lines as f64 * self.cell_height,
+        );
         let (x, y) = (x - origin_x, y - origin_y);
-        let column = ((x / cell_w).floor().max(0.0) as usize).min(term.columns() - 1);
-        let line = ((y / cell_h).floor().max(0.0) as i32).min(term.screen_lines() as i32 - 1);
-        let side = if x / cell_w - (column as f64) < 0.5 {
+        let column = ((x / self.cell_width).floor().max(0.0) as usize).min(columns - 1);
+        let line = ((y / self.cell_height).floor().max(0.0) as i32).min(lines as i32 - 1);
+        let side = if x / self.cell_width - (column as f64) < 0.5 {
             Side::Left
         } else {
             Side::Right
         };
         let offset = term.grid().display_offset() as i32;
-        Some((Point::new(Line(line - offset), Column(column)), side))
+        (Point::new(Line(line - offset), Column(column)), side)
+    }
+}
+
+impl qobject::TerminalItem {
+    fn backend(&self) -> Option<std::sync::Arc<terminal::Backend>> {
+        terminal::backend(*self.terminal_id())
+    }
+
+    /// The size of the item and of its cells, to find cells under a terminal locked later.
+    fn cells(&self) -> Cells {
+        let size = self.size();
+        Cells {
+            width: size.width(),
+            height: size.height(),
+            cell_width: *self.cell_width(),
+            cell_height: *self.cell_height(),
+        }
     }
 
     /// Top left corner of the grid in item coordinates.
@@ -588,15 +615,15 @@ impl qobject::TerminalItem {
 
     fn mouse_press(mut self: Pin<&mut Self>, x: f64, y: f64, button: i32, clicks: i32, modifiers: i32) {
         let (button, modifiers) = (qt_input::button(button), qt_input::modifiers(modifiers));
-        let Some(cell) = self.as_ref().cell_at(x, y) else {
-            return;
-        };
+        let cells = self.as_ref().cells();
         let middle_paste = match self.middle_click_paste().to_string().as_str() {
             "none" => None,
             source => Some(source == "selection"),
         };
-        self.as_mut()
-            .handle(|view, term, context| view.press(term, cell, button, clicks, modifiers, middle_paste, context));
+        self.as_mut().handle(|view, term, context| {
+            let cell = cells.at(term, x, y);
+            view.press(term, cell, button, clicks, modifiers, middle_paste, context)
+        });
         if self.view.selecting() {
             self.as_mut().rust_mut().press_position = Some((x, y));
         }
@@ -604,25 +631,32 @@ impl qobject::TerminalItem {
 
     fn mouse_move(self: Pin<&mut Self>, x: f64, y: f64, modifiers: i32) {
         let modifiers = qt_input::modifiers(modifiers);
-        let Some(cell) = self.as_ref().cell_at(x, y) else {
-            return;
-        };
-        self.handle(|view, term, context| view.motion(term, cell, modifiers, context));
+        let cells = self.as_ref().cells();
+        self.handle(|view, term, context| {
+            let cell = cells.at(term, x, y);
+            view.motion(term, cell, modifiers, context)
+        });
     }
 
     fn mouse_release(mut self: Pin<&mut Self>, x: f64, y: f64, button: i32, modifiers: i32) {
         let (button, modifiers) = (qt_input::button(button), qt_input::modifiers(modifiers));
-        let point = self.as_ref().cell_at(x, y).map(|(point, _)| point);
+        let cells = self.as_ref().cells();
         let press = self.as_mut().rust_mut().press_position.take();
         let clicked = press.is_some_and(|(press_x, press_y)| (press_x - x).abs() < 3.0 && (press_y - y).abs() < 3.0);
         let auto_copy = *self.auto_copy();
-        self.handle(|view, term, context| view.release(term, point, button, modifiers, clicked, auto_copy, context));
+        self.handle(|view, term, context| {
+            let point = Some(cells.at(term, x, y).0);
+            view.release(term, point, button, modifiers, clicked, auto_copy, context)
+        });
     }
 
     fn wheel(self: Pin<&mut Self>, delta: i32, x: f64, y: f64) {
-        let point = self.as_ref().cell_at(x, y).map(|(point, _)| point);
+        let cells = self.as_ref().cells();
         let alternate_scrolling = *self.alternate_scrolling();
-        self.handle(|view, term, context| view.wheel(term, point, delta > 0, alternate_scrolling, context));
+        self.handle(|view, term, context| {
+            let point = Some(cells.at(term, x, y).0);
+            view.wheel(term, point, delta > 0, alternate_scrolling, context)
+        });
     }
 
     /// Scrolls the view and marks the lines that came in for a moment.
@@ -779,7 +813,6 @@ impl qobject::TerminalItem {
 
     /// The link under a point of the item.
     fn link(&self, x: f64, y: f64, files: bool) -> Option<view::Link> {
-        let (point, _) = self.cell_at(x, y)?;
         let backend = self.backend()?;
         let options = terminal::options().unwrap_or_default();
         let directory = || backend.working_directory();
@@ -789,21 +822,26 @@ impl qobject::TerminalItem {
             directory: &directory,
         };
         let term = backend.term.lock();
+        let (point, _) = self.cells().at(&term, x, y);
         view::link_at(&term, point, files, &context)
     }
 
     fn color_at(&self, x: f64, y: f64) -> QString {
-        let Some(((point, _), backend)) = self.cell_at(x, y).zip(self.backend()) else {
+        let Some(backend) = self.backend() else {
             return QString::default();
         };
-        let word = view::color_word_at(&backend.term.lock(), point);
+        let term = backend.term.lock();
+        let (point, _) = self.cells().at(&term, x, y);
+        let word = view::color_word_at(&term, point);
+        drop(term);
         word.map_or_else(QString::default, |word| kde::rk_color_from_text(&kde::qs(&word)))
     }
 
     fn selection_contains(&self, x: f64, y: f64) -> bool {
-        self.cell_at(x, y)
-            .zip(self.backend())
-            .is_some_and(|((point, _), backend)| view::selection_contains(&backend.term.lock(), point))
+        self.backend().is_some_and(|backend| {
+            let term = backend.term.lock();
+            view::selection_contains(&term, self.cells().at(&term, x, y).0)
+        })
     }
 
     fn selection_text(&self) -> QString {
