@@ -441,6 +441,22 @@ mod tests {
     }
 
     #[test]
+    fn bold_text_keeps_the_foreground_that_the_program_set() {
+        let scheme = crate::colors::active();
+        let term = term_with("\x1b]10;#00ff00\x07a\x1b[1mb");
+        let paints = frame(&term, &Options::default(), &scene(&scheme, &[], &[]));
+        let green = Rgb { r: 0, g: 255, b: 0 };
+        let colors: Vec<_> = texts(&paints)
+            .into_iter()
+            .map(|(text, color, _)| (text, color))
+            .collect();
+        assert!(
+            colors.contains(&("a", green)) && colors.contains(&("b", green)),
+            "{colors:?}"
+        );
+    }
+
+    #[test]
     fn geometry_places_cells_on_the_grid() {
         assert_eq!(GEOMETRY.cell_rect(1, 2, 2.0), rect(14.0, 42.0, 20.0, 20.0));
         assert_eq!(GEOMETRY.baseline(1, 2), (14, 57));
