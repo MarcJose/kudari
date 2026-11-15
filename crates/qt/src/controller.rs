@@ -14,7 +14,7 @@
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::Instant;
 
 use cxx_qt::{CxxQtThread, CxxQtType, Threading};
@@ -322,15 +322,41 @@ pub mod qobject {
 
 static THREAD: OnceLock<CxxQtThread<qobject::Controller>> = OnceLock::new();
 
+type Action = Box<dyn FnOnce(Pin<&mut qobject::Controller>) + Send>;
+
+/// What was queued before the controller started. D-Bus answers from the start of the
+/// program, before QML has made the controller, and the bus activates Kudari at once when
+/// the menu of the desktop starts it.
+struct Waiting {
+    started: bool,
+    actions: Vec<Action>,
+}
+
+static WAITING: Mutex<Waiting> = Mutex::new(Waiting {
+    started: false,
+    actions: Vec::new(),
+});
+
 thread_local! {
     static INSTANCE: Cell<*mut qobject::Controller> = const { Cell::new(std::ptr::null_mut()) };
 }
 
-/// Runs `action` on the Qt thread with the controller.
+/// Runs `action` on the Qt thread with the controller, once it has started.
 pub fn queue(action: impl FnOnce(Pin<&mut qobject::Controller>) + Send + 'static) {
-    if let Some(thread) = THREAD.get() {
-        let _ = thread.queue(action);
+    let mut waiting = WAITING.lock().unwrap_or_else(PoisonError::into_inner);
+    match THREAD.get() {
+        Some(thread) if waiting.started => {
+            drop(waiting);
+            let _ = thread.queue(action);
+        }
+        _ => waiting.actions.push(Box::new(action)),
     }
+}
+
+/// Whether the controller has started, with its first session and, if the settings say so,
+/// its window.
+pub fn started() -> bool {
+    WAITING.lock().unwrap_or_else(PoisonError::into_inner).started
 }
 
 /// Runs `action` right away. Must be called on the Qt thread.
@@ -617,6 +643,14 @@ impl qobject::Controller {
 
     fn start(self: Pin<&mut Self>) {
         self.update(App::start);
+        // What came before runs after the start, on the next turn of the event loop.
+        let mut waiting = WAITING.lock().unwrap_or_else(PoisonError::into_inner);
+        waiting.started = true;
+        if let Some(thread) = THREAD.get() {
+            for action in waiting.actions.drain(..) {
+                let _ = thread.queue(action);
+            }
+        }
     }
 
     fn set_geometry(self: Pin<&mut Self>, width: i32, height: i32, cell_width: f64, cell_height: f64) {
@@ -1037,6 +1071,13 @@ impl qobject::Controller {
         self.as_mut().set_output_name(qs(&area.output));
         self.as_mut().set_work_width(area.width);
         self.as_mut().set_work_height(area.height);
+    }
+
+    /// Shows the window if it is hidden.
+    pub fn show_window(self: Pin<&mut Self>) {
+        if !self.app.window_visible() {
+            self.toggle_window();
+        }
     }
 
     /// `MainWindow::_toggleWindowState` for Wayland, where the compositor animates.
