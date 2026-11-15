@@ -40,7 +40,11 @@ const QT_TIMEOUT: Duration = Duration::from_secs(1);
 /// Runs `action` on the Qt thread and waits for the result, or gives `fallback` when the Qt
 /// thread did not start it within [`QT_TIMEOUT`]. Then it never runs, so a caller that hears
 /// of a failure can try again without the first attempt happening as well.
-pub fn ask<T: Send + 'static>(
+///
+/// The wait happens on a thread of its own. The thread of the connection stays free for
+/// other calls and for the replies the Qt thread may be waiting for, such as the one of
+/// `KWin` with the screen under the pointer; waiting there held up both for a second.
+pub async fn ask<T: Send + 'static>(
     action: impl FnOnce(std::pin::Pin<&mut Controller>) -> T + Send + 'static,
     fallback: T,
 ) -> T {
@@ -51,7 +55,66 @@ pub fn ask<T: Send + 'static>(
             let _ = sender.send(action(controller));
         }
     });
-    handoff.wait(&receiver, QT_TIMEOUT).unwrap_or(fallback)
+    let reply = Reply::default();
+    let answer = reply.clone();
+    let waiting = std::thread::Builder::new()
+        .name("kudari-ask".to_string())
+        .spawn(move || answer.fill(handoff.wait(&receiver, QT_TIMEOUT)));
+    if waiting.is_err() {
+        return fallback;
+    }
+    reply.await.unwrap_or(fallback)
+}
+
+/// The answer that a thread hands to an `async` caller, once it is there.
+struct Slot<T> {
+    /// Whether the thread is done, with or without an answer.
+    done: bool,
+    answer: Option<T>,
+    waker: Option<std::task::Waker>,
+}
+
+/// The answer that a thread hands to an `async` caller.
+struct Reply<T>(std::sync::Arc<Mutex<Slot<T>>>);
+
+impl<T> Default for Reply<T> {
+    fn default() -> Self {
+        Self(std::sync::Arc::new(Mutex::new(Slot {
+            done: false,
+            answer: None,
+            waker: None,
+        })))
+    }
+}
+
+impl<T> Clone for Reply<T> {
+    fn clone(&self) -> Self {
+        Self(std::sync::Arc::clone(&self.0))
+    }
+}
+
+impl<T> Reply<T> {
+    fn fill(&self, answer: Option<T>) {
+        let mut slot = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        slot.done = true;
+        slot.answer = answer;
+        if let Some(waker) = slot.waker.take() {
+            waker.wake();
+        }
+    }
+}
+
+impl<T> std::future::Future for Reply<T> {
+    type Output = Option<T>;
+
+    fn poll(self: std::pin::Pin<&mut Self>, context: &mut std::task::Context<'_>) -> std::task::Poll<Option<T>> {
+        let mut slot = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if slot.done {
+            return std::task::Poll::Ready(slot.answer.take());
+        }
+        slot.waker = Some(context.waker().clone());
+        std::task::Poll::Pending
+    }
 }
 
 fn ids(values: impl IntoIterator<Item = i32>) -> String {
@@ -86,11 +149,12 @@ struct Tabs;
 #[interface(name = "io.github.marcjose.kudari")]
 impl Tabs {
     #[zbus(name = "tabTitle")]
-    fn tab_title(&self, session: i32) -> String {
+    async fn tab_title(&self, session: i32) -> String {
         ask(
             move |c| c.stack().tab_title(session).unwrap_or_default().to_string(),
             String::new(),
         )
+        .await
     }
 
     #[zbus(name = "setTabTitle")]
@@ -102,15 +166,15 @@ impl Tabs {
     }
 
     #[zbus(name = "sessionAtTab")]
-    fn session_at_tab(&self, index: i32) -> i32 {
-        ask(move |c| c.stack().session_at_tab(index), -1)
+    async fn session_at_tab(&self, index: i32) -> i32 {
+        ask(move |c| c.stack().session_at_tab(index), -1).await
     }
 }
 
 struct Sessions;
 
-fn add(kind: SessionType) -> i32 {
-    ask(move |c| c.add_session(kind), -1)
+async fn add(kind: SessionType) -> i32 {
+    ask(move |c| c.add_session(kind), -1).await
 }
 
 /// Resolves `-1` to the active session, which scripts written for Yakuake rely on.
@@ -122,7 +186,7 @@ fn resolve(c: &Controller, session: i32) -> Option<i32> {
     }
 }
 
-fn session_flag(session: i32, read: impl FnOnce(&Session) -> bool + Send + 'static) -> bool {
+async fn session_flag(session: i32, read: impl FnOnce(&Session) -> bool + Send + 'static) -> bool {
     ask(
         move |c| {
             resolve(&c, session)
@@ -131,11 +195,12 @@ fn session_flag(session: i32, read: impl FnOnce(&Session) -> bool + Send + 'stat
         },
         false,
     )
+    .await
 }
 
 /// Typing into terminals over D-Bus runs code as the user, so it needs an explicit opt-in.
-fn require_remote_commands() -> zbus::fdo::Result<()> {
-    if ask(|c| c.allows_remote_commands(), false) {
+async fn require_remote_commands() -> zbus::fdo::Result<()> {
+    if ask(|c| c.allows_remote_commands(), false).await {
         Ok(())
     } else {
         Err(zbus::fdo::Error::AccessDenied(
@@ -144,8 +209,8 @@ fn require_remote_commands() -> zbus::fdo::Result<()> {
     }
 }
 
-fn terminal_flag(terminal: i32, read: impl FnOnce(&TerminalState) -> bool + Send + 'static) -> bool {
-    ask(move |c| c.stack().terminal_state(terminal).is_some_and(read), false)
+async fn terminal_flag(terminal: i32, read: impl FnOnce(&TerminalState) -> bool + Send + 'static) -> bool {
+    ask(move |c| c.stack().terminal_state(terminal).is_some_and(read), false).await
 }
 
 fn set_session_flag(session: i32, kind: &'static str, checked: bool) {
@@ -164,7 +229,7 @@ fn any_terminal(session: &Session, test: impl Fn(&TerminalState) -> bool) -> boo
     session.terminals.values().any(test)
 }
 
-fn grow(terminal: i32, direction: Direction, pixels: u32) -> i32 {
+async fn grow(terminal: i32, direction: Direction, pixels: u32) -> i32 {
     ask(
         move |mut c| {
             let (width, height) = c.area();
@@ -177,9 +242,10 @@ fn grow(terminal: i32, direction: Direction, pixels: u32) -> i32 {
         },
         -1,
     )
+    .await
 }
 
-fn split_terminal(terminal: i32, orientation: Orientation) -> i32 {
+async fn split_terminal(terminal: i32, orientation: Orientation) -> i32 {
     ask(
         move |mut c| {
             let new = c.as_mut().stack_mut().split(terminal, orientation).unwrap_or(-1);
@@ -188,9 +254,10 @@ fn split_terminal(terminal: i32, orientation: Orientation) -> i32 {
         },
         -1,
     )
+    .await
 }
 
-fn split_session(session: i32, orientation: Orientation) -> i32 {
+async fn split_session(session: i32, orientation: Orientation) -> i32 {
     ask(
         move |mut c| {
             let Some(terminal) = c.stack().session(session).map(|s| s.active_terminal) else {
@@ -202,28 +269,29 @@ fn split_session(session: i32, orientation: Orientation) -> i32 {
         },
         -1,
     )
+    .await
 }
 
 #[interface(name = "io.github.marcjose.kudari")]
 impl Sessions {
     #[zbus(name = "addSession")]
-    fn add_session(&self) -> i32 {
-        add(SessionType::Single)
+    async fn add_session(&self) -> i32 {
+        add(SessionType::Single).await
     }
 
     #[zbus(name = "addSessionTwoHorizontal")]
-    fn add_session_two_horizontal(&self) -> i32 {
-        add(SessionType::TwoHorizontal)
+    async fn add_session_two_horizontal(&self) -> i32 {
+        add(SessionType::TwoHorizontal).await
     }
 
     #[zbus(name = "addSessionTwoVertical")]
-    fn add_session_two_vertical(&self) -> i32 {
-        add(SessionType::TwoVertical)
+    async fn add_session_two_vertical(&self) -> i32 {
+        add(SessionType::TwoVertical).await
     }
 
     #[zbus(name = "addSessionQuad")]
-    fn add_session_quad(&self) -> i32 {
-        add(SessionType::Quad)
+    async fn add_session_quad(&self) -> i32 {
+        add(SessionType::Quad).await
     }
 
     #[zbus(name = "raiseSession")]
@@ -259,72 +327,72 @@ impl Sessions {
     }
 
     #[zbus(name = "splitSessionAuto")]
-    fn split_session_auto(&self, session: i32) -> i32 {
-        ask(move |c| c.split(session, None), -1)
+    async fn split_session_auto(&self, session: i32) -> i32 {
+        ask(move |c| c.split(session, None), -1).await
     }
 
     #[zbus(name = "splitSessionLeftRight")]
-    fn split_session_left_right(&self, session: i32) -> i32 {
-        split_session(session, Orientation::Horizontal)
+    async fn split_session_left_right(&self, session: i32) -> i32 {
+        split_session(session, Orientation::Horizontal).await
     }
 
     #[zbus(name = "splitSessionTopBottom")]
-    fn split_session_top_bottom(&self, session: i32) -> i32 {
-        split_session(session, Orientation::Vertical)
+    async fn split_session_top_bottom(&self, session: i32) -> i32 {
+        split_session(session, Orientation::Vertical).await
     }
 
     #[zbus(name = "splitTerminalLeftRight")]
-    fn split_terminal_left_right(&self, terminal: i32) -> i32 {
-        split_terminal(terminal, Orientation::Horizontal)
+    async fn split_terminal_left_right(&self, terminal: i32) -> i32 {
+        split_terminal(terminal, Orientation::Horizontal).await
     }
 
     #[zbus(name = "splitTerminalTopBottom")]
-    fn split_terminal_top_bottom(&self, terminal: i32) -> i32 {
-        split_terminal(terminal, Orientation::Vertical)
+    async fn split_terminal_top_bottom(&self, terminal: i32) -> i32 {
+        split_terminal(terminal, Orientation::Vertical).await
     }
 
     #[zbus(name = "tryGrowTerminalRight")]
-    fn try_grow_terminal_right(&self, terminal: i32, pixels: u32) -> i32 {
-        grow(terminal, Direction::Right, pixels)
+    async fn try_grow_terminal_right(&self, terminal: i32, pixels: u32) -> i32 {
+        grow(terminal, Direction::Right, pixels).await
     }
 
     #[zbus(name = "tryGrowTerminalLeft")]
-    fn try_grow_terminal_left(&self, terminal: i32, pixels: u32) -> i32 {
-        grow(terminal, Direction::Left, pixels)
+    async fn try_grow_terminal_left(&self, terminal: i32, pixels: u32) -> i32 {
+        grow(terminal, Direction::Left, pixels).await
     }
 
     #[zbus(name = "tryGrowTerminalTop")]
-    fn try_grow_terminal_top(&self, terminal: i32, pixels: u32) -> i32 {
-        grow(terminal, Direction::Up, pixels)
+    async fn try_grow_terminal_top(&self, terminal: i32, pixels: u32) -> i32 {
+        grow(terminal, Direction::Up, pixels).await
     }
 
     #[zbus(name = "tryGrowTerminalBottom")]
-    fn try_grow_terminal_bottom(&self, terminal: i32, pixels: u32) -> i32 {
-        grow(terminal, Direction::Down, pixels)
+    async fn try_grow_terminal_bottom(&self, terminal: i32, pixels: u32) -> i32 {
+        grow(terminal, Direction::Down, pixels).await
     }
 
     #[zbus(name = "activeSessionId")]
-    fn active_session_id(&self) -> i32 {
-        ask(|c| c.stack().active_id().unwrap_or(-1), -1)
+    async fn active_session_id(&self) -> i32 {
+        ask(|c| c.stack().active_id().unwrap_or(-1), -1).await
     }
 
     #[zbus(name = "activeTerminalId")]
-    fn active_terminal_id(&self) -> i32 {
-        ask(|c| c.stack().active().map_or(-1, |s| s.active_terminal), -1)
+    async fn active_terminal_id(&self) -> i32 {
+        ask(|c| c.stack().active().map_or(-1, |s| s.active_terminal), -1).await
     }
 
     #[zbus(name = "sessionIdList")]
-    fn session_id_list(&self) -> String {
-        ask(|c| ids(c.stack().sessions().map(|s| s.id)), String::new())
+    async fn session_id_list(&self) -> String {
+        ask(|c| ids(c.stack().sessions().map(|s| s.id)), String::new()).await
     }
 
     #[zbus(name = "terminalIdList")]
-    fn terminal_id_list(&self) -> String {
-        ask(|c| ids(c.stack().all_terminals()), String::new())
+    async fn terminal_id_list(&self) -> String {
+        ask(|c| ids(c.stack().all_terminals()), String::new()).await
     }
 
     #[zbus(name = "terminalIdsForSessionId")]
-    fn terminal_ids_for_session_id(&self, session: i32) -> String {
+    async fn terminal_ids_for_session_id(&self, session: i32) -> String {
         ask(
             move |c| {
                 c.stack()
@@ -333,16 +401,17 @@ impl Sessions {
             },
             "-1".to_string(),
         )
+        .await
     }
 
     #[zbus(name = "sessionIdForTerminalId")]
-    fn session_id_for_terminal_id(&self, terminal: i32) -> i32 {
-        ask(move |c| c.stack().session_for_terminal(terminal).unwrap_or(-1), -1)
+    async fn session_id_for_terminal_id(&self, terminal: i32) -> i32 {
+        ask(move |c| c.stack().session_for_terminal(terminal).unwrap_or(-1), -1).await
     }
 
     #[zbus(name = "runCommand")]
-    fn run_command(&self, command: String) -> zbus::fdo::Result<()> {
-        require_remote_commands()?;
+    async fn run_command(&self, command: String) -> zbus::fdo::Result<()> {
+        require_remote_commands().await?;
         queue(move |c| {
             if let Some(terminal) = c.stack().active().map(|s| s.active_terminal) {
                 c.run_command(terminal, &command);
@@ -352,15 +421,15 @@ impl Sessions {
     }
 
     #[zbus(name = "runCommandInTerminal")]
-    fn run_command_in_terminal(&self, terminal: i32, command: String) -> zbus::fdo::Result<()> {
-        require_remote_commands()?;
+    async fn run_command_in_terminal(&self, terminal: i32, command: String) -> zbus::fdo::Result<()> {
+        require_remote_commands().await?;
         queue(move |c| c.run_command(terminal, &command));
         Ok(())
     }
 
     #[zbus(name = "isSessionClosable")]
-    fn is_session_closable(&self, session: i32) -> bool {
-        session_flag(session, |s| s.closable)
+    async fn is_session_closable(&self, session: i32) -> bool {
+        session_flag(session, |s| s.closable).await
     }
 
     #[zbus(name = "setSessionClosable")]
@@ -376,13 +445,13 @@ impl Sessions {
     }
 
     #[zbus(name = "hasUnclosableSessions")]
-    fn has_unclosable_sessions(&self) -> bool {
-        ask(|c| c.stack().has_unclosable_sessions(), false)
+    async fn has_unclosable_sessions(&self) -> bool {
+        ask(|c| c.stack().has_unclosable_sessions(), false).await
     }
 
     #[zbus(name = "isSessionKeyboardInputEnabled")]
-    fn is_session_keyboard_input_enabled(&self, session: i32) -> bool {
-        session_flag(session, |s| all_terminals(s, |t| t.keyboard_input_enabled))
+    async fn is_session_keyboard_input_enabled(&self, session: i32) -> bool {
+        session_flag(session, |s| all_terminals(s, |t| t.keyboard_input_enabled)).await
     }
 
     #[zbus(name = "setSessionKeyboardInputEnabled")]
@@ -391,8 +460,8 @@ impl Sessions {
     }
 
     #[zbus(name = "isTerminalKeyboardInputEnabled")]
-    fn is_terminal_keyboard_input_enabled(&self, terminal: i32) -> bool {
-        terminal_flag(terminal, |t| t.keyboard_input_enabled)
+    async fn is_terminal_keyboard_input_enabled(&self, terminal: i32) -> bool {
+        terminal_flag(terminal, |t| t.keyboard_input_enabled).await
     }
 
     #[zbus(name = "setTerminalKeyboardInputEnabled")]
@@ -401,8 +470,8 @@ impl Sessions {
     }
 
     #[zbus(name = "isSessionMonitorActivityEnabled")]
-    fn is_session_monitor_activity_enabled(&self, session: i32) -> bool {
-        session_flag(session, |s| all_terminals(s, |t| t.monitor_activity))
+    async fn is_session_monitor_activity_enabled(&self, session: i32) -> bool {
+        session_flag(session, |s| all_terminals(s, |t| t.monitor_activity)).await
     }
 
     #[zbus(name = "setSessionMonitorActivityEnabled")]
@@ -411,8 +480,8 @@ impl Sessions {
     }
 
     #[zbus(name = "isTerminalMonitorActivityEnabled")]
-    fn is_terminal_monitor_activity_enabled(&self, terminal: i32) -> bool {
-        terminal_flag(terminal, |t| t.monitor_activity)
+    async fn is_terminal_monitor_activity_enabled(&self, terminal: i32) -> bool {
+        terminal_flag(terminal, |t| t.monitor_activity).await
     }
 
     #[zbus(name = "setTerminalMonitorActivityEnabled")]
@@ -421,18 +490,18 @@ impl Sessions {
     }
 
     #[zbus(name = "hasTerminalsWithMonitorActivityEnabled")]
-    fn has_terminals_with_monitor_activity_enabled(&self, session: i32) -> bool {
-        session_flag(session, |s| any_terminal(s, |t| t.monitor_activity))
+    async fn has_terminals_with_monitor_activity_enabled(&self, session: i32) -> bool {
+        session_flag(session, |s| any_terminal(s, |t| t.monitor_activity)).await
     }
 
     #[zbus(name = "hasTerminalsWithMonitorActivityDisabled")]
-    fn has_terminals_with_monitor_activity_disabled(&self, session: i32) -> bool {
-        session_flag(session, |s| any_terminal(s, |t| !t.monitor_activity))
+    async fn has_terminals_with_monitor_activity_disabled(&self, session: i32) -> bool {
+        session_flag(session, |s| any_terminal(s, |t| !t.monitor_activity)).await
     }
 
     #[zbus(name = "isSessionMonitorSilenceEnabled")]
-    fn is_session_monitor_silence_enabled(&self, session: i32) -> bool {
-        session_flag(session, |s| all_terminals(s, |t| t.monitor_silence))
+    async fn is_session_monitor_silence_enabled(&self, session: i32) -> bool {
+        session_flag(session, |s| all_terminals(s, |t| t.monitor_silence)).await
     }
 
     #[zbus(name = "setSessionMonitorSilenceEnabled")]
@@ -441,8 +510,8 @@ impl Sessions {
     }
 
     #[zbus(name = "isTerminalMonitorSilenceEnabled")]
-    fn is_terminal_monitor_silence_enabled(&self, terminal: i32) -> bool {
-        terminal_flag(terminal, |t| t.monitor_silence)
+    async fn is_terminal_monitor_silence_enabled(&self, terminal: i32) -> bool {
+        terminal_flag(terminal, |t| t.monitor_silence).await
     }
 
     #[zbus(name = "setTerminalMonitorSilenceEnabled")]
@@ -451,23 +520,23 @@ impl Sessions {
     }
 
     #[zbus(name = "hasTerminalsWithMonitorSilenceEnabled")]
-    fn has_terminals_with_monitor_silence_enabled(&self, session: i32) -> bool {
-        session_flag(session, |s| any_terminal(s, |t| t.monitor_silence))
+    async fn has_terminals_with_monitor_silence_enabled(&self, session: i32) -> bool {
+        session_flag(session, |s| any_terminal(s, |t| t.monitor_silence)).await
     }
 
     #[zbus(name = "hasTerminalsWithMonitorSilenceDisabled")]
-    fn has_terminals_with_monitor_silence_disabled(&self, session: i32) -> bool {
-        session_flag(session, |s| any_terminal(s, |t| !t.monitor_silence))
+    async fn has_terminals_with_monitor_silence_disabled(&self, session: i32) -> bool {
+        session_flag(session, |s| any_terminal(s, |t| !t.monitor_silence)).await
     }
 
     #[zbus(name = "hasTerminalsWithKeyboardInputEnabled")]
-    fn has_terminals_with_keyboard_input_enabled(&self, session: i32) -> bool {
-        session_flag(session, super::sessions::Session::has_keyboard_input_enabled)
+    async fn has_terminals_with_keyboard_input_enabled(&self, session: i32) -> bool {
+        session_flag(session, super::sessions::Session::has_keyboard_input_enabled).await
     }
 
     #[zbus(name = "hasTerminalsWithKeyboardInputDisabled")]
-    fn has_terminals_with_keyboard_input_disabled(&self, session: i32) -> bool {
-        session_flag(session, super::sessions::Session::has_keyboard_input_disabled)
+    async fn has_terminals_with_keyboard_input_disabled(&self, session: i32) -> bool {
+        session_flag(session, super::sessions::Session::has_keyboard_input_disabled).await
     }
 }
 
@@ -491,12 +560,12 @@ impl TestHooks {
         queue(move |_| crate::kde::rk_test_grab(&crate::kde::qs(&path)));
     }
 
-    fn state(&self) -> String {
-        ask(|_| crate::kde::rk_test_window_state().to_string(), String::new())
+    async fn state(&self) -> String {
+        ask(|_| crate::kde::rk_test_window_state().to_string(), String::new()).await
     }
 
     /// The background of the terminals, as `#rrggbb`.
-    fn terminal_background(&self) -> String {
+    async fn terminal_background(&self) -> String {
         ask(
             |_| {
                 let color = kudari_core::colors::active().background;
@@ -504,6 +573,7 @@ impl TestHooks {
             },
             String::new(),
         )
+        .await
     }
 
     fn trigger(&self, action: String) {
@@ -532,8 +602,8 @@ impl TestHooks {
     }
 
     /// The text of the open question about an AI agent, or nothing.
-    fn agent_question(&self) -> String {
-        ask(|_| crate::kde::rk_test_agent_question().to_string(), String::new())
+    async fn agent_question(&self) -> String {
+        ask(|_| crate::kde::rk_test_agent_question().to_string(), String::new()).await
     }
 
     /// Clicks Allow or Deny in the question about an AI agent.
@@ -542,8 +612,8 @@ impl TestHooks {
     }
 
     /// Whether the bar shows that an AI agent has access.
-    fn agent_access(&self) -> bool {
-        ask(|c| *c.agent_access(), false)
+    async fn agent_access(&self) -> bool {
+        ask(|c| *c.agent_access(), false).await
     }
 
     /// Like a click on the indicator in the bar.

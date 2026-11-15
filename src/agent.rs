@@ -58,12 +58,13 @@ fn to_dbus(error: agent::Error) -> Error {
 }
 
 /// Passes a request of the caller on to the core, on the Qt thread.
-fn request(header: &Header<'_>, request: Request) -> Result<String> {
+async fn request(header: &Header<'_>, request: Request) -> Result<String> {
     let caller = header.sender().map(ToString::to_string);
     ask(
         move |c| c.agent_request(caller.as_deref(), request).map_err(to_dbus),
         Err(Error::Failed("Kudari did not answer in time.".to_string())),
     )
+    .await
 }
 
 pub struct Agent;
@@ -71,18 +72,18 @@ pub struct Agent;
 /// The methods of [`Request`].
 #[interface(name = "io.github.marcjose.kudari.Agent")]
 impl Agent {
-    fn terminals(&self, #[zbus(header)] header: Header<'_>) -> Result<String> {
-        request(&header, Request::Terminals)
+    async fn terminals(&self, #[zbus(header)] header: Header<'_>) -> Result<String> {
+        request(&header, Request::Terminals).await
     }
 
     #[zbus(name = "readTerminal")]
-    fn read_terminal(&self, #[zbus(header)] header: Header<'_>, terminal: i32, lines: u32) -> Result<String> {
-        request(&header, Request::Read { terminal, lines })
+    async fn read_terminal(&self, #[zbus(header)] header: Header<'_>, terminal: i32, lines: u32) -> Result<String> {
+        request(&header, Request::Read { terminal, lines }).await
     }
 
     /// Returns what happened, in words for the agent.
     #[zbus(name = "sendText")]
-    fn send_text(
+    async fn send_text(
         &self,
         #[zbus(header)] header: Header<'_>,
         terminal: i32,
@@ -97,20 +98,21 @@ impl Agent {
                 execute,
             },
         )
+        .await
     }
 
     #[zbus(name = "sendKey")]
-    fn send_key(&self, #[zbus(header)] header: Header<'_>, terminal: i32, key: String) -> Result<()> {
-        request(&header, Request::Key { terminal, key }).map(drop)
+    async fn send_key(&self, #[zbus(header)] header: Header<'_>, terminal: i32, key: String) -> Result<()> {
+        request(&header, Request::Key { terminal, key }).await.map(drop)
     }
 
     #[zbus(name = "openSession")]
-    fn open_session(&self, #[zbus(header)] header: Header<'_>, title: String) -> Result<String> {
-        request(&header, Request::Open { title })
+    async fn open_session(&self, #[zbus(header)] header: Header<'_>, title: String) -> Result<String> {
+        request(&header, Request::Open { title }).await
     }
 
     #[zbus(name = "closeSession")]
-    fn close_session(&self, #[zbus(header)] header: Header<'_>, session: i32) -> Result<()> {
-        request(&header, Request::Close { session }).map(drop)
+    async fn close_session(&self, #[zbus(header)] header: Header<'_>, session: i32) -> Result<()> {
+        request(&header, Request::Close { session }).await.map(drop)
     }
 }
