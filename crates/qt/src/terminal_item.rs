@@ -12,12 +12,15 @@
 #![allow(clippy::float_cmp)]
 
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{ClearMode, Handler, Rgb};
-use cxx_qt::CxxQtType;
+use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::{QColor, QFont, QPen, QPoint, QPointF, QRectF, QString, QVariant};
 
 use crate::colors;
@@ -222,6 +225,7 @@ pub mod qobject {
     }
 
     impl cxx_qt::Initialize for TerminalItem {}
+    impl cxx_qt::Threading for TerminalItem {}
 }
 
 impl cxx_qt::Initialize for qobject::TerminalItem {
@@ -277,6 +281,12 @@ pub struct TerminalItemRust {
     view: View,
     /// Where the left button went down, to tell a click from a selection.
     press_position: Option<(f64, f64)>,
+    /// The words on the screen that the link numbers were found in.
+    hint_words: Vec<view::HintWord>,
+    /// Counts the looks for files among them, so that an old one is dropped.
+    hint_generation: u64,
+    /// A thread looks for files; on a drive that hangs it may never come back.
+    hint_looking: Arc<AtomicBool>,
 }
 
 impl Default for TerminalItemRust {
@@ -312,9 +322,15 @@ impl Default for TerminalItemRust {
             cursor_y: 0.0,
             view: View::default(),
             press_position: None,
+            hint_words: Vec::new(),
+            hint_generation: 0,
+            hint_looking: Arc::default(),
         }
     }
 }
+
+/// How long the files among the words of the link numbers may take to look up.
+const HINT_FILES_TIME: Duration = Duration::from_millis(100);
 
 /// Types text from the clipboard or a drop into a terminal as its shell expects pasted text:
 /// in brackets where it understands them, else after asking if the text would run commands.
@@ -897,7 +913,44 @@ impl qobject::TerminalItem {
         }
     }
 
-    fn paint_frame(self: Pin<&mut Self>, mut painter: Pin<&mut qobject::QPainter>) {
+    /// Looks for files among the words of the link numbers on a thread of its own, without
+    /// the lock of the terminal: on a slow or hanging network drive, a look can take seconds
+    /// or never end, and the window, the drawing and the program in the terminal must not
+    /// wait for it.
+    fn look_for_hint_files(mut self: Pin<&mut Self>, words: Vec<view::HintWord>, backend: Arc<terminal::Backend>) {
+        if self.hint_looking.swap(true, Ordering::AcqRel) {
+            // Still looking for older words: the next frame after it ends tries again.
+            self.as_mut().rust_mut().hint_words.clear();
+            return;
+        }
+        let generation = self.hint_generation + 1;
+        self.as_mut().rust_mut().hint_generation = generation;
+        let looking = Arc::clone(&self.hint_looking);
+        let thread = self.qt_thread();
+        let started = std::thread::Builder::new()
+            .name("kudari-hints".to_string())
+            .spawn(move || {
+                let directory = backend.working_directory();
+                let deadline = Instant::now() + HINT_FILES_TIME;
+                let links = view::hint_links(&words, Some(deadline), |word| {
+                    directory
+                        .as_deref()
+                        .and_then(|directory| view::existing_file(word, directory))
+                });
+                looking.store(false, Ordering::Release);
+                let _ = thread.queue(move |mut item| {
+                    if item.hint_generation == generation && *item.url_hints() {
+                        item.as_mut().rust_mut().view.set_hints(links);
+                    }
+                    item.update();
+                });
+            });
+        if started.is_err() {
+            self.hint_looking.store(false, Ordering::Release);
+        }
+    }
+
+    fn paint_frame(mut self: Pin<&mut Self>, mut painter: Pin<&mut qobject::QPainter>) {
         let scheme = colors::active();
         // A translucent background comes from the pane behind this item.
         if *self.opaque() {
@@ -918,13 +971,25 @@ impl qobject::TerminalItem {
             .as_ref()
             .map(|badge| (backend.local_title(&badge.format), badge));
         let fonts = Fonts::new(self.term_font(), &options);
-        let paints = {
+        let (paints, fresh_words) = {
             let term = backend.term.lock();
-            let hints = if *self.url_hints() {
-                view::links_on_screen(&term, backend.working_directory().as_deref())
+            // Only the words under the lock; whether they name files is looked up later.
+            let fresh_words = if *self.url_hints() {
+                Some(view::hint_words(&term)).filter(|words| *words != self.hint_words)
             } else {
-                Vec::new()
+                None
             };
+            if let Some(words) = &fresh_words {
+                // Web addresses at once, the files when the thread has found them.
+                let urls = view::hint_links(words, Some(Instant::now()), |_| None);
+                let mut item = self.as_mut().rust_mut();
+                item.view.set_hints(urls);
+                item.hint_words.clone_from(words);
+            } else if !*self.url_hints() && !self.hint_words.is_empty() {
+                let mut item = self.as_mut().rust_mut();
+                item.hint_words.clear();
+                item.view.set_hints(Vec::new());
+            }
             let (origin_x, origin_y) = self.as_ref().text_origin(term.columns(), term.screen_lines());
             let scene = render::Scene {
                 geometry: render::Geometry {
@@ -939,11 +1004,14 @@ impl qobject::TerminalItem {
                 focused: *self.focused(),
                 cursor_hidden: *self.cursor_hidden(),
                 cursor_fade: *self.cursor_fade(),
-                hints: &hints,
+                hints: self.view.hints(),
                 matches: self.view.matches(),
             };
-            render::frame(&term, &options, &scene)
+            (render::frame(&term, &options, &scene), fresh_words)
         };
+        if let Some(words) = fresh_words {
+            self.as_mut().look_for_hint_files(words, backend);
+        }
 
         painter.as_mut().set_font(&fonts.regular);
         if let Some((text, badge)) = badge.filter(|(text, _)| !text.is_empty()) {
