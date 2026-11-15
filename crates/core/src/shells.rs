@@ -10,8 +10,11 @@
 //! themselves.
 
 use std::fmt::Write as _;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::process::{Command, Stdio};
+use std::sync::{OnceLock, mpsc};
+use std::time::{Duration, Instant};
 
 use crate::command::Quoting;
 
@@ -78,7 +81,7 @@ impl System for Here {
     }
 
     fn distributions(&self, wsl: &Path) -> Option<Vec<u8>> {
-        let mut command = std::process::Command::new(wsl);
+        let mut command = Command::new(wsl);
         command.args(["--list", "--quiet"]);
         #[cfg(windows)]
         {
@@ -86,9 +89,56 @@ impl System for Here {
             // CREATE_NO_WINDOW: no console window flashes up.
             command.creation_flags(0x0800_0000);
         }
-        let output = command.stdin(std::process::Stdio::null()).output().ok()?;
-        output.status.success().then_some(output.stdout)
+        output_within(&mut command, WSL_TIMEOUT)
     }
+}
+
+/// How long `wsl.exe` may take to list the distributions. The first tab asks for the shells
+/// in the thread of the window, and a WSL service that hangs, as it can after hibernation,
+/// would freeze it; the list then has no distributions, and the other shells stay.
+const WSL_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// The standard output of `command` if it ends successfully within `timeout`. Otherwise it
+/// is killed, and there is none.
+fn output_within(command: &mut Command, timeout: Duration) -> Option<Vec<u8>> {
+    let deadline = Instant::now() + timeout;
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let (sender, receiver) = mpsc::channel();
+    // A thread of its own reads, so that waiting can end; it ends when the pipe closes.
+    let reading = child.stdout.take().and_then(|mut stdout| {
+        std::thread::Builder::new()
+            .name("kudari-shells".to_string())
+            .spawn(move || {
+                let mut output = Vec::new();
+                let _ = stdout.read_to_end(&mut output);
+                let _ = sender.send(output);
+            })
+            .ok()
+    });
+    let output = reading.and_then(|_| {
+        receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .ok()
+    });
+    let status = output.as_ref().and_then(|_| {
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
+                _ => break None,
+            }
+        }
+    });
+    if status.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    output.filter(|_| status.is_some_and(|status| status.success()))
 }
 
 /// The shells of Windows that `system` has, in the order a menu shows them.
@@ -333,6 +383,82 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+
+    #[cfg(unix)]
+    fn shell(script: &str) -> Command {
+        let mut command = Command::new("sh");
+        command.args(["-c", script]);
+        command
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_program_that_ends_in_time_gives_its_output() {
+        let output = output_within(&mut shell("printf 'Ubuntu\\nDebian\\n'"), Duration::from_secs(10));
+        assert_eq!(output.as_deref(), Some(&b"Ubuntu\nDebian\n"[..]));
+        assert_eq!(output_within(&mut shell("exit 1"), Duration::from_secs(10)), None);
+        assert_eq!(
+            output_within(&mut Command::new("/nonexistent/wsl.exe"), Duration::from_secs(10)),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_program_that_hangs_is_given_up_and_killed() {
+        // Hangs with and without output, like wsl.exe when its service does not answer.
+        for script in ["sleep 30", "echo Ubuntu; sleep 30", "exec 1>&-; sleep 30"] {
+            let started = Instant::now();
+            assert_eq!(
+                output_within(&mut shell(script), Duration::from_millis(300)),
+                None,
+                "{script}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "{script} took {:?}",
+                started.elapsed()
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_program_that_hangs_does_not_stay_behind() {
+        let marker = std::env::temp_dir().join(format!("kudari-shells-{}", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        let script = format!("echo $$ > {}; sleep 30", marker.display());
+        assert_eq!(output_within(&mut shell(&script), Duration::from_millis(300)), None);
+        let pid = std::fs::read_to_string(&marker).unwrap();
+        let _ = std::fs::remove_file(&marker);
+        // Killed and reaped: the process is gone, not a zombie.
+        assert!(
+            !Path::new(&format!("/proc/{}", pid.trim())).exists(),
+            "process {} is still there",
+            pid.trim()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_program_that_hangs_is_given_up_on_windows() {
+        let mut quick = Command::new("cmd");
+        quick.args(["/C", "echo Ubuntu"]);
+        assert_eq!(
+            output_within(&mut quick, Duration::from_secs(10)).as_deref(),
+            Some(&b"Ubuntu\r\n"[..])
+        );
+        // ping outlives the Command Prompt and keeps the pipe open, as helpers of wsl.exe can.
+        let mut hanging = Command::new("cmd");
+        hanging.args(["/C", "echo Ubuntu & ping -n 30 127.0.0.1 > NUL"]);
+        let started = Instant::now();
+        assert_eq!(output_within(&mut hanging, Duration::from_millis(500)), None);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
 
     /// A Windows with the given files and variables.
     struct Fake {

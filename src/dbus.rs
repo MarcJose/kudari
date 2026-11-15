@@ -571,7 +571,13 @@ struct Application;
 #[interface(name = "org.freedesktop.Application")]
 impl Application {
     fn activate(&self, _platform_data: std::collections::HashMap<String, zbus::OwnedVariant>) {
-        queue(super::controller::qobject::Controller::toggle_window);
+        // Started from the menu, the bus activates Kudari before it has started; that asks
+        // for the window, which a toggle after a start that opens it would close again.
+        if super::controller::started() {
+            queue(super::controller::qobject::Controller::toggle_window);
+        } else {
+            queue(super::controller::qobject::Controller::show_window);
+        }
     }
 }
 
