@@ -141,8 +141,10 @@ Item {
         id: terminal
 
         anchors.fill: parent
-        anchors.leftMargin: scrollBar.visible && pane.config.ScrollBarPosition === "left" ? scrollBar.width : 0
-        anchors.rightMargin: scrollBar.visible && pane.config.ScrollBarPosition !== "left" ? scrollBar.width : 0
+        // From the setting, not from scrollBar.visible: that turns false with a hidden tab, and
+        // the terminal would get more columns there and wrap again on every switch of tabs.
+        anchors.leftMargin: pane.config.ScrollBarPosition === "left" ? scrollBar.width : 0
+        anchors.rightMargin: pane.config.ScrollBarPosition !== "left" && pane.config.ScrollBarPosition !== "hidden" ? scrollBar.width : 0
         terminalId: pane.terminalId
         termFont: metrics.font
         cellWidth: Math.round(cellMetrics.advanceWidth)
