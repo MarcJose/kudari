@@ -489,7 +489,7 @@ impl Backend {
 
     /// The title of the terminal: the remote format while `ssh` runs, else `format`.
     pub fn title(&self, format: &str) -> String {
-        let remote = options().map(|options| options.remote_title_format).unwrap_or_default();
+        let remote = options().map_or_default(|options| options.remote_title_format);
         title::title(
             &*self.programs,
             self.working_directory(),

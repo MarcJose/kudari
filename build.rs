@@ -47,13 +47,11 @@ fn main() {
     // The parts of the settings pages of kudari-qt, from Kirigami Addons: they import the
     // directory qrc:/qml/form, which each front end fills with its own.
     println!("cargo:rerun-if-changed=qml/form");
-    let form = std::fs::read_dir("qml/form")
-        .map(|entries| {
-            let mut files: Vec<_> = entries.filter_map(Result::ok).map(|entry| entry.path()).collect();
-            files.sort();
-            files
-        })
-        .unwrap_or_default();
+    let form = std::fs::read_dir("qml/form").map_or_default(|entries| {
+        let mut files: Vec<_> = entries.filter_map(Result::ok).map(|entry| entry.path()).collect();
+        files.sort();
+        files
+    });
     let builder = CxxQtBuilder::new_qml_module(module)
         .qrc_resources(QResources::new().resource(QResource::new().prefix("/").files(form)))
         .files(["src/kde.rs"])

@@ -73,8 +73,7 @@ pub fn sequences(store: &dyn Store, name: &str) -> Vec<String> {
         return DEFAULT_SHORTCUTS
             .iter()
             .find(|(action, _)| *action == name)
-            .map(|(_, keys)| keys.iter().map(ToString::to_string).collect())
-            .unwrap_or_default();
+            .map_or_default(|(_, keys)| keys.iter().map(ToString::to_string).collect());
     }
     value
         .split(';')

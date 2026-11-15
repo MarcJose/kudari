@@ -213,7 +213,7 @@ impl Frontend for Windows {
     }
 
     fn highlight_color(&self) -> String {
-        self.palette(None).map(|palette| palette.highlight).unwrap_or_default()
+        self.palette(None).map_or_default(|palette| palette.highlight)
     }
 
     fn skins(&self) -> Vec<Skin> {

@@ -948,8 +948,7 @@ impl qobject::Controller {
     fn popup_drop_menu(&self, x: i32, y: i32, terminal: i32, paths: &QString) {
         let directory = terminal::backend(terminal)
             .and_then(|backend| backend.working_directory())
-            .map(|directory| directory.to_string_lossy().into_owned())
-            .unwrap_or_default();
+            .map_or_default(|directory| directory.to_string_lossy().into_owned());
         frontend().popup_drop_menu(x, y, terminal, &paths.to_string(), &directory);
     }
 
@@ -1048,18 +1047,16 @@ impl qobject::Controller {
 
     fn tab_menu_state(&self, session: SessionId) -> String {
         let found = self.app.stack().session(session);
-        let terminals: Vec<Value> = found
-            .map(|found| {
-                found
-                    .terminals
-                    .iter()
-                    .map(|(id, state)| {
-                        json!({"id": id, "keyboardDisabled": !state.keyboard_input_enabled,
+        let terminals: Vec<Value> = found.map_or_default(|found| {
+            found
+                .terminals
+                .iter()
+                .map(|(id, state)| {
+                    json!({"id": id, "keyboardDisabled": !state.keyboard_input_enabled,
                                "activity": state.monitor_activity, "silence": state.monitor_silence})
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+                })
+                .collect()
+        });
         let color = found.and_then(|found| found.color.clone()).unwrap_or_default();
         json!({ "terminals": terminals, "session": session, "color": color }).to_string()
     }
