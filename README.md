@@ -128,7 +128,7 @@ ZIP archive needs no installation: unpack it and start `kudari.exe`.
 
 ### From source
 
-Kudari needs Rust 1.95 or newer, CMake, Qt 6 and KDE Frameworks 6 with Layer Shell Qt. On
+Kudari needs Rust 1.100 or newer, CMake, Qt 6 and KDE Frameworks 6 with Layer Shell Qt. On
 Arch Linux, these are
 
 ```sh
@@ -175,7 +175,6 @@ licenses, among them `alacritty_terminal` under Apache-2.0. Kudari links Qt and 
 Frameworks dynamically, and they keep their own licenses.
 
 Kudari grew out of Yakuake and takes ideas from Konsole, and it needs neither of them. It
-contains no code, texts, translations or graphics of theirs any more: those parts were
-rewritten or replaced in 2026, as the history of the repository records. A few short
+contains no code, texts, translations or graphics of theirs. A few short
 labels, such as "Help" or "Enlarge Font", read the same, and the settings and the D-Bus
 interface stay compatible with Yakuake. `AUTHORS` and the About dialog thank both projects.

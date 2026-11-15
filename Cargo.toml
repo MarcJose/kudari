@@ -10,10 +10,9 @@ members = ["crates/core", "crates/qt", "crates/windows"]
 version = "0.2.0"
 edition = "2024"
 authors = ["Marc Jose <marc@hahn-jose.de>"]
-homepage = "https://github.com/MarcJose/kudari"
 repository = "https://github.com/MarcJose/kudari"
 license = "MIT"
-rust-version = "1.95"
+rust-version = "1.100"
 
 [workspace.dependencies]
 alacritty_terminal = "0.26"
@@ -34,7 +33,6 @@ authors.workspace = true
 description = "Drop-down terminal for KDE Plasma on Wayland, written in Rust"
 documentation = "https://github.com/MarcJose/kudari/wiki"
 readme = "README.md"
-homepage.workspace = true
 repository.workspace = true
 license.workspace = true
 keywords = ["linux", "terminal", "console"]
@@ -52,7 +50,7 @@ cxx-qt-lib-extras = "0.10"
 kudari-core.workspace = true
 kudari-qt.workspace = true
 serde_json.workspace = true
-zbus = "6.2"
+zbus = "6.3"
 
 [dev-dependencies]
 kudari-core = { workspace = true, features = ["fuzz"] }
@@ -66,6 +64,9 @@ test-hooks = ["kudari-qt/test-hooks"]
 
 [lints]
 workspace = true
+
+[workspace.lints.cargo]
+unused_dependencies = "warn"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -96,9 +97,13 @@ assert_is_empty = "allow"
 
 [profile.release]
 opt-level = 3
+debug = false
+strip = "symbols"
 lto = true
+panic = 'abort'
+incremental = false
 codegen-units = 1
-panic = "abort"
+rpath = false
 
 # Until cxx-qt publishes them, these crates carry two fixes for reproducible builds; see
 # third_party/README.md. Remove the section when a release contains both.

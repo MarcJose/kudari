@@ -7,7 +7,6 @@ description = "The part of Kudari that depends on no user interface and no platf
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-homepage.workspace = true
 repository.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -23,7 +22,7 @@ serde_json.workspace = true
 libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",

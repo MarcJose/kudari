@@ -449,11 +449,7 @@ impl App {
                 .stack
                 .active()
                 .map(|session| (session.layout(width, height), session.active_terminal)),
-            title: self
-                .stack
-                .active()
-                .map(|session| session.title.clone())
-                .unwrap_or_default(),
+            title: self.stack.active().map_or_default(|session| session.title.clone()),
             terminals: self.stack.all_terminals(),
             keyboard_disabled: terminal_states()
                 .filter(|(_, state)| !state.keyboard_input_enabled)
@@ -563,8 +559,7 @@ impl App {
         let terminals = self
             .stack
             .session(id)
-            .map(crate::sessions::Session::terminal_ids)
-            .unwrap_or_default();
+            .map_or_default(crate::sessions::Session::terminal_ids);
         if let Some(shell) = shell {
             self.shells
                 .extend(terminals.iter().map(|terminal| (*terminal, shell.to_string())));
@@ -655,8 +650,7 @@ impl App {
         let terminals = self
             .stack
             .session(session)
-            .map(crate::sessions::Session::terminal_ids)
-            .unwrap_or_default();
+            .map_or_default(crate::sessions::Session::terminal_ids);
         let mut effects: Vec<Effect> = terminals
             .into_iter()
             .map(|terminal| self.forget_terminal(terminal))
@@ -1048,7 +1042,7 @@ impl App {
         let session = self.context_session();
         let active = self.active_terminal();
         let (width, height) = (self.settings.width, self.settings.height);
-        let for_session = |action: &dyn Fn(SessionId) -> Vec<Effect>| session.map(action).unwrap_or_default();
+        let for_session = |action: &dyn Fn(SessionId) -> Vec<Effect>| session.map_or_default(action);
         let terminal = |command: TerminalCommand| {
             active
                 .map(|terminal| Effect::Terminal { terminal, command })
@@ -1296,8 +1290,7 @@ impl App {
             let terminals = self
                 .stack
                 .session(session)
-                .map(crate::sessions::Session::terminal_ids)
-                .unwrap_or_default();
+                .map_or_default(crate::sessions::Session::terminal_ids);
             for terminal in terminals {
                 effects.extend(self.restart_silence(terminal));
             }

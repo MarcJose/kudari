@@ -134,8 +134,7 @@ pub fn discover(system: &dyn System) -> Vec<Shell> {
     if system.is_file(&wsl) {
         let names = system
             .distributions(&wsl)
-            .map(|output| distributions(&output))
-            .unwrap_or_default();
+            .map_or_default(|output| distributions(&output));
         shells.extend(names.into_iter().map(|name| Shell {
             id: format!("wsl:{name}"),
             arguments: vec!["--distribution".to_string(), name.clone()],

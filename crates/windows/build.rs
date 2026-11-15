@@ -10,15 +10,13 @@ use cxx_qt_build::{CxxQtBuilder, QResource, QResources, QmlModule};
 fn embed_catalogues() {
     let po = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../po");
     println!("cargo:rerun-if-changed={}", po.display());
-    let mut languages: Vec<_> = std::fs::read_dir(&po)
-        .map(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .filter(|entry| entry.path().join("kudari.po").is_file())
-                .filter_map(|entry| entry.file_name().into_string().ok())
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut languages: Vec<_> = std::fs::read_dir(&po).map_or_default(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().join("kudari.po").is_file())
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect()
+    });
     languages.sort();
     let mut code = String::from("/// The catalogues of `po/`.\npub const CATALOGUES: &[(&str, &str)] = &[\n");
     for language in languages {
@@ -102,15 +100,13 @@ fn main() {
     // The parts of the settings pages of kudari-qt, in the style of Windows: they import the
     // directory qrc:/qml/form, which each front end fills with its own.
     println!("cargo:rerun-if-changed=qml/form");
-    let form = std::fs::read_dir("qml/form")
-        .map(|entries| {
-            let mut files: Vec<_> = entries.filter_map(Result::ok).map(|entry| entry.path()).collect();
-            files.sort();
-            files
-        })
-        .unwrap_or_default();
+    let form = std::fs::read_dir("qml/form").map_or_default(|entries| {
+        let mut files: Vec<_> = entries.filter_map(Result::ok).map(|entry| entry.path()).collect();
+        files.sort();
+        files
+    });
     // The icon in its sizes, at qrc:/icons/kudari-SIZE.png.
-    let icons: Vec<_> = (std::fs::read_dir("icons").map(|entries| {
+    let icons: Vec<_> = std::fs::read_dir("icons").map_or_default(|entries| {
         let mut files: Vec<_> = entries
             .filter_map(Result::ok)
             .map(|entry| entry.path())
@@ -118,8 +114,7 @@ fn main() {
             .collect();
         files.sort();
         files
-    }))
-    .unwrap_or_default();
+    });
     let builder = CxxQtBuilder::new_qml_module(module)
         .qrc_resources(QResources::new().resource(QResource::new().prefix("/").files(form)))
         .qrc_resources(QResources::new().resource(QResource::new().prefix("/").files(icons)))
