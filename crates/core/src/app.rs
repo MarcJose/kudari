@@ -314,6 +314,15 @@ impl App {
         std::mem::replace(&mut self.settings, settings)
     }
 
+    /// Whether the screen of the window is chosen again after the settings changed from
+    /// `old`: only for another `Screen` setting. Chosen by the pointer, it stays where the
+    /// window opened, also while the user moves a slider of the settings on another screen;
+    /// the next time the window opens, it is chosen anew all the same.
+    #[must_use]
+    pub fn screen_changed(&self, old: &Settings) -> bool {
+        self.settings.screen != old.screen
+    }
+
     #[must_use]
     pub fn stack(&self) -> &SessionStack {
         &self.stack
@@ -2022,6 +2031,22 @@ mod tests {
         // A hidden window that loses its screen stays as it is.
         app.toggle_window(true);
         assert_eq!(app.window_lost(), []);
+    }
+
+    #[test]
+    fn only_another_screen_setting_moves_the_open_window() {
+        let table = Table::default();
+        let mut app = fresh();
+        app.toggle_window(true);
+        let before = app.settings().clone();
+        // The position slider, on a second screen while the window is open on the first.
+        table.write("Window", "Position", "30");
+        let old = app.replace_settings(Settings::load(&table));
+        assert!(!app.screen_changed(&old));
+        table.write("Window", "Screen", "2");
+        let old = app.replace_settings(Settings::load(&table));
+        assert!(app.screen_changed(&old));
+        assert_ne!(before.screen, app.settings().screen);
     }
 
     #[test]

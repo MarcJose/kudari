@@ -922,7 +922,9 @@ impl qobject::Controller {
         if skin_changed {
             self.as_mut().apply_skin();
         }
-        self.as_mut().update_work_area();
+        if self.app.screen_changed(&old) {
+            self.as_mut().update_work_area();
+        }
         self.as_mut().publish_settings();
         self.as_mut().sync();
         if agents_changed {
