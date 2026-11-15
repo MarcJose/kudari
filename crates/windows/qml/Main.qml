@@ -269,7 +269,11 @@ ApplicationWindow {
     // stays on the screen to the right.
     function showMenu(x, y, entries) {
         const menu = buildMenu(entries, root.contentItem);
-        menu.closed.connect(() => menu.destroy());
+        // The actions of a tab menu apply to its tab only while it is open.
+        menu.closed.connect(() => {
+            app.menuClosed();
+            menu.destroy();
+        });
         const below = targetScreen.virtualY + targetScreen.height - (root.y + y);
         const top = menu.implicitHeight > below ? y - menu.implicitHeight : y;
         const right = targetScreen.virtualX + targetScreen.width - root.x;
