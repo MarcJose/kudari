@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 use crate::settings::Store;
@@ -17,6 +18,8 @@ pub type Group = HashMap<String, String>;
 pub fn parse_ini(text: &str) -> HashMap<String, Group> {
     let mut groups: HashMap<String, Group> = HashMap::new();
     let mut current = String::new();
+    // Editors on Windows put a byte order mark in front, which trim keeps.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
@@ -40,13 +43,32 @@ pub fn parse_ini(text: &str) -> HashMap<String, Group> {
 pub struct IniFile {
     path: PathBuf,
     groups: Mutex<BTreeMap<String, BTreeMap<String, String>>>,
+    /// False when the file exists but could not be read: writing it would replace the
+    /// settings in it with the few changed since, so changes stay in memory.
+    writable: bool,
+    /// The file was not UTF-8; the original goes to a backup before the first save.
+    back_up: AtomicBool,
 }
 
 impl IniFile {
-    /// The settings in `path`; none if it does not exist yet.
+    /// The settings in `path`; none if it does not exist yet. A file in the ANSI code page of
+    /// Windows (Windows-1252), as older editors and PowerShell 5.1 save it, is read as such.
     #[must_use]
     pub fn open(path: &Path) -> Self {
-        let text = std::fs::read_to_string(path).unwrap_or_default();
+        let (text, writable, back_up) = match std::fs::read(path) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(text) => (text, true, false),
+                Err(error) => (windows_1252(error.as_bytes()), true, true),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (String::new(), true, false),
+            Err(error) => {
+                eprintln!(
+                    "kudari: could not read {}: {error}; changes to the settings are not saved",
+                    path.display()
+                );
+                (String::new(), false, false)
+            }
+        };
         let groups = parse_ini(&text)
             .into_iter()
             .map(|(name, group)| {
@@ -57,11 +79,21 @@ impl IniFile {
         Self {
             path: path.to_path_buf(),
             groups: Mutex::new(groups),
+            writable,
+            back_up: AtomicBool::new(back_up),
         }
     }
 
     fn save(&self, groups: &BTreeMap<String, BTreeMap<String, String>>) -> std::io::Result<()> {
         use std::fmt::Write;
+
+        if !self.writable {
+            return Ok(());
+        }
+        if self.back_up.load(Ordering::Relaxed) {
+            std::fs::copy(&self.path, self.path.with_extension("ini.bak"))?;
+            self.back_up.store(false, Ordering::Relaxed);
+        }
 
         let mut text = String::new();
         for (name, group) in groups {
@@ -101,6 +133,28 @@ impl Store for IniFile {
             eprintln!("kudari: could not save {}: {error}", self.path.display());
         }
     }
+}
+
+/// The characters of Windows-1252 for the bytes 0x80 to 0x9F; the rest is Latin-1. Bytes
+/// without a character there keep their code point, as browsers decode them.
+const WINDOWS_1252: [char; 32] = [
+    '\u{20ac}', '\u{81}', '\u{201a}', '\u{192}', '\u{201e}', '\u{2026}', '\u{2020}', '\u{2021}', '\u{2c6}', '\u{2030}',
+    '\u{160}', '\u{2039}', '\u{152}', '\u{8d}', '\u{17d}', '\u{8f}', '\u{90}', '\u{2018}', '\u{2019}', '\u{201c}',
+    '\u{201d}', '\u{2022}', '\u{2013}', '\u{2014}', '\u{2dc}', '\u{2122}', '\u{161}', '\u{203a}', '\u{153}', '\u{9d}',
+    '\u{17e}', '\u{178}',
+];
+
+fn windows_1252(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|&byte| match byte {
+            0x80..=0x9f => WINDOWS_1252
+                .get(usize::from(byte - 0x80))
+                .copied()
+                .unwrap_or('\u{fffd}'),
+            _ => char::from(byte),
+        })
+        .collect()
 }
 
 fn escape(value: &str) -> String {
@@ -195,6 +249,67 @@ mod tests {
         }
         assert_eq!(unescape("\\"), "\\");
         assert_eq!(unescape("\\q"), "q");
+    }
+
+    #[test]
+    fn a_byte_order_mark_does_not_hide_the_first_group() {
+        let groups = parse_ini("\u{feff}[Window]\nWidth=70\n");
+        assert_eq!(groups["Window"]["Width"], "70");
+        assert!(!groups.contains_key(""), "{groups:?}");
+    }
+
+    #[test]
+    fn an_ansi_file_keeps_its_settings_and_a_backup() {
+        // Saved by PowerShell 5.1 or an editor in Windows-1252: ü is 0xFC, € is 0x80.
+        let path = file("ansi");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let original = b"[Terminal]\nDirectory=C:\\\\Users\\\\J\xfcrgen\nBadgeText=\x80\n[Window]\nWidth=70\n".to_vec();
+        std::fs::write(&path, &original).unwrap();
+        let settings = IniFile::open(&path);
+        assert_eq!(settings.read("Terminal", "Directory", ""), "C:\\Users\\Jürgen");
+        assert_eq!(settings.read("Terminal", "BadgeText", ""), "€");
+        settings.write("Window", "KeepOpen", "true");
+        let again = IniFile::open(&path);
+        assert_eq!(again.read("Window", "Width", "90"), "70");
+        assert_eq!(again.read("Window", "KeepOpen", "false"), "true");
+        assert_eq!(again.read("Terminal", "Directory", ""), "C:\\Users\\Jürgen");
+        assert_eq!(std::fs::read(path.with_extension("ini.bak")).unwrap(), original);
+        // Now UTF-8, so a second change does not overwrite the backup with it.
+        again.write("Window", "Width", "60");
+        assert_eq!(std::fs::read(path.with_extension("ini.bak")).unwrap(), original);
+        std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_missing_file_gets_no_backup() {
+        let path = file("fresh");
+        IniFile::open(&path).write("Window", "Width", "80");
+        assert!(path.exists());
+        assert!(!path.with_extension("ini.bak").exists());
+        std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_file_is_left_alone() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = file("locked");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let original = "[Window]\nWidth=70\n[Shortcuts]\nnew-tab=Ctrl+Shift+T\n";
+        std::fs::write(&path, original).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root reads it anyway, so there is no failure to test.
+        if std::fs::read(&path).is_err() {
+            let settings = IniFile::open(&path);
+            assert_eq!(settings.read("Window", "Width", "90"), "90");
+            settings.write("Window", "KeepOpen", "true");
+            assert_eq!(settings.read("Window", "KeepOpen", "false"), "true");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+            assert!(!path.with_extension("ini.partial").exists());
+        }
+        std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
     }
 
     #[test]
