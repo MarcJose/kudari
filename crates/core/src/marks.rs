@@ -6,7 +6,8 @@
 //! knows the directory from `/proc` as well; Windows has nothing but these marks.
 //!
 //! [`Tee`] sits between the PTY and the emulator and reads the marks from everything that
-//! passes; the emulator still gets every byte.
+//! passes; the emulator still gets every byte, except for the tail of an OSC sequence that
+//! grows past [`MAX_OSC`].
 //!
 //! Any program can print these sequences, a file shown with `cat` as well, and a new tab
 //! starts in the directory; the Command Prompt even runs programs from there before those
@@ -30,6 +31,23 @@ use polling::{Event, PollMode, Poller};
 
 /// The longest sequence that is read; longer ones are skipped.
 const MAX_SEQUENCE: usize = 4096;
+
+/// The most of one OSC sequence that reaches the emulator. vte keeps all of it in memory, so a
+/// program could print one without an end until it takes all memory and, with Kudari, every
+/// terminal; the rest is replaced by NUL, which vte drops inside OSC. Enough for OSC 52 to copy
+/// some MiB.
+pub const MAX_OSC: usize = 8 << 20;
+
+/// What vte drops inside OSC: these bytes neither end it nor become part of it.
+fn dropped_in_osc(byte: u8) -> bool {
+    matches!(byte, 0x00..=0x06 | 0x08..=0x17 | 0x19 | 0x1c..=0x1f)
+}
+
+/// What leaves vte in the escape after ESC: controls it executes, DEL and bytes from 0x80 on,
+/// which it ignores there.
+fn kept_in_escape(byte: u8) -> bool {
+    matches!(byte, 0x00..=0x17 | 0x19 | 0x1c..=0x1f | 0x7f..=0xff)
+}
 
 /// Where the shell is in its prompt, after OSC 133.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -87,6 +105,10 @@ pub struct Scanner {
     sequence: Vec<u8>,
     /// The sequence grew too long and is skipped up to its end.
     overflow: bool,
+    /// The bytes of the current OSC sequence that vte keeps, up to `limit`.
+    length: usize,
+    /// [`MAX_OSC`], less in tests.
+    limit: usize,
 }
 
 impl Default for Scanner {
@@ -105,46 +127,76 @@ impl Scanner {
             state: State::Ground,
             sequence: Vec::new(),
             overflow: false,
+            length: 0,
+            limit: MAX_OSC,
         }
     }
 
-    /// Reads `bytes` and updates `marks` with every sequence that ends in them.
-    /// `at_shell` says whether the shell itself is in the foreground; it is asked only for
-    /// a directory.
-    pub fn scan(&mut self, bytes: &[u8], marks: &Mutex<Marks>, at_shell: &dyn Fn() -> bool) {
-        let mut rest = bytes;
-        while !rest.is_empty() {
+    #[cfg(test)]
+    fn with_limit(limit: usize) -> Self {
+        Self {
+            limit,
+            ..Self::default()
+        }
+    }
+
+    /// Reads `bytes` and updates `marks` with every sequence that ends in them, following
+    /// the states of vte so that both see the same sequences. Bytes of an OSC sequence past
+    /// [`MAX_OSC`] become NUL. `at_shell` says whether the shell itself is in the foreground;
+    /// it is asked only for a directory.
+    pub fn scan(&mut self, bytes: &mut [u8], marks: &Mutex<Marks>, at_shell: &dyn Fn() -> bool) {
+        let mut index = 0;
+        while index < bytes.len() {
             if self.state == State::Ground {
                 // Most output has no escape at all.
-                let Some(position) = rest.iter().position(|&byte| byte == 0x1b) else {
+                let Some(position) = bytes
+                    .get(index..)
+                    .and_then(|rest| rest.iter().position(|&byte| byte == 0x1b))
+                else {
                     return;
                 };
                 self.state = State::Escape;
-                rest = rest.get(position + 1..).unwrap_or_default();
+                index += position + 1;
                 continue;
             }
-            let Some((&byte, after)) = rest.split_first() else {
+            let Some(byte) = bytes.get_mut(index) else {
                 return;
             };
-            rest = after;
-            self.state = match (self.state, byte) {
+            index += 1;
+            self.state = match (self.state, *byte) {
                 // ESC `]` starts a sequence, also inside one.
                 (State::Escape | State::OscEscape, b']') => {
                     self.sequence.clear();
                     self.overflow = false;
+                    self.length = 0;
                     State::Osc
                 }
                 (State::Escape, 0x1b) => State::Escape,
+                // ESC inside a sequence starts its terminator ESC `\`.
+                (State::Osc | State::OscEscape, 0x1b) => State::OscEscape,
+                // vte stays in the escape after these, so ESC, a line feed or DEL, and `]`
+                // start a sequence there.
+                (State::Escape | State::OscEscape, byte) if kept_in_escape(byte) => State::Escape,
                 (State::Osc, 0x07) | (State::OscEscape, b'\\') => {
                     if !self.overflow {
                         apply(&self.sequence, self.key.as_deref(), marks, at_shell);
                     }
                     State::Ground
                 }
-                (State::Osc | State::OscEscape, 0x1b) => State::OscEscape,
+                // CAN and SUB end the sequence in vte.
+                (State::Osc, 0x18 | 0x1a) => State::Ground,
+                (State::Osc, byte) if dropped_in_osc(byte) => State::Osc,
                 (State::Osc, _) => {
+                    // vte keeps the separators apart, not in its buffer.
+                    if *byte != b';' {
+                        if self.length < self.limit {
+                            self.length += 1;
+                        } else {
+                            *byte = 0;
+                        }
+                    }
                     if self.sequence.len() < MAX_SEQUENCE {
-                        self.sequence.push(byte);
+                        self.sequence.push(*byte);
                     } else {
                         self.overflow = true;
                     }
@@ -267,8 +319,9 @@ impl<P> Tee<P> {
 impl<P: EventedReadWrite> io::Read for Tee<P> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         let count = self.inner.reader().read(buffer)?;
-        let bytes = buffer.get(..count).unwrap_or_default();
-        self.scanner.scan(bytes, &self.marks, &*self.at_shell);
+        if let Some(bytes) = buffer.get_mut(..count) {
+            self.scanner.scan(bytes, &self.marks, &*self.at_shell);
+        }
         Ok(count)
     }
 }
@@ -325,7 +378,7 @@ mod tests {
         let marks = Mutex::default();
         let mut scanner = Scanner::default();
         for piece in pieces {
-            scanner.scan(piece, &marks, &|| at_shell);
+            scanner.scan(&mut piece.to_vec(), &marks, &|| at_shell);
         }
         marks.into_inner().unwrap()
     }
@@ -411,7 +464,7 @@ mod tests {
         let marks = Mutex::default();
         let mut scanner = Scanner::new(Some(KEY));
         for piece in pieces {
-            scanner.scan(piece.as_bytes(), &marks, &|| true);
+            scanner.scan(&mut piece.as_bytes().to_vec(), &marks, &|| true);
         }
         marks.into_inner().unwrap()
     }
@@ -507,7 +560,7 @@ mod tests {
         let marks = Mutex::default();
         let mut scanner = Scanner::default();
         let mut after = |bytes: &[u8]| {
-            scanner.scan(bytes, &marks, &|| true);
+            scanner.scan(&mut bytes.to_vec(), &marks, &|| true);
             marks.lock().unwrap().prompt
         };
         assert_eq!(after(b"plain output"), Prompt::Unknown);
@@ -551,9 +604,138 @@ mod tests {
     fn random_output_does_no_harm() {
         for input in crate::fuzz::inputs(&["\x1b]7;file:///tmp\x07", "\x1b]133;B\x1b\\", "\x1b]9;9;C:\\\x07"]) {
             let marks = Mutex::default();
-            Scanner::default().scan(input.as_bytes(), &marks, &|| true);
+            Scanner::default().scan(&mut input.as_bytes().to_vec(), &marks, &|| true);
             let _ = percent_decoded(&input);
             let _ = local_directory(&input);
+        }
+    }
+
+    /// What vte makes of output after the scanner: the printed text and the length of each
+    /// OSC sequence it kept.
+    #[derive(Default)]
+    struct Emulator {
+        text: String,
+        oscs: Vec<usize>,
+    }
+
+    impl alacritty_terminal::vte::Perform for Emulator {
+        fn print(&mut self, character: char) {
+            self.text.push(character);
+        }
+
+        fn osc_dispatch(&mut self, params: &[&[u8]], _: bool) {
+            self.oscs.push(params.iter().map(|param| param.len()).sum());
+        }
+    }
+
+    /// Passes `pieces` through a scanner, as the PTY reads them, and then to vte.
+    fn emulated(pieces: &[Vec<u8>]) -> Emulator {
+        emulated_with(Scanner::default(), pieces)
+    }
+
+    /// The same with a scanner of a lower limit, which keeps the tests fast.
+    fn emulated_with(mut scanner: Scanner, pieces: &[Vec<u8>]) -> Emulator {
+        let marks = Mutex::default();
+        let mut parser = alacritty_terminal::vte::Parser::new();
+        let mut emulator = Emulator::default();
+        for piece in pieces {
+            let mut piece = piece.clone();
+            scanner.scan(&mut piece, &marks, &|| true);
+            parser.advance(&mut emulator, &piece);
+        }
+        emulator
+    }
+
+    /// `length` bytes of `a` in pieces of 64 KiB.
+    fn filler(length: usize) -> Vec<Vec<u8>> {
+        let mut pieces = vec![vec![b'a'; 64 << 10]; length / (64 << 10)];
+        pieces.push(vec![b'a'; length % (64 << 10)]);
+        pieces
+    }
+
+    #[test]
+    fn an_osc_sequence_without_an_end_stops_growing() {
+        let mut pieces = vec![b"\x1b]0;".to_vec()];
+        pieces.extend(filler(MAX_OSC + (3 << 20)));
+        pieces.push(b"\x07after".to_vec());
+        let emulator = emulated(&pieces);
+        // "0" and the title, cut at the limit; what follows the sequence shows as before.
+        assert_eq!(emulator.oscs, [MAX_OSC]);
+        assert_eq!(emulator.text, "after");
+    }
+
+    #[test]
+    fn an_osc_sequence_within_the_limit_passes_unchanged() {
+        // OSC 52 with some MiB to copy.
+        let mut pieces = vec![b"before\x1b]52;c;".to_vec()];
+        pieces.extend(filler(4 << 20));
+        pieces.push(b"\x1b\\after".to_vec());
+        let original = pieces.clone();
+        let marks = Mutex::default();
+        let mut scanner = Scanner::default();
+        for piece in &mut pieces {
+            scanner.scan(piece, &marks, &|| true);
+        }
+        assert!(pieces == original, "the scanner changed a sequence within the limit");
+        let emulator = emulated(&original);
+        assert_eq!(emulator.oscs, [2 + 1 + (4 << 20)]);
+        assert_eq!(emulator.text, "beforeafter");
+    }
+
+    /// A low limit for the tests that try many sequences.
+    const LIMIT: usize = 16 << 10;
+
+    #[test]
+    fn a_sequence_that_vte_starts_after_other_bytes_is_limited_as_well() {
+        // vte executes a line feed after ESC, ignores DEL and bytes from 0x80 on there, and
+        // still takes `]` as the start of OSC; so does a second ESC.
+        for start in [
+            &b"\x1b\n]0;"[..],
+            b"\x1b\x7f]0;",
+            b"\x1b\x80]0;",
+            b"\x1b\xff]0;",
+            b"\x1b\x1b]0;",
+        ] {
+            let mut pieces = vec![start.to_vec()];
+            pieces.extend(filler(LIMIT + 4096));
+            pieces.push(b"\x07".to_vec());
+            assert_eq!(
+                emulated_with(Scanner::with_limit(LIMIT), &pieces).oscs,
+                [LIMIT],
+                "{start:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_scanner_agrees_with_vte_on_every_byte_after_esc() {
+        // Whatever comes between ESC and `]`, a sequence that vte keeps longer than the limit
+        // would let the scanner miss it.
+        for between in 0..=u8::MAX {
+            if matches!(between, b']' | 0x18 | 0x1a) {
+                continue;
+            }
+            let mut pieces = vec![vec![0x1b, between, b']', b'0', b';']];
+            pieces.extend(filler(LIMIT + 4096));
+            pieces.push(b"\x07".to_vec());
+            let oscs = emulated_with(Scanner::with_limit(LIMIT), &pieces).oscs;
+            assert!(
+                oscs.iter().all(|&length| length <= LIMIT),
+                "ESC {between:#04x} ]: {oscs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn text_after_a_sequence_ended_by_can_is_left_alone() {
+        // CAN and SUB end the sequence in vte; what follows is text and must not become NUL.
+        for end in [0x18, 0x1a] {
+            let mut pieces = vec![b"\x1b]0;".to_vec()];
+            pieces.extend(filler(LIMIT - 1));
+            pieces.push([&[end][..], b"visible text"].concat());
+            let emulator = emulated_with(Scanner::with_limit(LIMIT), &pieces);
+            assert_eq!(emulator.oscs, [LIMIT]);
+            assert_eq!(emulator.text, "visible text");
         }
     }
 
