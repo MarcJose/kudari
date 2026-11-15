@@ -1209,6 +1209,17 @@ impl App {
         vec![Effect::Fullscreen(self.fullscreen)]
     }
 
+    /// The screen of the shown window went away and took the window with it. It counts as
+    /// hidden, so that the next shortcut shows it again rather than hiding it.
+    pub fn window_lost(&mut self) -> Vec<Effect> {
+        if !self.window_visible {
+            return Vec::new();
+        }
+        self.window_visible = false;
+        self.rearm_activity();
+        vec![Effect::WindowVisible(false)]
+    }
+
     /// The window appeared. Returns whether it slides in, which it does unless it only came
     /// back for the focus.
     pub fn after_show(&mut self) -> (bool, Vec<Effect>) {
@@ -1852,6 +1863,20 @@ mod tests {
         assert!(actions.contains(&("move-session-left", false, false)));
         assert_eq!(Monitor::named("once"), Some(Monitor::Once));
         assert_eq!(Monitor::named("bogus"), None);
+    }
+
+    #[test]
+    fn a_window_lost_with_its_screen_comes_back_with_the_next_shortcut() {
+        let mut app = fresh();
+        app.toggle_window(true);
+        assert!(app.window_visible());
+        // The screen under the window was unplugged.
+        assert_eq!(app.window_lost(), [Effect::WindowVisible(false)]);
+        assert!(!app.window_visible());
+        assert!(app.toggle_window(true).contains(&Effect::WindowVisible(true)));
+        // A hidden window that loses its screen stays as it is.
+        app.toggle_window(true);
+        assert_eq!(app.window_lost(), []);
     }
 
     #[test]

@@ -707,6 +707,29 @@ check "accepting the welcome takes over Yakuake's settings without asking" "80 f
     "$(first_setting Width) $(first_setting FirstRun)"
 hook Trigger file_quit
 
+# Two screens, and one goes away while the window is open: KWin closes the window, and the
+# next shortcut shows it again rather than hiding a window that is gone.
+tries=0
+while kill -0 "$kudari" 2>/dev/null && [ "$tries" -lt 50 ]; do sleep 0.1; tries=$((tries + 1)); done
+kill "$kwin" 2>/dev/null
+wait "$kwin" 2>/dev/null
+kwin_wayland --virtual --no-lockscreen --socket="$WAYLAND_DISPLAY" --output-count 2 --width 1280 --height 800 \
+    > "$work/kwin2.log" 2>&1 &
+kwin=$!
+sleep 3
+mkdir "$work/screens"
+printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nKeepOpen=true\n' > "$work/screens/kudarirc"
+XDG_CONFIG_HOME="$work/screens" "$binary" > "$work/screens.log" 2>&1 &
+kudari=$!
+started
+window toggleWindowState; sleep 1.5
+shown=$(state)
+output=$(kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk '/^Output:/ { name = $3 } END { print name }')
+kscreen-doctor "output.$output.disable" > /dev/null 2>&1; sleep 2
+window toggleWindowState; sleep 1.5
+check "the shortcut shows the window again after a screen went away" "visible=1 visible=1" "$shown $(state)"
+hook Trigger file_quit
+
 echo "$checks checks, $failures failed"
 if [ "$failures" != 0 ]; then
     tail -n 25 "$work/kwin.log" "$work/log" 2>/dev/null | sed 's/^/Error in log: /'

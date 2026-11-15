@@ -166,6 +166,10 @@ pub mod qobject {
         #[qinvokable]
         fn after_show(self: Pin<&mut Self>);
 
+        /// The screen of the shown window went away.
+        #[qinvokable]
+        fn window_lost(self: Pin<&mut Self>);
+
         /// Stores a setting from the settings dialog and applies it right away.
         #[qinvokable]
         fn set_setting(self: Pin<&mut Self>, key: &QString, value: &QString);
@@ -1058,6 +1062,10 @@ impl qobject::Controller {
             &text.to_string(),
             &argument.to_string(),
         ))
+    }
+
+    fn window_lost(self: Pin<&mut Self>) {
+        self.update(App::window_lost);
     }
 
     fn after_show(mut self: Pin<&mut Self>) {
