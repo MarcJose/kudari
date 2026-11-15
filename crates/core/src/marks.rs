@@ -43,9 +43,10 @@ fn dropped_in_osc(byte: u8) -> bool {
     matches!(byte, 0x00..=0x06 | 0x08..=0x17 | 0x19 | 0x1c..=0x1f)
 }
 
-/// What vte executes after ESC without leaving the escape.
-fn executed_in_escape(byte: u8) -> bool {
-    matches!(byte, 0x00..=0x17 | 0x19 | 0x1c..=0x1f)
+/// What leaves vte in the escape after ESC: controls it executes, DEL and bytes from 0x80 on,
+/// which it ignores there.
+fn kept_in_escape(byte: u8) -> bool {
+    matches!(byte, 0x00..=0x17 | 0x19 | 0x1c..=0x1f | 0x7f..=0xff)
 }
 
 /// Where the shell is in its prompt, after OSC 133.
@@ -104,8 +105,10 @@ pub struct Scanner {
     sequence: Vec<u8>,
     /// The sequence grew too long and is skipped up to its end.
     overflow: bool,
-    /// The bytes of the current OSC sequence that vte keeps, up to [`MAX_OSC`].
+    /// The bytes of the current OSC sequence that vte keeps, up to `limit`.
     length: usize,
+    /// [`MAX_OSC`], less in tests.
+    limit: usize,
 }
 
 impl Default for Scanner {
@@ -125,6 +128,15 @@ impl Scanner {
             sequence: Vec::new(),
             overflow: false,
             length: 0,
+            limit: MAX_OSC,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_limit(limit: usize) -> Self {
+        Self {
+            limit,
+            ..Self::default()
         }
     }
 
@@ -162,9 +174,9 @@ impl Scanner {
                 (State::Escape, 0x1b) => State::Escape,
                 // ESC inside a sequence starts its terminator ESC `\`.
                 (State::Osc | State::OscEscape, 0x1b) => State::OscEscape,
-                // vte runs these and stays in the escape, so ESC, a line feed and `]` start
-                // a sequence there.
-                (State::Escape | State::OscEscape, byte) if executed_in_escape(byte) => State::Escape,
+                // vte stays in the escape after these, so ESC, a line feed or DEL, and `]`
+                // start a sequence there.
+                (State::Escape | State::OscEscape, byte) if kept_in_escape(byte) => State::Escape,
                 (State::Osc, 0x07) | (State::OscEscape, b'\\') => {
                     if !self.overflow {
                         apply(&self.sequence, self.key.as_deref(), marks, at_shell);
@@ -177,7 +189,7 @@ impl Scanner {
                 (State::Osc, _) => {
                     // vte keeps the separators apart, not in its buffer.
                     if *byte != b';' {
-                        if self.length < MAX_OSC {
+                        if self.length < self.limit {
                             self.length += 1;
                         } else {
                             *byte = 0;
@@ -618,8 +630,12 @@ mod tests {
 
     /// Passes `pieces` through a scanner, as the PTY reads them, and then to vte.
     fn emulated(pieces: &[Vec<u8>]) -> Emulator {
+        emulated_with(Scanner::default(), pieces)
+    }
+
+    /// The same with a scanner of a lower limit, which keeps the tests fast.
+    fn emulated_with(mut scanner: Scanner, pieces: &[Vec<u8>]) -> Emulator {
         let marks = Mutex::default();
-        let mut scanner = Scanner::default();
         let mut parser = alacritty_terminal::vte::Parser::new();
         let mut emulator = Emulator::default();
         for piece in pieces {
@@ -666,13 +682,48 @@ mod tests {
         assert_eq!(emulator.text, "beforeafter");
     }
 
+    /// A low limit for the tests that try many sequences.
+    const LIMIT: usize = 16 << 10;
+
     #[test]
-    fn a_sequence_that_vte_starts_after_a_control_is_limited_as_well() {
-        // vte executes the line feed after ESC and still takes `]` as the start of OSC.
-        let mut pieces = vec![b"\x1b\n]0;".to_vec()];
-        pieces.extend(filler(MAX_OSC + (1 << 20)));
-        pieces.push(b"\x07".to_vec());
-        assert_eq!(emulated(&pieces).oscs, [MAX_OSC]);
+    fn a_sequence_that_vte_starts_after_other_bytes_is_limited_as_well() {
+        // vte executes a line feed after ESC, ignores DEL and bytes from 0x80 on there, and
+        // still takes `]` as the start of OSC; so does a second ESC.
+        for start in [
+            &b"\x1b\n]0;"[..],
+            b"\x1b\x7f]0;",
+            b"\x1b\x80]0;",
+            b"\x1b\xff]0;",
+            b"\x1b\x1b]0;",
+        ] {
+            let mut pieces = vec![start.to_vec()];
+            pieces.extend(filler(LIMIT + 4096));
+            pieces.push(b"\x07".to_vec());
+            assert_eq!(
+                emulated_with(Scanner::with_limit(LIMIT), &pieces).oscs,
+                [LIMIT],
+                "{start:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_scanner_agrees_with_vte_on_every_byte_after_esc() {
+        // Whatever comes between ESC and `]`, a sequence that vte keeps longer than the limit
+        // would let the scanner miss it.
+        for between in 0..=u8::MAX {
+            if matches!(between, b']' | 0x18 | 0x1a) {
+                continue;
+            }
+            let mut pieces = vec![vec![0x1b, between, b']', b'0', b';']];
+            pieces.extend(filler(LIMIT + 4096));
+            pieces.push(b"\x07".to_vec());
+            let oscs = emulated_with(Scanner::with_limit(LIMIT), &pieces).oscs;
+            assert!(
+                oscs.iter().all(|&length| length <= LIMIT),
+                "ESC {between:#04x} ]: {oscs:?}"
+            );
+        }
     }
 
     #[test]
@@ -680,10 +731,10 @@ mod tests {
         // CAN and SUB end the sequence in vte; what follows is text and must not become NUL.
         for end in [0x18, 0x1a] {
             let mut pieces = vec![b"\x1b]0;".to_vec()];
-            pieces.extend(filler(MAX_OSC - 1));
+            pieces.extend(filler(LIMIT - 1));
             pieces.push([&[end][..], b"visible text"].concat());
-            let emulator = emulated(&pieces);
-            assert_eq!(emulator.oscs, [MAX_OSC]);
+            let emulator = emulated_with(Scanner::with_limit(LIMIT), &pieces);
+            assert_eq!(emulator.oscs, [LIMIT]);
             assert_eq!(emulator.text, "visible text");
         }
     }
