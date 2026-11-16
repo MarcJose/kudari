@@ -249,6 +249,21 @@ try {
     Test-Check 'the buttons of the search bar have names' ($missing.Count -eq 0)
     if ($missing) { Write-Host "      missing: $($missing -join ', ')" }
 
+    # The button that answers yes says what it does, as under KDE. The quit button of the bar
+    # is held on to, since the button of the question has its name.
+    [void] (Invoke-Element 'New Session')
+    $button = [System.Windows.Automation.ControlType]::Button
+    function Get-QuitButtons { @(Find-All 'Quit' | Where-Object { $_.Current.ControlType -eq $button }) }
+    $quitButton = Get-QuitButtons | Select-Object -First 1
+    function Press($element) { $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
+    Press $quitButton
+    $asked = Wait-For { if (@(Get-QuitButtons).Count -eq 2) { $true } }
+    [void] (Invoke-Element 'Cancel')
+    [void] (Wait-For { if (@(Get-QuitButtons).Count -eq 1) { $true } })
+    Test-Check 'the question about quitting has a Quit button' ([bool] $asked)
+    [void] (Invoke-Element 'Close Session')
+    [void] (Wait-For { if ((Get-TabCount) -eq $tabs) { $true } })
+
     [void] (Invoke-Element 'Quit')
     Test-Check 'the quit button ends Kudari' ($process.WaitForExit(10000))
 

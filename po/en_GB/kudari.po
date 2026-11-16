@@ -1460,3 +1460,24 @@ msgstr "Ctrl+Alt"
 msgctxt "@item:inlistbox keyboard modifier"
 msgid "Shift+Alt"
 msgstr "Shift+Alt"
+
+
+msgctxt "@action:button"
+msgid "Quit"
+msgstr "Quit"
+
+msgctxt "@action:button"
+msgid "Close"
+msgstr "Close"
+
+msgctxt "@action:button"
+msgid "Continue"
+msgstr "Continue"
+
+msgctxt "@action:button"
+msgid "Cancel"
+msgstr "Cancel"
+
+msgctxt "@action:button"
+msgid "OK"
+msgstr "OK"

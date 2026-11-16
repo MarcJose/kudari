@@ -407,12 +407,15 @@ ApplicationWindow {
         id: question
 
         property int questionId: -1
+        property string confirm: "continue"
 
         function ask(id, title, text, confirm) {
             questionId = id;
             question.title = title;
             body.text = text;
+            question.confirm = confirm;
             open();
+            confirmButton.forceActiveFocus();
         }
 
         anchors.centerIn: parent
@@ -422,9 +425,25 @@ ApplicationWindow {
         // it, follows the width of the dialog, which follows it, in a loop.
         implicitWidth: Math.max(contentWidth + leftPadding + rightPadding, implicitFooterWidth,
                                 questionTitle.advanceWidth + leftPadding + rightPadding)
-        standardButtons: Dialog.Yes | Dialog.Cancel
         onAccepted: app.answerQuestion(questionId, true)
         onRejected: app.answerQuestion(questionId, false)
+
+        // As the buttons of KDE: what the question is about, and Cancel.
+        footer: DialogButtonBox {
+            Button {
+                id: confirmButton
+
+                text: question.confirm === "quit" ? app.translate("@action:button", "Quit")
+                    : question.confirm === "close" ? app.translate("@action:button", "Close")
+                    : app.translate("@action:button", "Continue")
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+            }
+
+            Button {
+                text: app.translate("@action:button", "Cancel")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
+        }
 
         TextMetrics {
             id: questionTitle
@@ -520,7 +539,13 @@ ApplicationWindow {
         modal: true
         focus: true
         title: "Kudari " + Qt.application.version
-        standardButtons: Dialog.Close
+
+        footer: DialogButtonBox {
+            Button {
+                text: app.translate("@action:button", "Close")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
+        }
 
         ColumnLayout {
             width: Math.min(520, root.width * 0.6)
@@ -579,7 +604,6 @@ ApplicationWindow {
         focus: true
         closePolicy: Popup.NoAutoClose
         title: app.translate("@title", "Welcome to Kudari")
-        standardButtons: Dialog.Ok | Dialog.Cancel
         onAboutToShow: sequence = app.toggleShortcut()
         onAccepted: app.finishFirstRun(false, sequence)
         onRejected: app.finishFirstRun(false, "")
@@ -613,6 +637,18 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 text: app.translate("@info", "The menu lets you change it later as well.")
                 wrapMode: Text.Wrap
+            }
+        }
+
+        footer: DialogButtonBox {
+            Button {
+                text: app.translate("@action:button", "OK")
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+            }
+
+            Button {
+                text: app.translate("@action:button", "Cancel")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
             }
         }
     }
