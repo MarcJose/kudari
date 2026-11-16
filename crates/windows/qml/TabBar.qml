@@ -335,7 +335,12 @@ Controls.Pane {
             glyph: bar.keepOpen ? "\uE840" : "\uE718"
             fallback: "📌"
             label: bar.controller.translate("@info:tooltip", "Keep open when the focus moves elsewhere")
-            onClicked: bar.controller.setKeepOpen(checked)
+            // Screen readers and UI Automation switch it without a click.
+            onCheckedChanged: {
+                if (checked !== bar.keepOpen) {
+                    bar.controller.setKeepOpen(checked);
+                }
+            }
         }
 
         IconButton {

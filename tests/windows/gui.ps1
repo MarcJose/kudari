@@ -191,6 +191,20 @@ try {
         Get-Content $ini | ForEach-Object { Write-Host "      ini: $_" }
     }
 
+    # The pin button of the bar, switched as a screen reader does it.
+    [void] (Invoke-Element 'Behavior')
+    $keep = 'Keep the window open when another window gets the focus'
+    function Get-KeepOpen { if ((Get-Setting 'KeepOpen') -eq 'false') { 'false' } else { 'true' } }
+    $before = Get-KeepOpen
+    [void] (Invoke-Element $keep)
+    $switched = Wait-For { if ((Get-KeepOpen) -ne $before) { $true } }
+    [void] (Invoke-Element 'Keep open when the focus moves elsewhere')
+    $pinned = Wait-For { if ((Get-KeepOpen) -eq $before) { $true } }
+    Test-Check 'the pin button switches as a screen reader does it' ($switched -and $pinned)
+    if (-not ($switched -and $pinned)) {
+        Write-Host "      before: $before, now: $(Get-KeepOpen)"
+    }
+
     if ($settings) {
         $settings.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
     }
