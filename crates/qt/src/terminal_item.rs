@@ -103,6 +103,9 @@ pub mod qobject {
         #[qproperty(f64, cursor_fade, cxx_name = "cursorFade")]
         #[qproperty(bool, url_hints, cxx_name = "urlHints")]
         #[qproperty(QString, search_lines, cxx_name = "searchLines")]
+        /// True when output came since the places of the matches were found last; QML finds
+        /// them again a moment later, see `updateSearchLines`.
+        #[qproperty(bool, search_lines_stale, cxx_name = "searchLinesStale")]
         #[qproperty(f64, scroll_mark_y, cxx_name = "scrollMarkY")]
         #[qproperty(f64, scroll_mark_height, cxx_name = "scrollMarkHeight")]
         #[qproperty(i32, scroll_mark_serial, cxx_name = "scrollMarkSerial")]
@@ -190,6 +193,11 @@ pub mod qobject {
 
         #[qinvokable]
         fn end_search(self: Pin<&mut Self>);
+
+        /// Finds the places of the matches in the scrollback again, for the scrollbar.
+        #[qinvokable]
+        #[cxx_name = "updateSearchLines"]
+        fn update_search_lines(self: Pin<&mut Self>);
 
         /// Forgets the matches, as for an empty search field.
         #[qinvokable]
@@ -286,6 +294,7 @@ pub struct TerminalItemRust {
     cursor_fade: f64,
     url_hints: bool,
     search_lines: QString,
+    search_lines_stale: bool,
     scroll_mark_y: f64,
     scroll_mark_height: f64,
     scroll_mark_serial: i32,
@@ -329,6 +338,7 @@ impl Default for TerminalItemRust {
             cursor_fade: 1.0,
             url_hints: false,
             search_lines: QString::default(),
+            search_lines_stale: false,
             scroll_mark_y: 0.0,
             scroll_mark_height: 0.0,
             scroll_mark_serial: 0,
@@ -520,6 +530,11 @@ impl qobject::TerminalItem {
             let y = origin_y + line * *self.cell_height();
             self.as_mut().set_cursor_x(x);
             self.as_mut().set_cursor_y(y);
+            // The places of the matches move as the scrollback grows. Finding them runs over
+            // the whole scrollback, so not for every frame.
+            if !self.search_lines().is_empty() {
+                self.as_mut().set_search_lines_stale(true);
+            }
         }
         self.update();
     }
@@ -844,6 +859,7 @@ impl qobject::TerminalItem {
         };
         let json = lines.map(|lines| serde_json::to_string(&lines).unwrap_or_default());
         self.as_mut().set_search_lines(kde::qs(&json.unwrap_or_default()));
+        self.as_mut().set_search_lines_stale(false);
     }
 
     fn clear_search(mut self: Pin<&mut Self>) {
@@ -858,6 +874,7 @@ impl qobject::TerminalItem {
             self.as_mut().rust_mut().view.end_search(&mut term);
         }
         self.as_mut().set_search_lines(QString::default());
+        self.as_mut().set_search_lines_stale(false);
         self.as_mut().update();
     }
 

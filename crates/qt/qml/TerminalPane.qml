@@ -210,6 +210,14 @@ Item {
             }
             event.accepted = true;
         }
+        // Finds the places of the matches for the scrollbar again after output, at most four
+        // times a second.
+        Timer {
+            interval: 250
+            running: terminal.searchLinesStale
+            onTriggered: terminal.updateSearchLines()
+        }
+
         Timer {
             interval: 500
             repeat: true

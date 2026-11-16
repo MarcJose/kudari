@@ -468,6 +468,11 @@ hook Trigger edit_find; sleep 0.6
 for code in 34 18 33; do input key "$code"; sleep 0.1; done
 hook Trigger edit_find_next; sleep 0.2
 hook Trigger edit_find_prev; sleep 0.2
+# Matches in new output appear on the scrollbar a moment later, without searching again.
+marks() { hook Property terminal searchLines | grep -o '[0-9.][0-9.]*' | wc -l; }
+before=$(marks)
+run "seq 1 50; echo gefunden"; sleep 0.6
+check "matches in new output reach the scrollbar" yes "$([ "$(marks)" -gt "$before" ] && echo yes || echo "no: $before $(marks)")"
 input key 1; sleep 0.4
 for action in edit_select_all edit_copy select-line select-mode select-mode; do hook Trigger "$action"; sleep 0.3; done
 
