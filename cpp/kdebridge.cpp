@@ -814,15 +814,39 @@ void rk_web_search(const QString &text)
     }
 }
 
+// Runs `open`, which shows a dialog without waiting for it, and counts each dialog that it
+// showed as open until it finishes: the window stays below it meanwhile. A dialog that was
+// open already, which KHelpMenu raises again, still counts from before.
+template<typename Open>
+static void countShownDialogs(Open open)
+{
+    QList<QWidget *> shown;
+    for (QWidget *widget : QApplication::topLevelWidgets()) {
+        if (widget->isVisible()) {
+            shown.append(widget);
+        }
+    }
+    open();
+    for (QWidget *widget : QApplication::topLevelWidgets()) {
+        auto *dialog = qobject_cast<QDialog *>(widget);
+        if (dialog && dialog->isVisible() && !shown.contains(widget)) {
+            kde_dialog_active(true);
+            QObject::connect(dialog, &QDialog::finished, [] {
+                kde_dialog_active(false);
+            });
+        }
+    }
+}
+
 void rk_about(const QString &what)
 {
-    kde_dialog_active(true);
-    if (what == QLatin1String("application")) {
-        s_helpMenu->aboutApplication();
-    } else {
-        s_helpMenu->aboutKDE();
-    }
-    kde_dialog_active(false);
+    countShownDialogs([&what] {
+        if (what == QLatin1String("application")) {
+            s_helpMenu->aboutApplication();
+        } else {
+            s_helpMenu->aboutKDE();
+        }
+    });
 }
 
 void rk_configure_keys()
@@ -844,9 +868,9 @@ void rk_configure_keys()
 
 void rk_configure_notifications()
 {
-    kde_dialog_active(true);
-    KNotifyConfigWidget::configure(nullptr);
-    kde_dialog_active(false);
+    countShownDialogs([] {
+        KNotifyConfigWidget::configure(nullptr);
+    });
 }
 
 void rk_notify(const QString &event, const QString &text)

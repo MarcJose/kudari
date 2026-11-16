@@ -716,6 +716,11 @@ check "a dialog left open keeps the window below it" true "$(hook DialogOpen)"
 hook AnswerAgent false; sleep 0.6
 check "the window comes back when the last dialog closed" false "$(hook DialogOpen)"
 sessions setSessionClosable "$protected" true; sleep 0.3
+# About Kudari shows its dialog without waiting for it: the window stays below until it closes.
+hook Popup main; sleep 1; menu_entry 1; sleep 0.5
+check "the window stays below the dialog about Kudari" true "$(hook DialogOpen)"
+input key 1; sleep 1
+check "the window comes back when the dialog about Kudari closed" false "$(hook DialogOpen)"
 check "agents may not type by default" yes "$(agent type_text '{"text": "ls"}' | refused 'Controlling terminals is switched off')"
 hook SetSetting AllowAgentControl true; sleep 0.3
 check "more rights end the access granted before" false "$(hook AgentAccess)"
