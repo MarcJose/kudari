@@ -13,10 +13,11 @@
 # terminal once, in an order shuffled for each run; --seed repeats an order. Five runs count
 # by default, after one warm-up run that does not (--warmup). The report shows for each load
 # the median of the runs, its spread, a 95 % interval of the median, the fastest and the
-# slowest run and the runs far from the others; for Kudari, how often and how fast Qt Quick
-# drew meanwhile, and with --detail the times of its frames in detail. --loads picks some
-# of plain, color, frames and seq, --scale scales the screen as for a HiDPI display, and
-# --keep keeps the data and the logs of the terminals.
+# slowest run and the runs far from the others; the CPU time of each terminal during the
+# load and its busiest threads; for Kudari, how often and how fast Qt Quick drew meanwhile,
+# and with --detail the times of its frames in detail. --loads picks some of plain, color,
+# frames and seq, --scale scales the screen as for a HiDPI display, and --keep keeps the
+# data and the logs of the terminals.
 #
 # The report starts with what was measured on what: the build of Kudari with its hash and
 # origin, the processor and its clock, the versions of Qt, KWin and Mesa. It warns about a
@@ -41,6 +42,7 @@ stamp() { date +%Y-%m-%dT%H:%M:%S.%3N; }
 # As the shell of the terminal under test: waits until the window is up, then times each load.
 if [ "${KUDARI_BENCH_ROLE:-}" = workload ]; then
     while [ ! -e "$KUDARI_BENCH_WORK/go" ]; do sleep 0.2; done
+    terminal_pid=$(cat "$KUDARI_BENCH_WORK/pid")
     sleep 1
     size=$(stty size)
     rows=${size% *} cols=${size#* }
@@ -49,6 +51,8 @@ if [ "${KUDARI_BENCH_ROLE:-}" = workload ]; then
     clear
     for load in $KUDARI_BENCH_LOADS; do
         sleep 1
+        # The CPU time of the threads of the terminal, just outside the time of the load.
+        python3 "$tools/bench.py" cpu "$KUDARI_BENCH_CPU" "$terminal_pid" "$load" start
         start=$(stamp)
         case $load in
             frames) cat "$KUDARI_BENCH_WORK/frames-${rows}x$cols.txt" ;;
@@ -56,6 +60,7 @@ if [ "${KUDARI_BENCH_ROLE:-}" = workload ]; then
             *) cat "$KUDARI_BENCH_WORK/$load.txt" ;;
         esac
         end=$(stamp)
+        python3 "$tools/bench.py" cpu "$KUDARI_BENCH_CPU" "$terminal_pid" "$load" end
         sleep 1
         echo "$load $start $end" >> "$KUDARI_BENCH_OUT"
         clear
@@ -112,6 +117,7 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
             rm -f "$work/go"
             log="$work/$terminal-$run.log"
             export XDG_CONFIG_HOME="$work/config-$terminal-$run" KUDARI_BENCH_OUT="$work/$terminal-$run.txt"
+            export KUDARI_BENCH_CPU="$work/$terminal-$run.cpu"
             export XDG_DATA_HOME="$work/share-$terminal-$run" KUDARI_BENCH_ROLE=workload
             mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
             shell="$tools/bench.sh"
@@ -149,6 +155,7 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
             esac
             # Time for the window to come up and to go full screen.
             sleep 3
+            echo "$pid" > "$work/pid"
             touch "$work/go"
             tries=0
             until grep -q '^done' "$KUDARI_BENCH_OUT" 2> /dev/null; do
@@ -196,7 +203,7 @@ while [ $# -gt 0 ]; do
         --warmup) warmup=$2; shift 2 ;;
         --seed) seed=$2; shift 2 ;;
         --detail) detail=1; shift ;;
-        -h | --help) sed -n '4,35s/^# \{0,1\}//p' "$0"; exit 0 ;;
+        -h | --help) sed -n '4,36s/^# \{0,1\}//p' "$0"; exit 0 ;;
         *)
             case " $all " in
                 *" $1 "*) terminals="$terminals $1"; shift ;;

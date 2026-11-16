@@ -7,6 +7,7 @@
     tools/bench.py frames DIR ROWS COLUMNS  300 full screens of a terminal of that size
     tools/bench.py environment DIR [BINARY] what was measured, on what, and how
     tools/bench.py order RUN TERMINAL...    the terminals in the order of a run, with --seed
+    tools/bench.py cpu FILE PID LOAD WHEN   adds the CPU time of each thread of PID to FILE
     tools/bench.py report DIR [TERMINAL...]  the runs in DIR, in the order of the terminals;
                                             --detail adds the times of the frames in detail
 
@@ -72,6 +73,50 @@ class Load(NamedTuple):
     frames: list
     blocked: list
     window: float
+    # Milliseconds of CPU time per group of threads during the load, or None.
+    cpu: dict | None = None
+
+
+def cpu(path, pid, load, moment):
+    """Adds the CPU time and the switches of each thread of the process PID to the file, at the
+    start or the end of a load. Only /proc of a process of the same user is read."""
+    lines = []
+    for task in sorted(Path(f"/proc/{pid}/task").glob("*")):
+        schedstat = content(task / "schedstat")
+        name = content(task / "comm")
+        status = content(task / "status") or ""
+        if schedstat is None or name is None:
+            continue
+        # The main thread shows the name of the program; it is the one of the GUI.
+        name = "main" if task.name == str(pid) else re.sub(r"[\t\n]", " ", name)
+        switches = [re.search(rf"^{kind}_ctxt_switches:\s*(\d+)", status, re.M) for kind in ("voluntary", "nonvoluntary")]
+        counts = [found[1] if found else "0" for found in switches]
+        lines.append(f"{load}\t{moment}\t{task.name}\t{name}\t{schedstat.split()[0]}\t{counts[0]}\t{counts[1]}\n")
+    with open(path, "a") as file:
+        file.writelines(lines)
+
+
+def threads(path):
+    """Per load, the milliseconds of CPU time per group of threads between its start and its
+    end. A thread that ended meanwhile is missing; one that began counts from nothing."""
+    if not path.exists():
+        return {}
+    taken = {}
+    for line in path.read_text().splitlines():
+        load, moment, tid, name, nanoseconds, *_ = line.split("\t")
+        taken.setdefault((load, moment), {})[tid] = (name, int(nanoseconds))
+    used = {}
+    for (load, moment), after in taken.items():
+        if moment != "end":
+            continue
+        before = taken.get((load, "start"), {})
+        groups = {}
+        for tid, (name, nanoseconds) in after.items():
+            # Threads of a pool differ only in a number at the end.
+            group = re.sub(r"[\s#:]*\d+$", "", name) or name
+            groups[group] = groups.get(group, 0) + (nanoseconds - before.get(tid, (name, 0))[1]) / 1e6
+        used[load] = groups
+    return used
 
 
 def data(directory):
@@ -136,6 +181,7 @@ def measure(directory, name):
         "seq": SEQ_BYTES,
     }
     drawn, waits, loops = [], [], set()
+    used = threads(directory / f"{name}.cpu")
     log = directory / f"{name}.log"
     for line in log.read_text(errors="replace").splitlines():
         if found := frame(line):
@@ -151,7 +197,7 @@ def measure(directory, name):
         load, start, end = parts[0], when(parts[1]), when(parts[2])
         frames_meanwhile = [found for found in drawn if start <= found.time <= end + TAIL]
         blocked = [wait for moment, wait in waits if start <= moment <= end + TAIL]
-        result[load] = Load(end - start, sizes[load], frames_meanwhile, blocked, end - start + TAIL)
+        result[load] = Load(end - start, sizes[load], frames_meanwhile, blocked, end - start + TAIL, used.get(load))
     return f"{columns}x{rows}", result, loops
 
 
@@ -419,6 +465,33 @@ def throughput(runs, terminals):
         )
 
 
+def processor(runs, terminals):
+    """Per load, the CPU time of each terminal: all of it, as a share of a core, per MB of
+    output, and its busiest groups of threads."""
+    for load in LOADS:
+        rows = []
+        for terminal in terminals:
+            done = [result[load] for _, (_, result, _) in runs[terminal] if load in result and result[load].cpu]
+            if not done:
+                continue
+            totals = [sum(measured.cpu.values()) for measured in done]
+            shares = [sum(measured.cpu.values()) / 10 / measured.seconds for measured in done]
+            per_mb = [sum(measured.cpu.values()) / (measured.size / 1e6) for measured in done]
+            groups = {}
+            for measured in done:
+                for group in measured.cpu:
+                    groups.setdefault(group, []).append(measured.cpu[group])
+            # Threads that hardly ran say nothing about the load.
+            busy = [(group, used) for group, used in groups.items() if statistics.median(used) >= 1]
+            busiest = sorted(busy, key=lambda item: -statistics.median(item[1]))[:4]
+            named = ", ".join(f"{group} {statistics.median(used):.0f}" for group, used in busiest)
+            rows.append((statistics.median(per_mb), [terminal, f"{statistics.median(totals):.0f}", f"{statistics.median(shares):.0f}", f"{statistics.median(per_mb):.1f}", named]))
+        if not rows:
+            continue
+        print(f"\n{load}: CPU time of the terminal, median of the runs (all its threads, also those that draw)")
+        table(["terminal", "CPU ms", "% of a core", "ms per MB", "busiest threads, ms"], [row for _, row in sorted(rows, key=lambda row: row[0])])
+
+
 def drawing(terminal, measured, detail):
     """For a terminal that reports its frames: how often and how fast it drew during each load."""
     rows, details = [], []
@@ -432,15 +505,18 @@ def drawing(terminal, measured, detail):
         blocked = [wait for load_run in done for wait in load_run.blocked]
         syncs = [found.sync for found in frames]
         late = f"{100 * sum(gap > LATE for gap in between) / len(between):.0f}" if between else "-"
+        costs = [sum(load_run.cpu.values()) / len(load_run.frames) for load_run in done if load_run.cpu]
+        cost = f"{statistics.median(costs):.1f}" if costs else "-"
         share = f"{100 * sum(blocked) / 1000 / sum(load_run.window for load_run in done):.0f}" if blocked else "-"
-        rows.append([load, f"{statistics.median(rates):.1f}", late, milliseconds(percentile(syncs, 0.5)), milliseconds(percentile(syncs, 0.95)), milliseconds(max(syncs)), share])
+        rows.append([load, f"{statistics.median(rates):.1f}", late, milliseconds(percentile(syncs, 0.5)), milliseconds(percentile(syncs, 0.95)), milliseconds(max(syncs)), share, cost])
         details.append((load, frames, between, blocked))
     loops = sorted({loop for _, (_, _, seen) in measured for loop in seen})
     print(f"\n{terminal}: frames that Qt Quick drew during each load (render loop {', '.join(loops)})")
     print(f"fps is the median over the runs; late are the gaps between frames of more than {LATE:.0f} ms, one at")
     print("60 Hz left out; sync is where Kudari paints, in whole milliseconds as Qt gives them, cut off;")
-    print("GUI blocked is the share of the time the GUI thread waited for the render thread, at least.")
-    table(["load", "fps", "late %", "sync p50", "sync p95", "sync max", "GUI blocked %"], rows)
+    print("GUI blocked is the share of the time the GUI thread waited for the render thread, at least;")
+    print("CPU per frame is the CPU time of all threads during the load, divided by the frames.")
+    table(["load", "fps", "late %", "sync p50", "sync p95", "sync max", "GUI blocked %", "CPU ms/frame"], rows)
     if not detail:
         return
     print("\nIn detail, over all runs. Qt cuts off to whole milliseconds; swap includes the wait for the")
@@ -495,6 +571,7 @@ def report(directory, order, detail=False):
     print("The terminals differ in their fonts and so in their cells, and the frames load in its size:")
     print("the highest throughput comes first.")
     throughput(runs, terminals)
+    processor(runs, terminals)
     # Only Qt Quick reports its frames: those of Kudari.
     for terminal in terminals:
         if terminal == "kudari" and not any(measured.frames for _, (_, result, _) in runs[terminal] for measured in result.values()):
@@ -506,7 +583,7 @@ def report(directory, order, detail=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("action", choices=("data", "frames", "environment", "order", "report"))
+    parser.add_argument("action", choices=("data", "frames", "environment", "order", "cpu", "report"))
     parser.add_argument("directory", type=Path)
     parser.add_argument("rest", nargs="*", help="rows and columns for frames, the Kudari measured for environment, terminals for report")
     parser.add_argument("--local", help="for environment: the release build of the checkout, to warn when it is newer")
@@ -523,6 +600,10 @@ def main():
         removed = [name for name in arguments.variables.split(",") if name]
         plan = Plan(arguments.runs, arguments.warmup, arguments.seed) if arguments.runs else None
         environment(arguments.directory, arguments.rest[0] if arguments.rest else None, arguments.local, removed, arguments.keep_env, plan)
+    elif arguments.action == "cpu":
+        if len(arguments.rest) != 3 or not arguments.rest[0].isdigit() or arguments.rest[2] not in ("start", "end"):
+            parser.error("cpu needs the file, the process, the load and start or end")
+        cpu(arguments.directory, *arguments.rest)
     elif arguments.action == "order":
         # The directory stands for the run here, to keep the arguments in one place.
         print(" ".join(order(arguments.seed, str(arguments.directory), arguments.rest)))

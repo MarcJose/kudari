@@ -6,6 +6,7 @@
 import contextlib
 import importlib.util
 import io
+import os
 import sys
 import tempfile
 import unittest
@@ -127,6 +128,49 @@ class Report(unittest.TestCase):
         self.assertIn("gap", text)
         # sync 9 and render 1, cut off: at least 10 ms, over the budget of 120 and 144 Hz only.
         self.assertIn("at least 0 % / 100 % / 100 %", text)
+
+    def cpu_of(self, name, load, *threads):
+        """Threads as (their ID, name, milliseconds at the start, at the end)."""
+        lines = []
+        for tid, thread, start, end in threads:
+            if start is not None:
+                lines.append(f"{load}\tstart\t{tid}\t{thread}\t{int(start * 1e6)}\t1\t0")
+            if end is not None:
+                lines.append(f"{load}\tend\t{tid}\t{thread}\t{int(end * 1e6)}\t1\t0")
+        (self.directory / f"{name}.cpu").write_text("\n".join(lines) + "\n")
+
+    def test_the_cpu_time_of_a_load_is_per_thread_between_its_start_and_end(self):
+        self.run_of("kudari-1", [threaded(0.01 * index, 1) for index in range(10)])
+        self.cpu_of(
+            "kudari-1",
+            "plain",
+            (1, "main", 100, 104),
+            (2, "PTY reader", 50, 150),
+            # Two threads of a pool count together; one that began meanwhile counts from 0.
+            (3, "Thread (pooled)", 10, 20),
+            (4, "Thread (pooled)", None, 30),
+            (5, "QSGRenderThread", 0, 0.4),
+            # Threads numbered at the end count together as well.
+            (6, "gpu:7", 0, 3),
+            (7, "gpu:8", 0, 3),
+        )
+        text = self.report("kudari")
+        part = text.split("plain: CPU time of the terminal")[1].splitlines()
+        line = next(entry for entry in part if entry.startswith("kudari "))
+        # 4 + 100 + 40 + 0.4 + 6 ms in 0.2 s of load: 75 % of a core.
+        self.assertIn(" 150 ", line)
+        self.assertIn(" 75 ", line)
+        self.assertIn("PTY reader 100, Thread (pooled) 40, gpu 6, main 4", line)
+        self.assertNotIn("QSGRenderThread", line)
+        # 150.4 ms over 10 frames.
+        self.assertEqual(self.frames_row(text, "plain")[7], "15.0")
+
+    def test_the_threads_of_a_process_are_read_from_proc(self):
+        path = self.directory / "self.cpu"
+        bench.cpu(path, os.getpid(), "plain", "start")
+        fields = [line.split("\t") for line in path.read_text().splitlines()]
+        self.assertIn(["plain", "start", str(os.getpid()), "main"], [entry[:4] for entry in fields])
+        self.assertTrue(all(entry[4].isdigit() for entry in fields))
 
     def test_no_run_at_all_is_said_plainly(self):
         self.assertIn("No run finished", self.report("kudari"))
