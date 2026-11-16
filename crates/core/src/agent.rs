@@ -563,7 +563,9 @@ impl App {
         let format = &self.settings().title_format;
         let sessions: Vec<Value> = self
             .stack()
-            .sessions()
+            .tabs()
+            .iter()
+            .filter_map(|id| self.stack().session(*id))
             .map(|session| {
                 let terminals: Vec<Value> = session
                     .terminal_ids()
@@ -1143,6 +1145,29 @@ mod tests {
                 &host,
             );
             assert_eq!(refused, Err(Error::Denied(BUSY.into())));
+        }
+
+        #[test]
+        fn terminals_come_in_the_order_of_the_tabs() {
+            let mut app = allowed();
+            let host = running(false, true);
+            let first = app.stack().active_id().unwrap();
+            let _ = app.add_session(SessionType::Single, &host);
+            let (third, _) = app.add_session(SessionType::Single, &host);
+            // The user moves the third tab to the front.
+            app.stack_mut().move_tab_left(third);
+            app.stack_mut().move_tab_left(third);
+            let listed: Value = serde_json::from_str(&ask(&mut app, Request::Terminals, &host).unwrap()).unwrap();
+            let order: Vec<i64> = listed["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|session| session["id"].as_i64().unwrap())
+                .collect();
+            let tabs: Vec<i64> = app.stack().tabs().iter().map(|id| i64::from(*id)).collect();
+            assert_eq!(order, tabs);
+            assert_eq!(order[0], i64::from(third));
+            assert_eq!(order[1], i64::from(first));
         }
 
         #[test]
