@@ -593,6 +593,11 @@ impl TestHooks {
         queue(move |_| crate::kde::rk_test_answer_agent(allow));
     }
 
+    /// Whether the window stays below an open dialog of Kudari.
+    async fn dialog_open(&self) -> bool {
+        ask(|c| *c.dialog_open(), false).await
+    }
+
     /// Whether the bar shows that an AI agent has access.
     async fn agent_access(&self) -> bool {
         ask(|c| *c.agent_access(), false).await

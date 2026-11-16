@@ -706,6 +706,16 @@ check "an allowed agent reads the terminals" yes "$(receive | grep -q '"sessions
 check "the bar shows that an agent has access" true "$(hook AgentAccess)"
 check "another agent has to ask for itself" yes "$( (agent_once list_terminals '{}' > "$work/other" &); \
     question | grep -q 'read your terminals' && hook AnswerAgent false; sleep 0.5; refused 'The user did not allow' < "$work/other")"
+# Two dialogs at once: the window stays below the one left open until it closes as well.
+(agent_once list_terminals '{}' > "$work/third" &)
+question > /dev/null
+protected=$(active)
+sessions setSessionClosable "$protected" false; sleep 0.3
+hook Trigger close-session; sleep 1; input key 1; sleep 0.6
+check "a dialog left open keeps the window below it" true "$(hook DialogOpen)"
+hook AnswerAgent false; sleep 0.6
+check "the window comes back when the last dialog closed" false "$(hook DialogOpen)"
+sessions setSessionClosable "$protected" true; sleep 0.3
 check "agents may not type by default" yes "$(agent type_text '{"text": "ls"}' | refused 'Controlling terminals is switched off')"
 hook SetSetting AllowAgentControl true; sleep 0.3
 check "more rights end the access granted before" false "$(hook AgentAccess)"

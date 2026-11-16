@@ -57,7 +57,8 @@ pub mod qobject {
         #[qproperty(i32, work_height, cxx_name = "workHeight")]
         #[qproperty(bool, window_visible, cxx_name = "windowVisible")]
         #[qproperty(bool, fullscreen)]
-        #[qproperty(bool, dialog_open, cxx_name = "dialogOpen")]
+        /// True while a dialog of Kudari is open, which the window then stays below.
+        #[qproperty(bool, dialog_open, cxx_name = "dialogOpen", READ, NOTIFY)]
         /// True while an AI agent may use Kudari.
         #[qproperty(bool, agent_access, cxx_name = "agentAccess")]
         type Controller = super::ControllerRust;
@@ -135,6 +136,11 @@ pub mod qobject {
         /// A menu built in QML closed, which ends the session of a tab menu.
         #[qinvokable]
         fn menu_closed(self: Pin<&mut Self>);
+
+        /// A dialog of QML opened or closed; each one that opens closes once.
+        #[qinvokable]
+        #[cxx_name = "dialogActive"]
+        fn dialog_active(self: Pin<&mut Self>, active: bool);
 
         #[qinvokable]
         fn popup_terminal_menu(self: Pin<&mut Self>, x: i32, y: i32, can_copy: bool, link: &QString);
@@ -351,6 +357,13 @@ static WAITING: Mutex<Waiting> = Mutex::new(Waiting {
 
 thread_local! {
     static INSTANCE: Cell<*mut qobject::Controller> = const { Cell::new(std::ptr::null_mut()) };
+    /// The dialogs of Kudari that are open. Several can be at once, such as the settings and a
+    /// question about an agent: the window stays below them until the last one closed.
+    static DIALOGS: Cell<u32> = const { Cell::new(0) };
+}
+
+fn dialogs_open() -> bool {
+    DIALOGS.with(Cell::get) > 0
 }
 
 /// Runs `action` on the Qt thread with the controller, once it has started.
@@ -832,8 +845,7 @@ impl qobject::Controller {
     /// `MainWindow::wmActiveWindowChanged`: own menus and dialogs do not retract.
     fn focus_lost(self: Pin<&mut Self>) {
         let has_focus = qt::rk_application_has_focus();
-        let dialog_open = *self.dialog_open();
-        self.update(|app| app.focus_lost(has_focus, dialog_open));
+        self.update(|app| app.focus_lost(has_focus, dialogs_open()));
     }
 
     /// Translates a text of the QML pages, which the check of the translations finds there.
@@ -1237,10 +1249,27 @@ impl qobject::Controller {
         queue(|controller| controller.update(App::menu_closed));
     }
 
-    pub fn dialog_active(mut self: Pin<&mut Self>, active: bool) {
-        self.as_mut().set_dialog_open(active);
-        if !active {
-            self.update(App::dialog_closed);
+    pub fn dialog_active(self: Pin<&mut Self>, active: bool) {
+        if active {
+            DIALOGS.with(|count| count.set(count.get().saturating_add(1)));
+            self.show_dialogs();
+        } else {
+            self.dialog_closed();
+        }
+    }
+
+    fn dialog_closed(mut self: Pin<&mut Self>) {
+        DIALOGS.with(|count| count.set(count.get().saturating_sub(1)));
+        self.as_mut().show_dialogs();
+        self.update(App::dialog_closed);
+    }
+
+    /// Puts the window below the dialogs while one is open, and back when the last one closed.
+    fn show_dialogs(mut self: Pin<&mut Self>) {
+        let open = dialogs_open();
+        if self.dialog_open != open {
+            self.as_mut().rust_mut().dialog_open = open;
+            self.dialog_open_changed();
         }
     }
 

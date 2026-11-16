@@ -29,8 +29,8 @@ ApplicationWindow {
     // the window of the terminals, which Qt would center it on, may still be sliding in.
     function show(module) {
         current = Math.max(0, modules.findIndex(entry => entry.id === module));
-        controller.dialogOpen = true;
         if (!visible) {
+            controller.dialogActive(true);
             x = screen.virtualX + Math.round((screen.width - width) / 2);
             y = screen.virtualY + Math.round((screen.height - height) / 2);
         }
@@ -45,7 +45,7 @@ ApplicationWindow {
     minimumWidth: 640
     minimumHeight: 400
     title: controller.translate("@title:menu", "Settings")
-    onClosing: controller.dialogOpen = false
+    onClosing: controller.dialogActive(false)
 
     RowLayout {
         anchors.fill: parent
