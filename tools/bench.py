@@ -5,6 +5,7 @@
 
     tools/bench.py data DIR                 the text and the colored text
     tools/bench.py frames DIR ROWS COLUMNS  300 full screens of a terminal of that size
+    tools/bench.py environment DIR [BINARY] what was measured, on what, and how
     tools/bench.py report DIR [TERMINAL...]  the runs in DIR, in the order of the terminals
 
 The data comes from a fixed seed, so every run gets the same. For Kudari, the report also
@@ -14,9 +15,13 @@ counts the frames that Qt Quick drew during each load and how long it took to pr
 
 import argparse
 import datetime
+import hashlib
+import os
+import platform
 import random
 import re
 import statistics
+import subprocess
 from pathlib import Path
 
 WORDS = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor".split()
@@ -130,7 +135,167 @@ def table(header, rows):
         print(line(row))
 
 
+def output(*command, environment=None):
+    """What a command prints, or None when it is missing or fails."""
+    try:
+        done = subprocess.run(command, capture_output=True, text=True, timeout=20, check=True, env=environment)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout.strip()
+
+
+def content(path):
+    try:
+        return Path(path).read_text().strip()
+    except OSError:
+        return None
+
+
+def digest(path):
+    hashed = hashlib.sha256()
+    with open(path, "rb") as file:
+        for block in iter(lambda: file.read(1 << 20), b""):
+            hashed.update(block)
+    return hashed.hexdigest()
+
+
+def makepkg_flags():
+    """The RUSTFLAGS and CXXFLAGS that makepkg builds with, from its configuration."""
+    script = (
+        'for file in /etc/makepkg.conf /etc/makepkg.conf.d/*.conf "${XDG_CONFIG_HOME:-$HOME/.config}/pacman/makepkg.conf" "$HOME/.makepkg.conf"; do '
+        '[ -r "$file" ] && . "$file"; done; printf "%s\\n%s\\n" "$RUSTFLAGS" "$CXXFLAGS"'
+    )
+    flags = output("bash", "-c", script)
+    if flags is None:
+        return None
+    rust, _, cxx = flags.partition("\n")
+    return " ".join(rust.split()), " ".join(cxx.split())
+
+
+def build(binary, local):
+    """What tells the measured Kudari apart from another build: version, origin, hashes,
+    compilers and, for a package, the flags of makepkg."""
+    path = Path(binary)
+    facts = {"path": str(path), "sha256": digest(path), "modified": path.stat().st_mtime}
+    # --version builds the application of Qt, which needs no screen this way.
+    facts["version"] = output(str(path), "--version", environment={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
+    notes = output("readelf", "-n", str(path)) or ""
+    found = re.search(r"Build ID: (\w+)", notes)
+    facts["build id"] = found[1] if found else None
+    comment = output("readelf", "-p", ".comment", str(path)) or ""
+    tools = []
+    for pattern, name in ((r"rustc version (\S+)", "rustc"), (r"GCC: \([^)]*\) (\S+)", "GCC"), (r"clang version (\S+)", "clang"), (r"LLD (\S+)", "LLD")):
+        found = re.search(pattern, comment)
+        if found:
+            tools.append(f"{name} {found[1]}")
+    facts["compilers"] = tools
+    sections = output("readelf", "-S", "-W", str(path)) or ""
+    facts["debug info"] = ".debug_info" in sections
+    owner = output("pacman", "-Qo", str(path))
+    found = re.search(r"is owned by (.+)$", owner or "")
+    facts["package"] = found[1] if found else None
+    if facts["package"]:
+        facts["makepkg"] = makepkg_flags()
+    local = Path(local) if local else None
+    if local and local.exists() and local.resolve() != path.resolve():
+        facts["newer local build"] = str(local) if local.stat().st_mtime > facts["modified"] else None
+    if local and local.exists() and local.resolve() == path.resolve():
+        checkout = Path(__file__).resolve().parent.parent
+        facts["git"] = output("git", "-C", str(checkout), "describe", "--tags", "--always", "--dirty")
+        facts["rustflags"] = os.environ.get("RUSTFLAGS") or os.environ.get("CARGO_ENCODED_RUSTFLAGS", "").replace("\x1f", " ") or None
+    return facts
+
+
+def computer():
+    """The processor, its clock and the load, which change how fast short loads run."""
+    facts = {"kernel": platform.release(), "threads": os.cpu_count(), "load": os.getloadavg()[0]}
+    found = re.search(r"^model name\s*:\s*(.+)$", content("/proc/cpuinfo") or "", re.M)
+    facts["processor"] = found[1] if found else platform.machine()
+    frequency = Path("/sys/devices/system/cpu/cpu0/cpufreq")
+    facts["driver"] = content(frequency / "scaling_driver")
+    facts["governor"] = content(frequency / "scaling_governor")
+    facts["epp"] = content(frequency / "energy_performance_preference")
+    boost = content("/sys/devices/system/cpu/cpufreq/boost") or content(frequency / "boost")
+    if boost is None and (no_turbo := content("/sys/devices/system/cpu/intel_pstate/no_turbo")) is not None:
+        boost = "0" if no_turbo == "1" else "1"
+    facts["boost"] = None if boost is None else boost == "1"
+    facts["power profile"] = output("powerprofilesctl", "get")
+    mains = [content(supply / "online") for supply in Path("/sys/class/power_supply").glob("*") if content(supply / "type") == "Mains"]
+    facts["on battery"] = bool(mains) and all(online == "0" for online in mains)
+    return facts
+
+
+def versions():
+    found = {}
+    found["Qt"] = output("qmake6", "-query", "QT_VERSION") or output("qtpaths6", "--qt-version")
+    kwin = output("kwin_wayland", "--version")
+    found["KWin"] = kwin.split()[-1] if kwin else None
+    mesa = output("pacman", "-Q", "mesa")
+    found["Mesa"] = mesa.split()[-1].split(":")[-1].rsplit("-", 1)[0] if mesa else None
+    return found
+
+
+def describe(kudari, machine, software, removed, kept):
+    """The lines of the head of the report, and the warnings about the measurement."""
+    lines, warnings = [], []
+    if kudari:
+        parts = [kudari["version"] or "no --version"]
+        if kudari.get("git"):
+            parts.append(f"git {kudari['git']}")
+        if kudari["package"]:
+            parts.append(f"package {kudari['package']}")
+        parts.append(f"sha256 {kudari['sha256'][:16]}")
+        if kudari["build id"]:
+            parts.append(f"build ID {kudari['build id'][:16]}")
+        parts.extend(kudari["compilers"])
+        parts.append("with debug info" if kudari["debug info"] else "without debug info")
+        lines.append(f"Kudari    {kudari['path']}: {', '.join(parts)}")
+        if kudari.get("makepkg"):
+            rust, cxx = kudari["makepkg"]
+            lines.append(f"          makepkg builds with RUSTFLAGS={rust or '(none)'} CXXFLAGS={cxx or '(none)'}")
+        if kudari.get("rustflags"):
+            lines.append(f"          RUSTFLAGS here: {kudari['rustflags']}, if the build had them too")
+        if kudari.get("newer local build"):
+            warnings.append(f"{kudari['newer local build']} is newer than the Kudari measured; name it with --binary to measure it")
+    clock = [machine["driver"] or "no cpufreq"]
+    if machine["governor"]:
+        clock.append(f"governor {machine['governor']}")
+    if machine["epp"]:
+        clock.append(f"EPP {machine['epp']}")
+    if machine["boost"] is not None:
+        clock.append("boost on" if machine["boost"] else "boost off")
+    if machine["power profile"]:
+        clock.append(f"power profile {machine['power profile']}")
+    lines.append(f"Computer  {machine['processor']}, {machine['threads']} threads; Linux {machine['kernel']}; {', '.join(clock)}; load {machine['load']:.2f}")
+    lines.append("Versions  " + ", ".join(f"{name} {version or 'unknown'}" for name, version in software.items()))
+    if removed:
+        verb = "kept, with --keep-env" if kept else "removed from the environment (--keep-env keeps them)"
+        lines.append(f"Variables {', '.join(removed)}: {verb}")
+    if machine["load"] > 1:
+        warnings.append(f"the computer was busy (load {machine['load']:.2f}); other programs take time from the terminals")
+    if machine["on battery"]:
+        warnings.append("the computer runs on battery, which may slow it down")
+    if "performance" not in (machine["governor"], machine["epp"]) and machine["driver"]:
+        warnings.append(
+            "neither the governor nor the EPP is performance, so short loads depend on how fast the processor speeds up; "
+            "for steadier numbers: powerprofilesctl launch -p performance -- tools/bench.sh ..."
+        )
+    return lines + [f"Warning: {warning}" for warning in warnings]
+
+
+def environment(directory, binary, local, removed, kept):
+    """Writes the head of the report to DIR/environment.txt and shows it."""
+    kudari = build(binary, local) if binary else None
+    text = "\n".join(describe(kudari, computer(), versions(), removed, kept)) + "\n"
+    (directory / "environment.txt").write_text(text)
+    print(text, end="")
+
+
 def report(directory, order):
+    head = directory / "environment.txt"
+    if head.exists():
+        print()
+        print(head.read_text(), end="")
     runs = {}
     for path in sorted(directory.glob("*-*.txt")):
         terminal, run = path.stem.rsplit("-", 1)
@@ -186,11 +351,19 @@ def report(directory, order):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("action", choices=("data", "frames", "report"))
+    parser.add_argument("action", choices=("data", "frames", "environment", "report"))
     parser.add_argument("directory", type=Path)
-    parser.add_argument("rest", nargs="*", help="rows and columns for frames, terminals for report")
+    parser.add_argument("rest", nargs="*", help="rows and columns for frames, the Kudari measured for environment, terminals for report")
+    parser.add_argument("--local", help="for environment: the release build of the checkout, to warn when it is newer")
+    parser.add_argument("--variables", default="", help="for environment: the variables of Qt, Mesa and the like that were set, with commas")
+    parser.add_argument("--keep-env", action="store_true", help="for environment: those variables were kept")
     arguments = parser.parse_args()
-    if arguments.action == "data":
+    if arguments.action == "environment":
+        if len(arguments.rest) > 1:
+            parser.error("environment takes at most the Kudari measured")
+        removed = [name for name in arguments.variables.split(",") if name]
+        environment(arguments.directory, arguments.rest[0] if arguments.rest else None, arguments.local, removed, arguments.keep_env)
+    elif arguments.action == "data":
         data(arguments.directory)
     elif arguments.action == "frames":
         if len(arguments.rest) != 2 or not all(part.isdigit() for part in arguments.rest):
