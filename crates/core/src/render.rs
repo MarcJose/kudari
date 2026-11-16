@@ -153,10 +153,22 @@ fn selection_colors(foreground: Rgb, back: Rgb, scheme: &ColorScheme, swapped: b
     }
 }
 
-/// The rectangles of plain, double, curly, dotted or dashed underlines under `cells` cells.
+/// The rectangles of plain, double, curly, dotted or dashed underlines under `cells` cells,
+/// a pixel below the baseline, or higher where the font leaves less room below it: the lines
+/// stay in their cell, which the next line would paint over.
 fn underline_rects(geometry: &Geometry, column: i32, line: i32, cells: f64, flags: Flags) -> Vec<Rect> {
     let x = geometry.origin_x + f64::from(column) * geometry.cell_width;
-    let y = geometry.origin_y + f64::from(line) * geometry.cell_height + geometry.ascent + 1.0;
+    let top = geometry.origin_y + f64::from(line) * geometry.cell_height;
+    let height = geometry.cell_height;
+    // How many pixels the lines of each kind take below their first.
+    let below = if flags.contains(Flags::DOUBLE_UNDERLINE) {
+        2.0
+    } else if flags.contains(Flags::UNDERCURL) {
+        1.0
+    } else {
+        0.0
+    };
+    let y = top + (geometry.ascent + 1.0).min(height - 1.0 - below).max(0.0);
     let width = cells * geometry.cell_width;
     let steps = width as i32;
     let line_at = |y: f64| Rect {
@@ -173,7 +185,11 @@ fn underline_rects(geometry: &Geometry, column: i32, line: i32, cells: f64, flag
     };
     let dots = |period: i32, on: i32| (0..steps).filter(move |step| step % period < on);
     if flags.contains(Flags::DOUBLE_UNDERLINE) {
-        vec![line_at(y), line_at(y + 2.0)]
+        if height < 3.0 {
+            vec![line_at(y)]
+        } else {
+            vec![line_at(y), line_at(y + 2.0)]
+        }
     } else if flags.contains(Flags::UNDERCURL) {
         (0..steps).map(|step| pixel(step, f64::from((step / 2) % 2))).collect()
     } else if flags.contains(Flags::DOTTED_UNDERLINE) {
@@ -469,6 +485,33 @@ mod tests {
                 Paint::Text { .. } => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn underlines_stay_in_their_cell_with_little_room_below_the_baseline() {
+        // A small font: the baseline 3 pixels above the bottom of the cell.
+        let tight = Geometry {
+            cell_height: GEOMETRY.ascent + 3.0,
+            ..GEOMETRY
+        };
+        let bottom = tight.origin_y + tight.cell_height;
+        for flags in [
+            Flags::UNDERLINE,
+            Flags::DOUBLE_UNDERLINE,
+            Flags::UNDERCURL,
+            Flags::DOTTED_UNDERLINE,
+            Flags::DASHED_UNDERLINE,
+        ] {
+            let rects = underline_rects(&tight, 0, 0, 1.0, flags);
+            assert!(!rects.is_empty(), "{flags:?}");
+            assert!(
+                rects.iter().all(|rect| rect.y + rect.height <= bottom),
+                "{flags:?}: {rects:?}"
+            );
+        }
+        // With room enough, the lines stay a pixel below the baseline.
+        let plain = underline_rects(&GEOMETRY, 0, 0, 1.0, Flags::DOUBLE_UNDERLINE);
+        assert_eq!(plain[0].y, GEOMETRY.origin_y + GEOMETRY.ascent + 1.0);
     }
 
     #[test]
