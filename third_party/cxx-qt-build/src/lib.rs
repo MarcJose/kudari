@@ -717,7 +717,7 @@ impl CxxQtBuilder {
 
     fn is_debug() -> bool {
         let debug = std::env::var("DEBUG").unwrap_or_else(|_| "0".to_owned());
-        debug != "0" && debug != "false" || debug != "none"
+        debug != "0" && debug != "false" && debug != "none"
     }
 
     fn setup_cc_builder(builder: &mut cc::Build, include_paths: &[impl AsRef<Path>]) {
