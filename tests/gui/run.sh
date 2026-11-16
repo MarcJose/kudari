@@ -276,6 +276,38 @@ cp /usr/share/color-schemes/BreezeDark.colors "$XDG_CONFIG_HOME/kdeglobals"
 kwriteconfig6 --notify --file kdeglobals --group General --key KudariTest 1; sleep 1.5
 check "the terminal follows a theme change while running" yes "$([ "$(background)" != "$light" ] && echo yes || echo no)"
 
+# Programs ask for the background, as neovim does to choose light or dark colors, and for
+# the size in pixels, as image viewers do. The device attributes come last: programs take
+# their answer as the end of the answers.
+cat > "$work/ask" <<'EOF'
+import os, re, select, sys, termios, tty
+saved = termios.tcgetattr(0)
+tty.setraw(0)
+os.write(1, b"\033]11;?\033\\\033[14t\033[c")
+reply = b""
+while not re.search(rb"\033\[\?[0-9;]*c", reply) and select.select([0], [], [], 2)[0]:
+    reply += os.read(0, 256)
+termios.tcsetattr(0, termios.TCSAFLUSH, saved)
+color = re.search(rb"\033\]11;rgb:(..)../(..)../(..)..\033\\", reply)
+size = re.search(rb"\033\[4;(\d+);(\d+)t", reply)
+columns, lines = os.get_terminal_size()
+fits = bool(size) and int(size[1]) > 0 and int(size[1]) % lines == 0 and int(size[2]) % columns == 0
+order = bool(color and size) and color.start() < size.start() < reply.index(b"\033[?")
+with open(sys.argv[1], "w") as found:
+    found.write("#" + b"".join(color.groups()).decode() if color else "none")
+    found.write(f" {fits} {order}\n")
+EOF
+run "python3 $work/ask $work/asked"; sleep 1
+check "programs get the background, the size in pixels and the attributes in order" \
+    "$(background) True True" "$(cat "$work/asked" 2>/dev/null)"
+# A program that switched flow control off keeps it off while the settings change: nano and
+# emacs save with Ctrl+S.
+run "sh -c 'stty -ixon; sleep 2; stty -a; stty ixon' > $work/ixon"
+hook SetSetting SilenceSeconds 2; sleep 2.5
+hook SetSetting SilenceSeconds 1; sleep 0.2
+check "a change of the settings leaves flow control to the program" -ixon \
+    "$(tr -s ' ;' '\n' < "$work/ixon" | grep -x -- '-\{0,1\}ixon')"
+
 setting() { sed -n "s/^$1=//p" "$work/config/kudarirc"; }
 
 # The bar at the bottom: two tabs titled "~ : sh", the close button of the second at 221.

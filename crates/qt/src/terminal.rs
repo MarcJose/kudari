@@ -23,7 +23,10 @@ impl Listener for Qt {
                 drop(pending);
                 controller.terminal_output(terminal);
             }
-            Report::Bell => controller.terminal_bell(terminal),
+            Report::Bell(pending) => {
+                drop(pending);
+                controller.terminal_bell(terminal);
+            }
             Report::Exited => controller.terminal_exited(terminal),
         });
     }
