@@ -22,12 +22,12 @@ FormCard.FormCardPage {
 
     readonly property var hintModifiers: [
         {text: t("@item:inlistbox", "Off"), value: "none"},
-        {text: "Ctrl", value: "ctrl"},
-        {text: "Alt", value: "alt"},
-        {text: "Meta", value: "meta"},
-        {text: "Ctrl+Shift", value: "ctrl+shift"},
-        {text: "Ctrl+Alt", value: "ctrl+alt"},
-        {text: "Shift+Alt", value: "shift+alt"}
+        {text: t("@item:inlistbox keyboard modifier", "Ctrl"), value: "ctrl"},
+        {text: t("@item:inlistbox keyboard modifier", "Alt"), value: "alt"},
+        {text: t("@item:inlistbox keyboard modifier", "Meta"), value: "meta"},
+        {text: t("@item:inlistbox keyboard modifier", "Ctrl+Shift"), value: "ctrl+shift"},
+        {text: t("@item:inlistbox keyboard modifier", "Ctrl+Alt"), value: "ctrl+alt"},
+        {text: t("@item:inlistbox keyboard modifier", "Shift+Alt"), value: "shift+alt"}
     ]
     readonly property bool hasShells: controller.supports("shells")
     readonly property var shells: [{text: t("@item:inlistbox", "System default"), value: ""}]

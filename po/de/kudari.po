@@ -1435,3 +1435,27 @@ msgstr "Hell"
 msgctxt "@item:inlistbox"
 msgid "Dark"
 msgstr "Dunkel"
+
+msgctxt "@item:inlistbox keyboard modifier"
+msgid "Ctrl"
+msgstr "Strg"
+
+msgctxt "@item:inlistbox keyboard modifier"
+msgid "Alt"
+msgstr "Alt"
+
+msgctxt "@item:inlistbox keyboard modifier"
+msgid "Meta"
+msgstr "Meta"
+
+msgctxt "@item:inlistbox keyboard modifier"
+msgid "Ctrl+Shift"
+msgstr "Strg+Umschalt"
+
+msgctxt "@item:inlistbox keyboard modifier"
+msgid "Ctrl+Alt"
+msgstr "Strg+Alt"
+
+msgctxt "@item:inlistbox keyboard modifier"
+msgid "Shift+Alt"
+msgstr "Umschalt+Alt"
