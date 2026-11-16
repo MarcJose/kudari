@@ -753,6 +753,16 @@ impl qobject::Controller {
         new.unwrap_or(-1)
     }
 
+    pub fn split_terminal(mut self: Pin<&mut Self>, terminal: TerminalId, orientation: Orientation) -> i32 {
+        let (new, effects) = self
+            .as_mut()
+            .rust_mut()
+            .app
+            .split_terminal(terminal, Some(orientation), &Terminals);
+        self.apply(effects);
+        new.unwrap_or(-1)
+    }
+
     pub fn raise(self: Pin<&mut Self>, session: SessionId) {
         self.update(|app| app.raise(session));
     }

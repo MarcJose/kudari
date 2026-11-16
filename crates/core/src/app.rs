@@ -654,6 +654,20 @@ impl App {
         let Some(terminal) = self.stack.session(session).map(|found| found.active_terminal) else {
             return (None, Vec::new());
         };
+        self.split_terminal(terminal, orientation, host)
+    }
+
+    /// Splits `terminal`, `None` along its longer side; the new terminal starts where it is
+    /// and with its shell.
+    pub fn split_terminal(
+        &mut self,
+        terminal: TerminalId,
+        orientation: Option<Orientation>,
+        host: &dyn Host,
+    ) -> (Option<TerminalId>, Vec<Effect>) {
+        if self.stack.session_for_terminal(terminal).is_none() {
+            return (None, Vec::new());
+        }
         let directory = self.start_directory(terminal, host);
         let (width, height) = self.area;
         let new = match orientation {
@@ -1641,6 +1655,15 @@ mod tests {
         app.started(&[new]);
         assert!(!app.pending_directories.iter().any(|(terminal, _)| *terminal == new));
         assert_eq!(app.split(-5, None, &Here), (None, Vec::new()));
+        // A terminal split by its id, as over D-Bus, starts where that one is too.
+        let (by_id, _) = app.split_terminal(first, Some(Orientation::Vertical), &Here);
+        let by_id = by_id.unwrap();
+        let start = app.pending_starts().into_iter().find(|start| start.terminal == by_id);
+        assert_eq!(
+            start.and_then(|start| start.directory),
+            Some(PathBuf::from(format!("/work/{first}")))
+        );
+        assert_eq!(app.split_terminal(-5, None, &Here), (None, Vec::new()));
         let home = app_with(&[("InheritDirectory", "false")]);
         assert_eq!(home.active_directory(&Here), crate::process::home());
         // The file manager shows where a terminal is, also when new ones start at home.

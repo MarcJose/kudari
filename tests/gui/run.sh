@@ -489,6 +489,14 @@ sessions raiseSession "$first"; sleep 0.4
 
 sessions runCommandInTerminal "$(sessions activeTerminalId)" "echo dbus > $work/dbus"; sleep 0.6
 check "D-Bus runs a command in a given terminal" "dbus|" "$(content "$work/dbus")"
+# A terminal split over D-Bus starts where the one split is.
+mkdir -p "$work/split-here"
+run "cd $work/split-here"
+split=$(sessions splitTerminalLeftRight "$(sessions activeTerminalId)"); sleep 1
+sessions runCommandInTerminal "$split" "pwd > $work/split-dir"; sleep 0.6
+check "a terminal split over D-Bus starts where the one split is" "$work/split-here|" "$(content "$work/split-dir")"
+sessions removeTerminal "$split"; sleep 0.6
+run "clear; cd"
 run "clear; cat > $work/typed"
 hook Key A; sleep 0.2
 hook InputMethod "vor" ""; sleep 0.2
