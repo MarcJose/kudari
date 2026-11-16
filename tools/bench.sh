@@ -73,6 +73,10 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
             sleep 0.1
         done
         sleep 2
+        # A terminal that ended meanwhile would leave the name to the bus, which starts the
+        # installed one in its place.
+        owner=$(qdbus6 org.freedesktop.DBus / org.freedesktop.DBus.GetConnectionUnixProcessID "$1" 2> /dev/null || true)
+        [ "$owner" = "$pid" ] || fail "$terminal ended after it started; see $log"
     }
     # KWin's --scale only enlarges the virtual screen; the scale that programs see is a setting
     # of the screen.
@@ -211,9 +215,10 @@ if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
     # The bus and the portals it starts complain about what the virtual session lacks; that
     # goes to a file, and the measurement itself writes to file descriptor 3.
     # shellcheck disable=SC2086 # the terminals are words of their own
-    # Qt's own render loop and backend, whatever the environment sets.
+    # Qt's own render loop and backend, whatever the environment sets. A Kudari or Yakuake
+    # that the bus would start finds neither the settings nor the services of the user.
     if env -u WAYLAND_DISPLAY -u DISPLAY -u QSG_RENDER_LOOP -u QT_QUICK_BACKEND -u QSG_RHI_BACKEND \
-        KUDARI_BENCH_WORK="$work" \
+        XDG_CONFIG_HOME=/nonexistent XDG_DATA_HOME=/nonexistent KUDARI_BENCH_WORK="$work" \
         dbus-run-session -- "$0" --binary "$binary" --runs "$runs" --scale "$scale" --loads "$(echo $loads | tr " " ",")" $terminals \
         < /dev/null 3>&2 2> "$work/dbus.log"; then
         python3 "$tools/bench.py" report "$work" $terminals
