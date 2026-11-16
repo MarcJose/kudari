@@ -7,6 +7,20 @@ set -eu
 cd "$(dirname "$0")/.."
 target=${CARGO_TARGET_DIR:-target}
 
+# The tools of the checks, before any of them runs: a missing one would stop them halfway
+# with no more than "command not found". CONTRIBUTING.md names where they come from.
+# qmllint lies among the tools of Qt, which qmake names, the one that cxx-qt builds with.
+qmllint=$("${QMAKE:-qmake6}" -query QT_HOST_BINS 2>/dev/null)/qmllint
+[ -x "$qmllint" ] || qmllint=/usr/lib/qt6/bin/qmllint
+missing=""
+for tool in namcap vale g++ checkXML6 xsltproc "$qmllint"; do
+    command -v "$tool" > /dev/null || missing="$missing $tool"
+done
+if [ -n "$missing" ]; then
+    echo "The checks need:$missing; see Setting up in CONTRIBUTING.md." >&2
+    exit 1
+fi
+
 echo "== Version"
 python3 tools/release.py --check
 
@@ -68,7 +82,7 @@ echo "== QML"
 # Qt's linter cannot see into the types of cxx-qt, so these categories only give false alarms.
 # `pragma ComponentBehavior: Bound` and the QML compiler in the build cover part of them.
 qmllint() {
-    env -u QT_LOGGING_RULES /usr/lib/qt6/bin/qmllint --max-warnings 0 \
+    env -u QT_LOGGING_RULES "$qmllint" --max-warnings 0 \
         --import disable --unresolved-type disable --missing-property disable --missing-type disable \
         --incompatible-type disable --unqualified disable \
         -I "$target/cxxqt/qml_modules" -I /usr/lib/qt6/qml "$@"

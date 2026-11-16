@@ -16,7 +16,10 @@ first, so that you can agree on the way before you spend time on it.
 Kudari builds on Linux with Rust, Qt 6 and KDE Frameworks 6. `.github/arch-packages.txt`
 lists the packages the CI installs on Arch Linux, and other distributions name them
 similarly. `README.md` shows the command for Arch. With `lld` installed, the build links
-with it. The checks need [Vale](https://vale.sh) as well, for the English of the texts.
+with it. `tests/check.sh` needs some tools more: [Vale](https://vale.sh) for the English
+of the texts, `namcap` for the packages of the AUR, `g++` for the warnings of the C++ code,
+`qmllint` of Qt for the QML, and `checkXML6` of KDocTools with `xsltproc` for the man page.
+On Arch: `sudo pacman -S --needed vale namcap gcc libxslt`.
 
 For development, Cargo builds and runs Kudari directly. If the source lies in a synced
 folder, keep the build output out of it:
