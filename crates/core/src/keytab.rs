@@ -16,7 +16,7 @@
 //! `AnyMod` for any of the first four) or a terminal mode (`AppCuKeys`, `AppScreen`,
 //! `NewLine`, `AppKeyPad`, `Ansi`): `+` requires it, `-` forbids it, and what a rule leaves
 //! out does not matter. The first rule that fits wins. A text may use `\E` for escape, `\t`,
-//! `\r`, `\n`, `\b`, `\xHH` and quoted backslashes and quotes; in rules with `+AnyMod`, a `*`
+//! `\r`, `\n`, `\b`, `\f`, `\xHH` and quoted backslashes and quotes; in rules with `+AnyMod`, a `*`
 //! becomes xterm's modifier number.
 
 use std::fs;
@@ -184,6 +184,8 @@ fn text_bytes(text: &str) -> Option<Vec<u8>> {
                 'r' => bytes.push(b'\r'),
                 'n' => bytes.push(b'\n'),
                 'b' => bytes.push(0x08),
+                // A form feed, as Konsole writes it when it saves a file.
+                'f' => bytes.push(0x0c),
                 'x' => {
                     let mut value = 0u8;
                     for _ in 0..2 {
@@ -417,6 +419,7 @@ mod tests {
     #[test]
     fn texts_understand_their_escapes() {
         assert_eq!(text_bytes(r#"\E[\x7f\t\\\"x""#), Some(b"\x1b[\x7f\t\\\"x".to_vec()));
+        assert_eq!(text_bytes(r#"\f""#), Some(b"\x0c".to_vec()));
         assert_eq!(text_bytes("never closed"), None);
     }
 
