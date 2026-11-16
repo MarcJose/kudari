@@ -599,9 +599,11 @@ impl View {
             return false;
         };
         let range = term.selection.as_ref().and_then(|selection| selection.to_range(term));
+        // From the cell after the match, around the end of the grid as the search goes: a
+        // match in the last cell would else be found again and again.
         let origin = match (range, backwards) {
-            (Some(range), false) => range.end.add(term, Boundary::Grid, 1),
-            (Some(range), true) => range.start.sub(term, Boundary::Grid, 1),
+            (Some(range), false) => range.end.add(term, Boundary::None, 1),
+            (Some(range), true) => range.start.sub(term, Boundary::None, 1),
             (None, _) => term.grid().cursor.point,
         };
         let (direction, side) = if backwards {
@@ -1732,6 +1734,27 @@ mod tests {
         assert_eq!(press('F'), Some(Effect::Scroll(-1)));
         assert_eq!(press('G'), Some(Effect::Scroll(i32::MAX / 2)));
         assert_eq!(press('H'), Some(Effect::Scroll(i32::MIN / 2)));
+    }
+
+    #[test]
+    fn the_next_match_comes_after_one_in_a_corner_of_the_grid() {
+        // A 6 in the first and the last cell, as the clock of tmux in its status line.
+        let mut term = term_with("\x1b[?1049h\x1b[1;1H6\x1b[5;20H6\x1b[3;3H");
+        let mut view = View::default();
+        let selected = |term: &Term<VoidListener>| {
+            term.selection
+                .as_ref()
+                .and_then(|selection| selection.to_range(term))
+                .map(|range| range.start)
+        };
+        let first = Point::new(Line(0), Column(0));
+        let last = Point::new(Line(4), Column(19));
+        assert!(view.find(&mut term, "6", false, false, false, false));
+        assert_eq!(selected(&term), Some(last));
+        assert!(view.find(&mut term, "6", false, false, false, false));
+        assert_eq!(selected(&term), Some(first), "on from the last cell");
+        assert!(view.find(&mut term, "6", true, false, false, false));
+        assert_eq!(selected(&term), Some(last), "back from the first cell");
     }
 
     #[test]
