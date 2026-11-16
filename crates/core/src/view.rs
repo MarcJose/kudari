@@ -175,11 +175,21 @@ pub fn link_at<T>(term: &Term<T>, point: Point, files: bool, context: &Context) 
             .take_while(|column| same(*column))
             .last()
             .unwrap_or(point.column.0);
-        return is_safe_link(link.uri(), &context.options.link_schemes).then(|| Link {
-            target: link.uri().to_string(),
+        let found = |target: String| Link {
+            target,
             start: Point::new(point.line, Column(start)),
             cells: end - start + 1,
-        });
+        };
+        if is_safe_link(link.uri(), &context.options.link_schemes) {
+            return Some(found(link.uri().to_string()));
+        }
+        // A file of this computer, as `ls --hyperlink` names it with the name of the host:
+        // it opens after the checks of a file in the text. Else the visible text counts.
+        let local = crate::marks::local_directory(link.uri())
+            .and_then(|path| crate::links::openable(&path.to_string_lossy(), &context.options.link_schemes));
+        if let Some(path) = local.filter(|_| files) {
+            return Some(found(path));
+        }
     }
     // An address can wrap onto the next lines, as the long ones for logging in often do.
     let (first, line) = wrapped_text(term, point.line);
@@ -2349,7 +2359,11 @@ mod tests {
             (kde.target.as_str(), kde.start.column.0, kde.cells),
             ("https://kde.org", 28, 3)
         );
-        assert_eq!(at(33, true), None, "unsafe schemes do not count");
+        // A local file through `file://` opens after the checks of a file in the text; on
+        // Windows, /etc is no path of this computer.
+        let etc = at(33, true).map(|link| link.target);
+        assert_eq!(etc.as_deref(), cfg!(unix).then_some("/etc"));
+        assert_eq!(at(33, false), None, "files only when asked for");
         let hidden = Options {
             escaped_links: false,
             ..Options::default()
@@ -2361,6 +2375,35 @@ mod tests {
             &self::context(&hidden, true, &found),
         );
         assert_eq!(plain, None);
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    /// The address of the file is built from a path of Unix.
+    #[test]
+    #[cfg(unix)]
+    fn a_hyperlink_of_another_kind_leaves_the_visible_text() {
+        let directory = std::env::temp_dir().join(format!("kudari-hyperlinks-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("notes.txt"), "").unwrap();
+        let notes = directory.join("notes.txt").to_string_lossy().into_owned();
+        let host = crate::process::host();
+        // As `ls --hyperlink=auto` writes it, with the name of this computer; a link of a scheme
+        // that is not allowed around an address; one of another computer around a file name.
+        let term = term_of(
+            60,
+            &format!(
+                "\x1b]8;;file://{host}{notes}\x1b\\notes.txt\x1b]8;;\x1b\\ \x1b]8;;custom:x\x1b\\https://kde.org\x1b]8;;\x1b\\ \x1b]8;;file://elsewhere/x\x1b\\notes.txt\x1b]8;;\x1b\\"
+            ),
+        );
+        let options = Options::default();
+        let found = || Some(directory.clone());
+        let context = context(&options, true, &found);
+        let at =
+            |column: usize| link_at(&term, Point::new(Line(0), Column(column)), true, &context).map(|link| link.target);
+        let real = std::fs::canonicalize(&notes).unwrap().to_string_lossy().into_owned();
+        assert_eq!(at(2).as_deref(), Some(real.as_str()));
+        assert_eq!(at(14).as_deref(), Some("https://kde.org"));
+        assert_eq!(at(28).as_deref(), Some(notes.as_str()));
         std::fs::remove_dir_all(&directory).unwrap();
     }
 
