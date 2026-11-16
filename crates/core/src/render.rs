@@ -361,7 +361,7 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             if flags.contains(Flags::HIDDEN) {
                 text.clear();
             }
-            cursor_glyph = Some((text, cell.c, flags, is_picture(flags, cell.zerowidth())));
+            cursor_glyph = Some((text, cell.c, flags, is_picture(flags, cell.zerowidth()), foreground));
         }
     }
     paints.append(&mut glyphs);
@@ -369,7 +369,10 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
     // While the view is scrolled back, the cursor can be below the last line: it is not on
     // screen then, and the space below the grid shows nothing of it.
     let cursor_line = cursor.point.line.0 + offset;
-    if cursor.shape != CursorShape::Hidden && !scene.cursor_hidden && (0..grid_lines).contains(&cursor_line) {
+    // A cursor that has faded out entirely leaves the cell as it is.
+    let fade = (scene.cursor_fade.clamp(0.0, 1.0) * 255.0) as u8;
+    if cursor.shape != CursorShape::Hidden && !scene.cursor_hidden && fade > 0 && (0..grid_lines).contains(&cursor_line)
+    {
         let line = cursor_line;
         let column = cursor.point.column.0 as i32;
         let shape = if scene.focused {
@@ -377,10 +380,9 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
         } else {
             CursorShape::HollowBlock
         };
-        let fade = (scene.cursor_fade.clamp(0.0, 1.0) * 255.0) as u8;
         let color = options.cursor_color.unwrap_or(scheme.foreground);
         let cells = match cursor_glyph {
-            Some((_, _, flags, _)) if flags.contains(Flags::WIDE_CHAR) => 2.0,
+            Some((_, _, flags, ..)) if flags.contains(Flags::WIDE_CHAR) => 2.0,
             _ => 1.0,
         };
         for rect in cursor_rects(geometry, column, line, cells, shape) {
@@ -391,7 +393,7 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             }
         }
         if shape == CursorShape::Block
-            && let Some((text, glyph, flags, picture)) =
+            && let Some((text, glyph, flags, picture, foreground)) =
                 cursor_glyph.filter(|(text, glyph, ..)| !text.is_empty() && !glyph.is_whitespace())
         {
             let (x, y) = geometry.baseline(column, line);
@@ -399,7 +401,12 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
                 x,
                 y,
                 text,
-                color: options.cursor_text_color.unwrap_or(scheme.background),
+                // From the look of the cursor to the look of the cell as the cursor fades.
+                color: blend(
+                    options.cursor_text_color.unwrap_or(scheme.background),
+                    foreground,
+                    u32::from(fade),
+                ),
                 font: font_style(flags, glyph, picture),
             });
         }
@@ -938,6 +945,15 @@ mod tests {
                 .iter()
                 .any(|(rect, _)| *rect == GEOMETRY.cell_rect(1, 0, 1.0))
         );
+        // Its character goes from the color of the cursor text to its own, and stays visible.
+        let half = blend(Rgb { r: 9, g: 9, b: 9 }, scheme.foreground, 127);
+        assert_eq!(texts(&paints).last().map(|text| (text.0, text.1)), Some(("b", half)));
+        // Faded out, the cursor leaves the cell as it is.
+        fading.cursor_fade = 0.0;
+        let paints = frame(&term, &options, &fading);
+        assert!(!paints.iter().any(|paint| matches!(paint, Paint::Shade(..))));
+        assert_eq!(texts(&paints).iter().filter(|text| text.0 == "b").count(), 1);
+        assert_eq!(texts(&paints).last().map(|text| text.1), Some(scheme.foreground));
     }
 
     #[test]
