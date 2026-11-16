@@ -706,7 +706,8 @@ fn selection_step<T: EventListener>(
     } else if matches!(key, Key::PageUp | Key::PageDown) {
         let page = scroll_page(term.screen_lines(), options);
         term.scroll_display(Scroll::Delta(if key == Key::PageUp { page } else { -page }));
-    } else if text == "v" {
+    } else if text == "v" || (key == Key::Character('V') && modifiers.contains(Modifiers::CONTROL)) {
+        // Qt gives Ctrl+V the text of the control character, so the key tells the block.
         let point = term.vi_mode_cursor.point;
         let kind = if modifiers.contains(Modifiers::CONTROL) {
             SelectionType::Block
@@ -1517,7 +1518,8 @@ mod tests {
 
         term.selection = None;
         selection_step(&mut term, Key::Other, NONE, "0", &OPTIONS);
-        selection_step(&mut term, Key::Other, Modifiers::CONTROL, "v", &OPTIONS);
+        // Ctrl+V as Qt gives it: the key of V and the control character U+0016.
+        selection_step(&mut term, Key::Character('V'), Modifiers::CONTROL, "\u{16}", &OPTIONS);
         for key in ["w", "j"] {
             selection_step(&mut term, Key::Other, NONE, key, &OPTIONS);
         }
