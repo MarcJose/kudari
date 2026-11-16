@@ -20,8 +20,10 @@ pub fn parse_ini(text: &str) -> HashMap<String, Group> {
     let mut current = String::new();
     // Editors on Windows put a byte order mark in front, which trim keeps.
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    // Only the white space of ASCII goes, as in KConfig: a value can start or end with a
+    // space that does not break, such as U+00A0 in the separators of words.
     for line in text.lines() {
-        let line = line.trim();
+        let line = line.trim_ascii();
         if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
             continue;
         }
@@ -31,7 +33,7 @@ pub fn parse_ini(text: &str) -> HashMap<String, Group> {
             groups
                 .entry(current.clone())
                 .or_default()
-                .insert(key.trim().to_string(), value.trim().to_string());
+                .insert(key.trim_ascii().to_string(), value.trim_ascii().to_string());
         }
     }
     groups
@@ -232,10 +234,12 @@ mod tests {
         settings.write("Window", "Width", "80");
         settings.write("Terminal", "Environment", "A=1\nB=C:\\x\tz");
         settings.write("Terminal", "BadgeText", " padded ");
+        settings.write("Terminal", "WordSeparators", "\u{a0}x\u{3000}");
         let again = IniFile::open(&path);
         assert_eq!(again.read("Window", "Width", "90"), "80");
         assert_eq!(again.read("Terminal", "Environment", ""), "A=1\nB=C:\\x\tz");
         assert_eq!(again.read("Terminal", "BadgeText", ""), " padded ");
+        assert_eq!(again.read("Terminal", "WordSeparators", ""), "\u{a0}x\u{3000}");
         assert_eq!(again.read("Terminal", "Missing", "fallback"), "fallback");
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("[Window]\nWidth=80\n"), "{text}");
