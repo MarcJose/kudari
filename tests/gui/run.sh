@@ -164,6 +164,33 @@ end_input() { input key 28; sleep 0.2; input key 29 32; sleep 0.4; }
 
 window toggleWindowState; sleep 1.5
 check "the window opens" visible=1 "$(state)"
+
+# Calls to Kudari while the window opens: it asks KWin for the screen under the pointer
+# over the same connection, and the calls still get their answers at once, not the empty
+# one that a timeout gives after a second.
+: > "$work/answers"
+ask_often() {
+    asked=0
+    while [ "$asked" -lt 60 ]; do
+        before=$(date +%s%N)
+        answer=$(sessions sessionIdList 2>&1) || answer=failed
+        took=$((($(date +%s%N) - before) / 1000000))
+        if [ "$took" -gt 500 ]; then answer="slow $took ms"; fi
+        echo "$answer" >> "$work/answers"
+        asked=$((asked + 1))
+    done
+}
+ask_often &
+first=$!
+ask_often &
+second=$!
+ask_often &
+third=$!
+for _ in 1 2 3 4 5 6 7 8; do window toggleWindowState; sleep 0.15; done
+wait "$first" "$second" "$third"
+check "calls while the window opens get their answers at once" "180 0" \
+    "$(wc -l < "$work/answers") $(grep -c -v '^[0-9][0-9,]*$' "$work/answers")"
+grep -v '^[0-9][0-9,]*$' "$work/answers" | sort | uniq -c | sed 's/^/Error in the answers: /'
 input click 600 150; sleep 0.5
 
 run "echo blocked > $work/blocked"
@@ -593,6 +620,7 @@ check "another agent has to ask for itself" yes "$( (agent_once list_terminals '
 check "agents may not type by default" yes "$(agent type_text '{"text": "ls"}' | refused 'Controlling terminals is switched off')"
 hook SetSetting AllowAgentControl true; sleep 0.3
 check "more rights end the access granted before" false "$(hook AgentAccess)"
+users=$(sessions activeSessionId)
 send open_session '{"title": "Agent"}'
 check "the question names the new rights" yes "$(question | grep -q 'read and control' && echo yes)"
 hook AnswerAgent true
@@ -600,6 +628,10 @@ opened=$(receive)
 own=$(echo "$opened" | field session)
 mine=$(echo "$opened" | field terminal)
 check "an agent opens a session of its own" Agent "$(tabs tabTitle "$own")"
+# The user may be typing elsewhere, a password even: the new session stays behind.
+check "the session of an agent opens behind the tab of the user" "$users" "$(sessions activeSessionId)"
+# The user goes there to confirm the commands of the agent.
+sessions raiseSession "$own"; sleep 0.5
 agent type_text "{\"terminal\": $mine, \"text\": \"echo typed > $work/agent-typed\", \"execute\": true}" > "$work/answer"
 sleep 0.6
 check "the command of an agent waits for Return" "no yes" \

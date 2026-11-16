@@ -538,6 +538,14 @@ impl SessionStack {
 
     /// Opens a session in a new tab at the end and selects it.
     pub fn add_session(&mut self, kind: SessionType) -> SessionId {
+        let id = self.add_session_behind(kind);
+        self.active = Some(id);
+        id
+    }
+
+    /// Adds a session as the last tab and leaves the active one as it is, unless there is
+    /// none.
+    pub fn add_session_behind(&mut self, kind: SessionType) -> SessionId {
         let id = self.next_session;
         self.next_session += 1;
         let title = self.free_title();
@@ -545,7 +553,9 @@ impl SessionStack {
         self.sessions.insert(id, session);
         self.tabs.push(id);
         self.tab_titles.insert(id, title);
-        self.active = Some(id);
+        if self.active.is_none() {
+            self.active = Some(id);
+        }
         id
     }
 
