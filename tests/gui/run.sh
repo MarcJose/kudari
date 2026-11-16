@@ -567,6 +567,9 @@ run "clear; printf '\033]0;remote\a'; $work/bin/ssh 3"
 sleep 1
 check "a program sets the title of an ssh tab" "remote on 3" "$(tabs tabTitle "$first")"
 sleep 2
+# No window of X11 is the terminal's, nor one of Alacritty.
+run "echo \"[\$WINDOWID][\$ALACRITTY_WINDOW_ID]\" > $work/windowid"
+check "shells get no number of a window" "[][]" "$(cat "$work/windowid" 2>/dev/null)"
 # A title is text: the markup of a program shows as it is, and loads nothing from the network.
 python3 -m http.server --bind 127.0.0.1 18765 --directory "$work" > "$work/http.log" 2>&1 &
 http=$!

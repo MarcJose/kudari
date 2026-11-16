@@ -130,6 +130,11 @@ fn shell_environment(custom: &str) -> HashMap<String, String> {
     let mut environment = HashMap::from([
         ("TERM".to_string(), "xterm-256color".to_string()),
         ("COLORTERM".to_string(), "truecolor".to_string()),
+        // `alacritty_terminal` sets both to the number of the terminal, which is no window of
+        // X11: `w3mimgdisplay` or `xdotool` would draw into or act on another window, and tools
+        // would take Kudari for Alacritty.
+        ("WINDOWID".to_string(), String::new()),
+        ("ALACRITTY_WINDOW_ID".to_string(), String::new()),
     ]);
     environment.extend(parse_environment(custom));
     environment
@@ -1133,6 +1138,10 @@ mod tests {
         let environment = shell_environment("");
         assert_eq!(environment["TERM"], "xterm-256color");
         assert_eq!(environment["COLORTERM"], "truecolor");
+        // No window of X11, nor of Alacritty, unless the user sets one.
+        assert_eq!(environment["WINDOWID"], "");
+        assert_eq!(environment["ALACRITTY_WINDOW_ID"], "");
+        assert_eq!(shell_environment("WINDOWID=42")["WINDOWID"], "42");
     }
 
     #[test]
