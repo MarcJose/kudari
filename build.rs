@@ -19,7 +19,9 @@ const KF6_MODULES: [(&str, &str); 22] = [
     ("KCoreAddons", "KF6CoreAddons"),
     ("KGlobalAccel", "KF6GlobalAccel"),
     ("KI18n", "KF6I18n"),
-    ("KI18n", "KF6I18nQml"),
+    // KDE Frameworks 6.32 moved the headers of KI18nQml, such as KLocalizedQmlContext, out of
+    // KI18n into a folder of their own; older versions keep them in KI18n.
+    ("KI18nQml", "KF6I18nQml"),
     ("KNotifications", "KF6Notifications"),
     ("KNotifyConfig", "KF6NotifyConfig"),
     ("KStatusNotifierItem", "KF6StatusNotifierItem"),
