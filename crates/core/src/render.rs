@@ -72,6 +72,10 @@ pub struct FontStyle {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Paint {
     Fill(Rect, Rgb),
+    /// A fill that lets through what is under it, from 0 for nothing to 255 for opaque: the
+    /// shades of ░▒▓ and a fading cursor, over the cell and, in a translucent terminal, the
+    /// desktop.
+    Shade(Rect, Rgb, u8),
     /// Text starting at a point of its baseline.
     Text {
         x: i32,
@@ -324,7 +328,11 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
                     width: piece.width,
                     height: piece.height,
                 };
-                fill(rect, blend(foreground, back, piece.alpha), &mut paints);
+                if piece.alpha >= 255 {
+                    fill(rect, foreground, &mut paints);
+                } else {
+                    paints.push(Paint::Shade(rect, foreground, piece.alpha as u8));
+                }
             }
         } else if cell.c != ' ' && cell.c != '\0' {
             // Every glyph goes to its own cell: the font's advance is fractional, while the
@@ -369,18 +377,18 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
         } else {
             CursorShape::HollowBlock
         };
-        let fade = (scene.cursor_fade.clamp(0.0, 1.0) * 255.0) as u32;
-        let color = blend(
-            options.cursor_color.unwrap_or(scheme.foreground),
-            scheme.background,
-            fade,
-        );
+        let fade = (scene.cursor_fade.clamp(0.0, 1.0) * 255.0) as u8;
+        let color = options.cursor_color.unwrap_or(scheme.foreground);
         let cells = match cursor_glyph {
             Some((_, _, flags, _)) if flags.contains(Flags::WIDE_CHAR) => 2.0,
             _ => 1.0,
         };
         for rect in cursor_rects(geometry, column, line, cells, shape) {
-            fill(rect, color, &mut paints);
+            if fade == 255 {
+                fill(rect, color, &mut paints);
+            } else {
+                paints.push(Paint::Shade(rect, color, fade));
+            }
         }
         if shape == CursorShape::Block
             && let Some((text, glyph, flags, picture)) =
@@ -485,7 +493,7 @@ mod tests {
             .iter()
             .filter_map(|paint| match paint {
                 Paint::Text { text, color, font, .. } => Some((text.as_str(), *color, *font)),
-                Paint::Fill(..) => None,
+                Paint::Fill(..) | Paint::Shade(..) => None,
             })
             .collect()
     }
@@ -495,7 +503,7 @@ mod tests {
             .iter()
             .filter_map(|paint| match paint {
                 Paint::Fill(rect, color) => Some((*rect, *color)),
-                Paint::Text { .. } => None,
+                Paint::Text { .. } | Paint::Shade(..) => None,
             })
             .collect()
     }
@@ -509,6 +517,38 @@ mod tests {
             Paint::Text { text, color: drawn, .. } if *drawn == color => Some(text.clone()),
             _ => None,
         })
+    }
+
+    #[test]
+    fn shades_let_through_what_is_under_them() {
+        let scheme = crate::colors::active();
+        let options = Options {
+            own_line_characters: true,
+            ..Options::default()
+        };
+        // Without the cursor, which has the color of the text.
+        let paints = frame(
+            &term_with("\x1b[?25l\u{2591}\u{2588}"),
+            &options,
+            &scene(&scheme, &[], &[]),
+        );
+        let shades: Vec<(Rgb, u8)> = paints
+            .iter()
+            .filter_map(|paint| match paint {
+                Paint::Shade(_, color, alpha) => Some((*color, *alpha)),
+                _ => None,
+            })
+            .collect();
+        assert!(!shades.is_empty());
+        assert!(
+            shades
+                .iter()
+                .all(|(color, alpha)| *color == scheme.foreground && *alpha < 255),
+            "{shades:?}"
+        );
+        // No opaque fill in a color mixed with the background of the scheme: the full block
+        // is the only fill, in the color of the text.
+        assert!(fills(&paints).iter().all(|(_, color)| *color == scheme.foreground));
     }
 
     #[test]
@@ -782,7 +822,7 @@ mod tests {
         let kinds: Vec<&str> = paints
             .iter()
             .map(|paint| match paint {
-                Paint::Fill(..) => "fill",
+                Paint::Fill(..) | Paint::Shade(..) => "fill",
                 Paint::Text { text, .. } => text.as_str(),
             })
             .collect();
@@ -887,9 +927,17 @@ mod tests {
         let mut blinking = scene(&scheme, &[], &[]);
         blinking.cursor_hidden = true;
         assert!(fills(&frame(&term, &options, &blinking)).is_empty());
+        // A fading cursor lets through the cell and what is under the terminal, instead of
+        // mixing with the background of the scheme.
         let mut fading = scene(&scheme, &[], &[]);
-        fading.cursor_fade = 0.0;
-        assert!(fills(&frame(&term, &options, &fading)).contains(&(GEOMETRY.cell_rect(1, 0, 1.0), scheme.background)));
+        fading.cursor_fade = 0.5;
+        let paints = frame(&term, &options, &fading);
+        assert!(paints.contains(&Paint::Shade(GEOMETRY.cell_rect(1, 0, 1.0), scheme.foreground, 127)));
+        assert!(
+            !fills(&paints)
+                .iter()
+                .any(|(rect, _)| *rect == GEOMETRY.cell_rect(1, 0, 1.0))
+        );
     }
 
     #[test]

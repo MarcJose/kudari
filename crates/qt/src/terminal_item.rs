@@ -1102,6 +1102,14 @@ impl qobject::TerminalItem {
                         .as_mut()
                         .fill_rect(&QRectF::new(rect.x, rect.y, rect.width, rect.height), &qcolor(color));
                 }
+                Paint::Shade(rect, color, alpha) => {
+                    runs.draw(painter.as_mut());
+                    let mut color = qcolor(color);
+                    color.set_alpha_f(f32::from(alpha) / 255.0);
+                    painter
+                        .as_mut()
+                        .fill_rect(&QRectF::new(rect.x, rect.y, rect.width, rect.height), &color);
+                }
                 Paint::Text {
                     x,
                     y,
