@@ -186,8 +186,16 @@ Item {
         onCellHeightChanged: Qt.callLater(applySize)
         onColumnsChanged: if (sized && pane.visible && pane.width > 0) sizeHint.show()
         onLinesChanged: if (sized && pane.visible && pane.width > 0) sizeHint.show()
-        onCursorXChanged: Qt.inputMethod.update(Qt.ImCursorRectangle)
-        onCursorYChanged: Qt.inputMethod.update(Qt.ImCursorRectangle)
+        // The cursor changes column and line one after the other, while the terminal is being
+        // refreshed: the input method hears of it once, afterwards, with both.
+        function reportCursor() {
+            if (activeFocus) {
+                Qt.inputMethod.update(Qt.ImCursorRectangle);
+            }
+        }
+
+        onCursorXChanged: Qt.callLater(reportCursor)
+        onCursorYChanged: Qt.callLater(reportCursor)
         onActiveFocusChanged: {
             if (activeFocus) {
                 pane.controller.activateTerminal(pane.terminalId);
@@ -218,11 +226,17 @@ Item {
             onTriggered: terminal.updateSearchLines()
         }
 
+        // Whether the cursor blinks starts to change while the terminal is being refreshed;
+        // the cursor shows again after that.
         Timer {
+            function reset() {
+                terminal.cursorHidden = false;
+            }
+
             interval: 500
             repeat: true
             running: terminal.cursorBlinks && terminal.focused && !(pane.config.AnimatedCursor ?? false)
-            onRunningChanged: terminal.cursorHidden = false
+            onRunningChanged: Qt.callLater(reset)
             onTriggered: terminal.cursorHidden = !terminal.cursorHidden
         }
 
