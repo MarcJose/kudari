@@ -64,6 +64,7 @@ void rk_draw_glyphs(QPainter &painter,
                     const QColor &color,
                     rust::Slice<const std::uint32_t> glyphs,
                     rust::Slice<const QPointF> positions);
+void rk_draw_text(QPainter &painter, const QPointF &position, const QString &text);
 void rk_font_family(QFont &font, const QString &family);
 QString rk_color_from_text(const QString &text);
 void rk_ask_save_file(int terminal, int purpose, const QString &suggestion);

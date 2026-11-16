@@ -1215,8 +1215,9 @@ mod tests {
             cell_width: 8.0,
             cell_height: 16.0,
             ascent: 12.0,
+            pixel_ratio: 1.0,
         };
-        assert_eq!(geometry.cell_rect(3, 1, 1.0).x, f64::from(geometry.baseline(3, 1).0));
+        assert_eq!(geometry.cell_rect(3, 1, 1.0).x, geometry.baseline(3, 1).0);
         // With no room, the margins stay.
         assert_eq!(centered(50.0, 20.0, 80.0, 40.0, (4.0, 1.0)), (4.0, 1.0));
     }

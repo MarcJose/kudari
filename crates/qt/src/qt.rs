@@ -61,6 +61,8 @@ pub mod ffi {
             glyphs: &[u32],
             positions: &[QPointF],
         );
+        /// Draws `text` from a point on the baseline that need not be on a whole pixel.
+        fn rk_draw_text(painter: Pin<&mut QPainter>, position: &QPointF, text: &QString);
         fn rk_font_family(font: &mut QFont, family: &QString);
         /// A color from `#rgb` notation or a name as `#rrggbb`, or an empty string.
         fn rk_color_from_text(text: &QString) -> QString;

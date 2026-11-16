@@ -210,6 +210,11 @@ void rk_frame_end(QPainter &target, std::unique_ptr<RkFrame> frame, bool opaque)
 
 // Positions on the baseline. One run per font and color spares the text layout that
 // `QPainter::drawText` does for every call.
+void rk_draw_text(QPainter &painter, const QPointF &position, const QString &text)
+{
+    painter.drawText(position, text);
+}
+
 void rk_draw_glyphs(QPainter &painter,
                     const QRawFont &font,
                     const QColor &color,

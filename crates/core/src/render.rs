@@ -36,6 +36,9 @@ pub struct Geometry {
     pub cell_height: f64,
     /// From the top of a cell to the baseline of its text.
     pub ascent: f64,
+    /// Pixels of the device per logical pixel, as 1.25 at a scale of 125 %. The front end
+    /// gives the origin, the cells and the ascent in whole pixels of the device.
+    pub pixel_ratio: f64,
 }
 
 impl Geometry {
@@ -50,12 +53,38 @@ impl Geometry {
         }
     }
 
-    /// Where the text of a cell starts on its baseline, on whole pixels.
+    /// `local`, in the coordinates of the cell at `column` and `line`, on whole pixels of the
+    /// device, at least one thick, and then in those of the item. Each cell rounds the same
+    /// numbers, as its corner is on a pixel already: a line is as thick in every cell, also
+    /// where its edge falls on half a pixel, as a line of one logical pixel does at 150 %.
     #[must_use]
-    pub fn baseline(&self, column: i32, line: i32) -> (i32, i32) {
+    pub fn within(&self, column: i32, line: i32, local: Rect) -> Rect {
+        let ratio = if self.pixel_ratio > 0.0 { self.pixel_ratio } else { 1.0 };
+        let snap = |start: f64, length: f64| {
+            let from = (start * ratio).round();
+            let to = ((start + length) * ratio).round().max(from + 1.0);
+            (from / ratio, (to - from) / ratio)
+        };
+        let (x, width) = snap(local.x, local.width);
+        let (y, height) = snap(local.y, local.height);
+        let corner = self.cell_rect(column, line, 1.0);
+        Rect {
+            x: corner.x + x,
+            y: corner.y + y,
+            width,
+            height,
+        }
+    }
+
+    /// Where the text of a cell starts on its baseline. The front end gives the origin, the
+    /// cells and the ascent in whole pixels of the device, so this lands on one of them as
+    /// well: a fractional scale, as 125 %, would otherwise shift the text of some lines by a
+    /// pixel against that of others.
+    #[must_use]
+    pub fn baseline(&self, column: i32, line: i32) -> (f64, f64) {
         (
-            (self.origin_x + f64::from(column) * self.cell_width) as i32,
-            (self.origin_y + f64::from(line) * self.cell_height + self.ascent) as i32,
+            self.origin_x + f64::from(column) * self.cell_width,
+            self.origin_y + f64::from(line) * self.cell_height + self.ascent,
         )
     }
 }
@@ -79,8 +108,8 @@ pub enum Paint {
     Shade(Rect, Rgb, u8),
     /// Text starting at a point of its baseline.
     Text {
-        x: i32,
-        y: i32,
+        x: f64,
+        y: f64,
         text: String,
         color: Rgb,
         font: FontStyle,
@@ -181,8 +210,6 @@ fn selection_colors(foreground: Rgb, back: Rgb, scheme: &ColorScheme, swapped: b
 /// a pixel below the baseline, or higher where the font leaves less room below it: the lines
 /// stay in their cell, which the next line would paint over.
 fn underline_rects(geometry: &Geometry, column: i32, line: i32, cells: f64, flags: Flags) -> Vec<Rect> {
-    let x = geometry.origin_x + f64::from(column) * geometry.cell_width;
-    let top = geometry.origin_y + f64::from(line) * geometry.cell_height;
     let height = geometry.cell_height;
     // How many pixels the lines of each kind take below their first.
     let below = if flags.contains(Flags::DOUBLE_UNDERLINE) {
@@ -192,20 +219,32 @@ fn underline_rects(geometry: &Geometry, column: i32, line: i32, cells: f64, flag
     } else {
         0.0
     };
-    let y = top + (geometry.ascent + 1.0).min(height - 1.0 - below).max(0.0);
+    let y = (geometry.ascent + 1.0).min(height - 1.0 - below).max(0.0);
     let width = cells * geometry.cell_width;
     let steps = width as i32;
-    let line_at = |y: f64| Rect {
-        x,
-        y,
-        width,
-        height: 1.0,
+    let line_at = |y: f64| {
+        geometry.within(
+            column,
+            line,
+            Rect {
+                x: 0.0,
+                y,
+                width,
+                height: 1.0,
+            },
+        )
     };
-    let pixel = |step: i32, lift: f64| Rect {
-        x: x + f64::from(step),
-        y: y + lift,
-        width: 1.0,
-        height: 1.0,
+    let pixel = |step: i32, lift: f64| {
+        geometry.within(
+            column,
+            line,
+            Rect {
+                x: f64::from(step),
+                y: y + lift,
+                width: 1.0,
+                height: 1.0,
+            },
+        )
     };
     let dots = |period: i32, on: i32| (0..steps).filter(move |step| step % period < on);
     if flags.contains(Flags::DOUBLE_UNDERLINE) {
@@ -229,10 +268,9 @@ fn underline_rects(geometry: &Geometry, column: i32, line: i32, cells: f64, flag
 /// The shapes of the cursor over `cells` cells: two on a wide character, so that its glyph
 /// shows whole.
 fn cursor_rects(geometry: &Geometry, column: i32, line: i32, cells: f64, shape: CursorShape) -> Vec<Rect> {
-    let x = geometry.origin_x + f64::from(column) * geometry.cell_width;
-    let y = geometry.origin_y + f64::from(line) * geometry.cell_height;
+    let (x, y) = (0.0, 0.0);
     let (w, h) = (cells * geometry.cell_width, geometry.cell_height);
-    let rect = |x, y, width, height| Rect { x, y, width, height };
+    let rect = |x, y, width, height| geometry.within(column, line, Rect { x, y, width, height });
     match shape {
         CursorShape::Block => vec![rect(x, y, w, h)],
         CursorShape::Underline => vec![rect(x, y + h - 2.0, w, 2.0)],
@@ -313,12 +351,13 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             }
         }
         if flags.contains(Flags::STRIKEOUT) {
-            let rect = Rect {
-                x: geometry.origin_x + f64::from(column) * geometry.cell_width,
-                y: f64::from(line) * geometry.cell_height + geometry.ascent * 0.65 + geometry.origin_y,
+            let local = Rect {
+                x: 0.0,
+                y: geometry.ascent * 0.65,
                 width: cells * geometry.cell_width,
                 height: 1.0,
             };
+            let rect = geometry.within(column, line, local);
             fill(rect, foreground, &mut paints);
         }
 
@@ -330,14 +369,14 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             options.own_braille_characters,
         );
         if let Some(pieces) = drawn {
-            let cell_rect = geometry.cell_rect(column, line, 1.0);
             for piece in pieces {
-                let rect = Rect {
-                    x: cell_rect.x + piece.x,
-                    y: cell_rect.y + piece.y,
+                let local = Rect {
+                    x: piece.x,
+                    y: piece.y,
                     width: piece.width,
                     height: piece.height,
                 };
+                let rect = geometry.within(column, line, local);
                 if piece.alpha >= 255 {
                     fill(rect, foreground, &mut paints);
                 } else {
@@ -478,6 +517,7 @@ mod tests {
         cell_width: 10.0,
         cell_height: 20.0,
         ascent: 15.0,
+        pixel_ratio: 1.0,
     };
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
@@ -737,7 +777,7 @@ mod tests {
     #[test]
     fn geometry_places_cells_on_the_grid() {
         assert_eq!(GEOMETRY.cell_rect(1, 2, 2.0), rect(14.0, 42.0, 20.0, 20.0));
-        assert_eq!(GEOMETRY.baseline(1, 2), (14, 57));
+        assert_eq!(GEOMETRY.baseline(1, 2), (14.0, 57.0));
     }
 
     #[test]
@@ -858,6 +898,53 @@ mod tests {
     }
 
     #[test]
+    fn lines_are_as_thick_in_every_cell_at_a_fractional_scale() {
+        // At 150 %, a line of one logical pixel is a pixel and a half of the device: in
+        // cells of whole device pixels, it rounds the same way in every one of them.
+        let ratio = 1.5;
+        let geometry = Geometry {
+            origin_x: 2.0 / ratio,
+            origin_y: 2.0 / ratio,
+            cell_width: 14.0 / ratio,
+            cell_height: 26.0 / ratio,
+            ascent: 20.0 / ratio,
+            pixel_ratio: ratio,
+        };
+        let pieces = linedraw::pieces('┼', geometry.cell_width, geometry.cell_height, true, false).unwrap();
+        let device = |value: f64| value * ratio;
+        let mut thicknesses = std::collections::BTreeSet::new();
+        for line in 0..40 {
+            for column in 0..40 {
+                for piece in &pieces {
+                    let local = Rect {
+                        x: piece.x,
+                        y: piece.y,
+                        width: piece.width,
+                        height: piece.height,
+                    };
+                    let rect = geometry.within(column, line, local);
+                    for edge in [rect.x, rect.y, rect.x + rect.width, rect.y + rect.height] {
+                        assert!((device(edge) - device(edge).round()).abs() < 1e-6, "{rect:?}");
+                    }
+                    thicknesses.insert((
+                        device(rect.width.min(rect.height)).round() as i64,
+                        piece.width < piece.height,
+                    ));
+                }
+            }
+        }
+        // One thickness for the vertical arm and one for the horizontal.
+        assert_eq!(thicknesses.len(), 2, "{thicknesses:?}");
+        // A line of less than a pixel of the device still shows.
+        let thin = Geometry {
+            pixel_ratio: 0.5,
+            ..GEOMETRY
+        };
+        let rect = thin.within(0, 0, rect(0.0, 0.0, 1.0, 1.0));
+        assert!((rect.height * 0.5 - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn lines_get_underlined_and_struck_through() {
         let scheme = colors::active();
         let term = term_with("\x1b[4;9mu\x1b[0m\x1b[58;2;1;2;3m\x1b[4mv");
@@ -867,7 +954,8 @@ mod tests {
             "underline"
         );
         assert!(
-            paints.contains(&(rect(4.0, 11.75, 10.0, 1.0), scheme.foreground)),
+            // At 65 % of the ascent, on the pixel that Qt filled for 11.75 as well.
+            paints.contains(&(rect(4.0, 12.0, 10.0, 1.0), scheme.foreground)),
             "strikeout"
         );
         assert!(
