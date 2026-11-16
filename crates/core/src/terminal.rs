@@ -736,9 +736,13 @@ impl Backend {
 
     /// Forgets the scrollback and returns to the initial terminal state.
     pub fn reset(&self) {
-        self.term.lock().reset_state();
-        // Ctrl+L makes the shell draw its prompt again.
-        self.write(vec![0x0c]);
+        let mut term = self.term.lock();
+        let full_screen = term.mode().contains(TermMode::ALT_SCREEN);
+        term.reset_state();
+        drop(term);
+        if redraws_after_reset(self.is_busy(), full_screen) {
+            self.write(vec![0x0c]);
+        }
     }
 
     /// Terminal output can hold passwords and tokens, so a new file is private. A file
@@ -749,6 +753,13 @@ impl Backend {
     pub fn save_output(&self, path: &std::path::Path) -> std::io::Result<()> {
         process::write_private(path, self.full_text().as_bytes())
     }
+}
+
+/// Whether a reset types Ctrl+L, which makes the shell or a full-screen program draw itself
+/// again. Other programs read it as input: `cat > notes` would write it into the file, and a
+/// question for a password would take it for part of the password.
+fn redraws_after_reset(busy: bool, full_screen: bool) -> bool {
+    !busy || full_screen
 }
 
 /// What AI agents see of a terminal.
@@ -1037,6 +1048,13 @@ mod tests {
         ));
         assert_eq!(run_work(), 1);
         assert_eq!(COPIED.take(), ["later"]);
+    }
+
+    #[test]
+    fn a_reset_types_ctrl_l_only_for_the_shell_or_a_full_screen_program() {
+        assert!(redraws_after_reset(false, false), "the shell at its prompt");
+        assert!(redraws_after_reset(true, true), "vim or htop");
+        assert!(!redraws_after_reset(true, false), "cat or a question for a password");
     }
 
     #[test]
