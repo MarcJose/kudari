@@ -57,11 +57,8 @@ impl IniFile {
     /// Windows (Windows-1252), as older editors and PowerShell 5.1 save it, is read as such.
     #[must_use]
     pub fn open(path: &Path) -> Self {
-        let (text, writable, back_up) = match std::fs::read(path) {
-            Ok(bytes) => match String::from_utf8(bytes) {
-                Ok(text) => (text, true, false),
-                Err(error) => (windows_1252(error.as_bytes()), true, true),
-            },
+        let (text, writable, back_up) = match read_text(path) {
+            Ok((text, utf8)) => (text, true, !utf8),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => (String::new(), true, false),
             Err(error) => {
                 eprintln!(
@@ -71,13 +68,7 @@ impl IniFile {
                 (String::new(), false, false)
             }
         };
-        let groups = parse_ini(&text)
-            .into_iter()
-            .map(|(name, group)| {
-                let group = group.into_iter().map(|(key, value)| (key, unescape(&value))).collect();
-                (name, group)
-            })
-            .collect();
+        let groups = groups_of(&text);
         Self {
             path: path.to_path_buf(),
             groups: Mutex::new(groups),
@@ -127,6 +118,14 @@ impl Store for IniFile {
 
     fn write(&self, group: &str, key: &str, value: &str) {
         let mut groups = self.groups.lock().unwrap_or_else(PoisonError::into_inner);
+        // The user can have changed the file in an editor while Kudari ran: what is in it
+        // stays, and only this key changes. The settings of Kudari are in it already, as each
+        // is saved when it changes; a file that cannot be read leaves the ones in memory.
+        if self.writable
+            && let Ok((text, _)) = read_text(&self.path)
+        {
+            *groups = groups_of(&text);
+        }
         groups
             .entry(group.to_string())
             .or_default()
@@ -135,6 +134,26 @@ impl Store for IniFile {
             eprintln!("kudari: could not save {}: {error}", self.path.display());
         }
     }
+}
+
+/// The text of an INI file, and whether it was UTF-8; else it is read as Windows-1252.
+fn read_text(path: &Path) -> std::io::Result<(String, bool)> {
+    let bytes = std::fs::read(path)?;
+    Ok(match String::from_utf8(bytes) {
+        Ok(text) => (text, true),
+        Err(error) => (windows_1252(error.as_bytes()), false),
+    })
+}
+
+/// The groups of an INI file with their values unescaped.
+fn groups_of(text: &str) -> BTreeMap<String, BTreeMap<String, String>> {
+    parse_ini(text)
+        .into_iter()
+        .map(|(name, group)| {
+            let group = group.into_iter().map(|(key, value)| (key, unescape(&value))).collect();
+            (name, group)
+        })
+        .collect()
 }
 
 /// The characters of Windows-1252 for the bytes 0x80 to 0x9F; the rest is Latin-1. Bytes
@@ -243,6 +262,24 @@ mod tests {
         assert_eq!(again.read("Terminal", "Missing", "fallback"), "fallback");
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("[Window]\nWidth=80\n"), "{text}");
+        std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn changes_made_by_hand_while_kudari_runs_stay() {
+        let path = file("by-hand");
+        let settings = IniFile::open(&path);
+        settings.write("Window", "Width", "80");
+        // The user adds a key that the dialog has no field for, in an editor.
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, format!("{text}[Appearance]\nTerminalHighlightOpacity=0.8\n")).unwrap();
+        // Then Kudari saves a setting of its own.
+        settings.write("Window", "KeepOpen", "true");
+        let again = IniFile::open(&path);
+        assert_eq!(again.read("Appearance", "TerminalHighlightOpacity", ""), "0.8");
+        assert_eq!(again.read("Window", "KeepOpen", ""), "true");
+        assert_eq!(again.read("Window", "Width", ""), "80");
+        assert_eq!(settings.read("Appearance", "TerminalHighlightOpacity", ""), "0.8");
         std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
     }
 
