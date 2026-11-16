@@ -98,8 +98,18 @@ pub fn brighten(color: Color, resolved: Rgb, overrides: &Colors, scheme: &ColorS
 }
 
 /// The faint variant of a color: the scheme's, else a third of the way to the background.
+/// A base color that the program set itself (OSC 4), or its bright variant for bold text,
+/// fades from what it set.
 #[must_use]
-pub fn faint(color: Color, resolved: Rgb, scheme: &ColorScheme) -> Rgb {
+pub fn faint(color: Color, resolved: Rgb, overrides: &Colors, scheme: &ColorScheme) -> Rgb {
+    let base = match color {
+        Color::Named(name) => Some(name as usize),
+        Color::Indexed(index) => Some(usize::from(index)),
+        Color::Spec(_) => None,
+    };
+    if base.is_some_and(|index| index < 8 && (overrides[index].is_some() || overrides[index + 8].is_some())) {
+        return faded(resolved, scheme.background);
+    }
     match color {
         Color::Named(name) => scheme
             .faint
@@ -170,6 +180,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn faint_colors_follow_the_colors_that_a_program_set() {
+        let scheme = ColorScheme {
+            faint: [Rgb { r: 1, g: 2, b: 3 }; 8],
+            ..ColorScheme::default()
+        };
+        let green = Rgb { r: 0, g: 255, b: 0 };
+        let mut overrides = Colors::default();
+        // As base16-shell sets color 1 with OSC 4.
+        overrides[1] = Some(green);
+        let faded_green = faded(green, scheme.background);
+        assert_eq!(faint(Color::Indexed(1), green, &overrides, &scheme), faded_green);
+        assert_eq!(
+            faint(Color::Named(NamedColor::Red), green, &overrides, &scheme),
+            faded_green
+        );
+        // The colors the program left keep the faint ones of the scheme.
+        let red = scheme.normal[2];
+        assert_eq!(faint(Color::Indexed(2), red, &overrides, &scheme), scheme.faint[2]);
+        assert_eq!(
+            faint(Color::Indexed(1), green, &Colors::default(), &scheme),
+            scheme.faint[1]
+        );
+    }
+
+    #[test]
     fn faint_text_moves_towards_the_background() {
         let white = Rgb { r: 255, g: 255, b: 255 };
         let black = Rgb { r: 0, g: 0, b: 0 };
@@ -226,13 +261,19 @@ mod tests {
         );
         assert_eq!(brighten(Color::Indexed(1), red, &overrides, &scheme), scheme.intense[1]);
         assert_eq!(brighten(Color::Indexed(100), red, &overrides, &scheme), red);
-        assert_eq!(faint(Color::Named(NamedColor::Red), red, &scheme), scheme.faint[1]);
-        assert_eq!(faint(Color::Indexed(1), red, &scheme), scheme.faint[1]);
+        assert_eq!(
+            faint(Color::Named(NamedColor::Red), red, &Colors::default(), &scheme),
+            scheme.faint[1]
+        );
+        assert_eq!(
+            faint(Color::Indexed(1), red, &Colors::default(), &scheme),
+            scheme.faint[1]
+        );
         let spec = Rgb { r: 200, g: 0, b: 0 };
         let dimmed = faded(spec, scheme.background);
-        assert_eq!(faint(Color::Spec(spec), spec, &scheme), dimmed);
-        assert_eq!(faint(Color::Indexed(100), spec, &scheme), dimmed);
-        assert_eq!(faint(foreground, spec, &scheme), dimmed);
+        assert_eq!(faint(Color::Spec(spec), spec, &Colors::default(), &scheme), dimmed);
+        assert_eq!(faint(Color::Indexed(100), spec, &Colors::default(), &scheme), dimmed);
+        assert_eq!(faint(foreground, spec, &Colors::default(), &scheme), dimmed);
     }
 
     #[test]
