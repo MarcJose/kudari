@@ -149,7 +149,7 @@ pub fn link_at<T>(term: &Term<T>, point: Point, files: bool, context: &Context) 
         });
     }
     let line: String = (0..columns).map(|column| grid[point.line][Column(column)].c).collect();
-    let (start, end, text) = word_span(&line, point.column.0)?;
+    let (start, _, text) = word_span(&line, point.column.0)?;
     let (target, column, cells) = url_in(&text)
         .map(|url| {
             let offset = text
@@ -160,8 +160,8 @@ pub fn link_at<T>(term: &Term<T>, point: Point, files: bool, context: &Context) 
         })
         .or_else(|| {
             let directory = (context.directory)().filter(|_| files)?;
-            let path = existing_file(&text, &directory)?;
-            Some((path, start, end - start))
+            let (path, offset, cells) = file_in(&text, &directory)?;
+            Some((path, start + offset, cells))
         })?;
     Some(Link {
         target,
@@ -807,10 +807,51 @@ fn url_at(line: &str, index: usize) -> Option<String> {
 /// programs through a click, so executables and desktop entries do not count.
 #[must_use]
 pub fn existing_file(word: &str, directory: &Path) -> Option<String> {
-    let word = trim_sentence_end(word, &['.', ',', ';']);
+    file_in(word, directory).map(|(target, _, _)| target)
+}
+
+/// The file that a word names, as `(target, first character, characters)`: the path with
+/// the place in it, and the part of the word that names them. See [`existing_file`].
+fn file_in(word: &str, directory: &Path) -> Option<(String, usize, usize)> {
+    // GCC, `rustc` and `grep -n` end the place with a colon: `main.c:10:5:`.
+    let punctuation = ['.', ',', ';', ':'];
+    let whole = trim_sentence_end(word, &punctuation);
+    if let Some(target) = file_named(whole, directory) {
+        return Some((target, 0, whole.chars().count()));
+    }
+    // Node.js puts it in brackets: `at f (/app/index.js:10:5)`. A name can start with a
+    // bracket of its own, so this comes second.
+    let inner = word.trim_start_matches(['(', '[', '{']);
+    let skipped = word.len() - inner.len();
+    let inner = trim_sentence_end(inner, &punctuation);
+    (skipped > 0)
+        .then(|| file_named(inner, directory))
+        .flatten()
+        .map(|target| (target, skipped, inner.chars().count()))
+}
+
+/// The file of `name:line:column`, or of `name(line,column)` as `tsc` and MSVC write it.
+fn file_named(word: &str, directory: &Path) -> Option<String> {
     let name = word.split(':').next().filter(|name| !name.is_empty())?;
+    if let Some(target) = file_at(name, &word[name.len()..], directory) {
+        return Some(target);
+    }
+    let (stem, place) = name.strip_suffix(')')?.rsplit_once('(')?;
+    let numbers: Vec<&str> = place.split(',').collect();
+    let valid = word.len() == name.len()
+        && numbers.len() <= 2
+        && numbers
+            .iter()
+            .all(|number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()));
+    valid
+        .then(|| file_at(stem, &format!(":{}", numbers.join(":")), directory))
+        .flatten()
+}
+
+/// The file `name` in `directory`, with `position` after it if that is `:line[:column]`.
+fn file_at(name: &str, position: &str, directory: &Path) -> Option<String> {
     // Even looking at a file on a share would make Windows log in to its server.
-    if crate::links::is_remote(name) {
+    if name.is_empty() || crate::links::is_remote(name) {
         return None;
     }
     let path = match name.strip_prefix("~/") {
@@ -820,7 +861,6 @@ pub fn existing_file(word: &str, directory: &Path) -> Option<String> {
     let metadata = std::fs::metadata(&path).ok()?;
     let plain = metadata.is_file() && is_inert(&path, &metadata);
     let desktop_entry = path.extension().is_some_and(|extension| extension == "desktop");
-    let position = &word[name.len()..];
     let is_position = position
         .split(':')
         .skip(1)
@@ -1064,6 +1104,45 @@ mod tests {
         let here = std::env::temp_dir();
         assert_eq!(existing_file("\\\\server\\share\\notes.txt", &here), None);
         assert_eq!(existing_file("//server/share/notes.txt", &here), None);
+    }
+
+    #[test]
+    fn places_from_compilers_and_stack_traces_are_kept() {
+        let directory = std::env::temp_dir().join(format!("kudari-places-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("notes.txt"), "x").unwrap();
+        std::fs::write(directory.join("(old).txt"), "x").unwrap();
+        let notes = directory.join("notes.txt").to_string_lossy().into_owned();
+        let found = |word: &str| existing_file(word, &directory);
+        // GCC, Clang, `rustc` and `grep -n` end the place with a colon.
+        assert_eq!(found("notes.txt:12:3:"), Some(format!("{notes}:12:3")));
+        assert_eq!(found("notes.txt:12:"), Some(format!("{notes}:12")));
+        // Node.js puts it in brackets, with a relative or an absolute path. An absolute path
+        // on Windows starts with a drive, which names of files do not take yet.
+        assert_eq!(found("(notes.txt:12:3)"), Some(format!("{notes}:12:3")));
+        if cfg!(unix) {
+            assert_eq!(found(&format!("({notes}:12:3),")), Some(format!("{notes}:12:3")));
+        }
+        // `tsc` and MSVC write the place in brackets after the name.
+        assert_eq!(found("notes.txt(12,3):"), Some(format!("{notes}:12:3")));
+        assert_eq!(found("notes.txt(12)"), Some(format!("{notes}:12")));
+        assert_eq!(found("notes.txt(x)"), None);
+        // A name with a bracket of its own stays whole.
+        let old = directory.join("(old).txt").to_string_lossy().into_owned();
+        assert_eq!(found("(old).txt:4"), Some(format!("{old}:4")));
+        // The underline leaves out the brackets and the colon.
+        let options = Options::default();
+        let here = || Some(directory.clone());
+        let context = context(&options, false, &here);
+        let link = link_at(
+            &term_of(40, "at f (notes.txt:12:3)"),
+            Point::new(Line(0), Column(9)),
+            true,
+            &context,
+        )
+        .unwrap();
+        assert_eq!((link.start.column.0, link.cells), (6, 14));
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 
     #[test]
