@@ -69,6 +69,9 @@ pub trait Programs: Send + Sync {
     fn is_root(&self) -> bool {
         false
     }
+    /// Hangs up the shell and the program in the foreground, as a terminal that goes does,
+    /// also when they are stopped.
+    fn hang_up(&self) {}
 }
 
 /// The home directory of the user.

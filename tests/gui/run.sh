@@ -475,6 +475,16 @@ sessions removeTerminal "$terminal"; sleep 0.6
 check "D-Bus closes a terminal" 5 "$(count "$two_h")"
 for session in "$two_h" "$two_v" "$four"; do sessions removeSession "$session"; sleep 0.8; done
 check "D-Bus closes sessions" no "$(sessions sessionIdList | tr ',' '\n' | grep -qxE "$two_h|$two_v|$four" && echo yes || echo no)"
+# A tab whose shell is stopped closes whole: the shell ends, and nothing waits for it forever.
+stopped=$(sessions addSession); sleep 1
+sessions raiseSession "$stopped"; sleep 0.4
+run "echo \$\$ > $work/shell-pid"
+shell_pid=$(cat "$work/shell-pid")
+kill -STOP "$shell_pid"; sleep 0.3
+sessions removeSession "$stopped"; sleep 1.5
+check "closing a tab with a stopped shell ends the shell" gone \
+    "$(kill -0 "$shell_pid" 2>/dev/null && echo running || echo gone)"
+kill -CONT "$shell_pid" 2>/dev/null
 sessions raiseSession "$first"; sleep 0.4
 
 sessions runCommandInTerminal "$(sessions activeTerminalId)" "echo dbus > $work/dbus"; sleep 0.6
@@ -571,6 +581,11 @@ sleep 2
 run "clear; cat > $work/reset"
 hook Trigger clear-history-and-reset; sleep 0.6; end_input
 check "a reset types nothing into a program that reads lines" "" "$(tr -d '\n' < "$work/reset" | od -An -c | tr -d ' ')"
+# In a pipeline whose first program ended, the title names the one that runs.
+run "true | sleep 3"; sleep 1.5
+check "a pipeline shows its program after its first one ended" yes \
+    "$(tabs tabTitle "$first" | grep -q sleep && echo yes || echo "no: $(tabs tabTitle "$first")")"
+sleep 2
 # No window of X11 is the terminal's, nor one of Alacritty.
 run "echo \"[\$WINDOWID][\$ALACRITTY_WINDOW_ID]\" > $work/windowid"
 check "shells get no number of a window" "[][]" "$(cat "$work/windowid" 2>/dev/null)"

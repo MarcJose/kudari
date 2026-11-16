@@ -23,6 +23,24 @@ use crate::sessions::{SessionId, SessionType, TerminalId};
 pub const MAX_TEXT: usize = 4096;
 /// The most lines an agent can read at once.
 pub const MAX_LINES: u32 = 10_000;
+
+/// The most text that one reading of a terminal gives, in bytes: lines of a terminal can be
+/// very long, and an answer must stay well below the 16 MiB of a line of the connection,
+/// which JSON makes longer still.
+pub const MAX_READ: usize = 4 * 1024 * 1024;
+
+/// `text` with no more than [`MAX_READ`] bytes: the newest lines, from the start of a line.
+fn bounded_text(text: String) -> String {
+    if text.len() <= MAX_READ {
+        return text;
+    }
+    let mut start = text.len() - MAX_READ;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    let start = text[start..].find('\n').map_or(start, |line| start + line + 1);
+    text[start..].to_string()
+}
 /// The longest tab title an agent can set.
 pub const MAX_TITLE: usize = 200;
 
@@ -440,7 +458,7 @@ impl App {
             Request::Terminals => Ok(self.terminals_json(host).to_string()),
             Request::Read { terminal, lines } => {
                 let (_, running) = self.running(terminal, host)?;
-                Ok(running.recent_text(lines.min(MAX_LINES) as usize))
+                Ok(bounded_text(running.recent_text(lines.min(MAX_LINES) as usize)))
             }
             Request::Type {
                 terminal,
@@ -624,6 +642,18 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_reading_keeps_the_newest_lines() {
+        let line = format!("{}\n", "ä".repeat(1000));
+        let text = line.repeat(MAX_READ / line.len() + 100) + "last";
+        let bounded = bounded_text(text.clone());
+        assert!(bounded.len() <= MAX_READ);
+        assert!(bounded.ends_with("last"));
+        // From the start of a line.
+        assert!(bounded.starts_with('ä'));
+        assert_eq!(bounded_text("short".to_string()), "short");
+    }
 
     #[test]
     fn every_key_has_bytes() {
