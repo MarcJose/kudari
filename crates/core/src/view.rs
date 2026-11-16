@@ -152,7 +152,9 @@ pub fn link_at<T>(term: &Term<T>, point: Point, files: bool, context: &Context) 
     let (start, end, text) = word_span(&line, point.column.0)?;
     let (target, column, cells) = url_in(&text)
         .map(|url| {
-            let offset = text.find(url.as_str()).unwrap_or(0);
+            let offset = text
+                .find(url.as_str())
+                .map_or(0, |offset| text[..offset].chars().count());
             let cells = url.chars().count();
             (url, start + offset, cells)
         })
@@ -739,7 +741,14 @@ pub fn pick_hint(links: &[(String, i32, i32)], index: usize, reverse: bool) -> O
 /// The word around column `index` as `(start, end, text)`.
 fn word_span(line: &str, index: usize) -> Option<(usize, usize, String)> {
     let characters: Vec<char> = line.chars().collect();
-    let is_end = |c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`');
+    // Typographic quotes end a word as the plain ones do: „https://kde.org“.
+    let is_end = |c: char| {
+        c.is_whitespace()
+            || matches!(
+                c,
+                '"' | '\'' | '<' | '>' | '`' | '„' | '“' | '”' | '‚' | '‘' | '’' | '«' | '»' | '‹' | '›'
+            )
+    };
     if is_end(*characters.get(index)?) {
         return None;
     }
@@ -756,13 +765,33 @@ fn word_span(line: &str, index: usize) -> Option<(usize, usize, String)> {
     Some((start, end, characters.get(start..end)?.iter().collect()))
 }
 
+/// `text` without what ends the sentence around it: any of `punctuation` at its end, and a
+/// closing bracket that opens nowhere in it. `…/Rust_(language)` keeps its own bracket, and
+/// `(…/x).` loses the one around it.
+fn trim_sentence_end<'a>(mut text: &'a str, punctuation: &[char]) -> &'a str {
+    while let Some(last) = text.chars().next_back() {
+        let open = match last {
+            ')' => Some('('),
+            ']' => Some('['),
+            '}' => Some('{'),
+            _ => None,
+        };
+        let unmatched = open.is_some_and(|open| text.matches(last).count() > text.matches(open).count());
+        if !unmatched && !punctuation.contains(&last) {
+            break;
+        }
+        text = &text[..text.len() - last.len_utf8()];
+    }
+    text
+}
+
 /// Finds a web address inside a word, without trailing punctuation.
 fn url_in(word: &str) -> Option<String> {
     let begin = ["https://", "http://"]
         .iter()
         .filter_map(|scheme| word.find(scheme))
         .min()?;
-    let url = word[begin..].trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '}']);
+    let url = trim_sentence_end(&word[begin..], &['.', ',', ';', ':', '!', '?']);
     url.split_once("://")
         .is_some_and(|(_, rest)| !rest.is_empty())
         .then(|| url.to_string())
@@ -778,7 +807,7 @@ fn url_at(line: &str, index: usize) -> Option<String> {
 /// programs through a click, so executables and desktop entries do not count.
 #[must_use]
 pub fn existing_file(word: &str, directory: &Path) -> Option<String> {
-    let word = word.trim_end_matches(['.', ',', ';', ')', ']']);
+    let word = trim_sentence_end(word, &['.', ',', ';']);
     let name = word.split(':').next().filter(|name| !name.is_empty())?;
     // Even looking at a file on a share would make Windows log in to its server.
     if crate::links::is_remote(name) {
@@ -1059,6 +1088,10 @@ mod tests {
         );
         assert_eq!(existing_file("notes.txt:", &directory), Some(expected.clone()));
         assert_eq!(existing_file("notes.txt,", &directory), Some(expected));
+        // A name that ends with its own bracket keeps it.
+        std::fs::write(directory.join("draft(1)"), "x").unwrap();
+        let draft = directory.join("draft(1)").to_string_lossy().into_owned();
+        assert_eq!(existing_file("draft(1).", &directory), Some(draft));
         assert_eq!(existing_file("run.sh", &directory), None);
         assert_eq!(existing_file("evil.desktop", &directory), None);
         assert_eq!(existing_file("missing", &directory), None);
@@ -1071,6 +1104,45 @@ mod tests {
         assert_eq!(url_at(line, 10).unwrap(), "https://example.org/a?b=1");
         assert_eq!(url_at(line, 37).unwrap(), "http://x.y");
         assert_eq!(url_at(line, 1), None);
+    }
+
+    #[test]
+    fn addresses_keep_their_own_brackets_and_lose_the_quotes_around_them() {
+        let wiki = "https://en.wikipedia.org/wiki/Rust_(programming_language)";
+        assert_eq!(url_at(wiki, 10).as_deref(), Some(wiki));
+        assert_eq!(url_at("(https://a.b/x_(y))", 3).as_deref(), Some("https://a.b/x_(y)"));
+        assert_eq!(
+            url_at("see (https://a.b/x_(y)).", 8).as_deref(),
+            Some("https://a.b/x_(y)")
+        );
+        assert_eq!(url_at("(http://x.y).", 3).as_deref(), Some("http://x.y"));
+        assert_eq!(
+            url_at("Siehe „https://kde.org“.", 10).as_deref(),
+            Some("https://kde.org")
+        );
+        assert_eq!(url_at("»https://kde.org«", 3).as_deref(), Some("https://kde.org"));
+        assert_eq!(url_at("“https://kde.org”", 3).as_deref(), Some("https://kde.org"));
+    }
+
+    #[test]
+    fn the_underline_of_an_address_covers_the_address_alone() {
+        let options = Options::default();
+        let context = context(&options, false, &nowhere);
+        let at = |output: &str, column: usize| {
+            link_at(
+                &term_of(40, output),
+                Point::new(Line(0), Column(column)),
+                false,
+                &context,
+            )
+            .map(|link| (link.target, link.start.column.0, link.cells))
+        };
+        assert_eq!(
+            at("Siehe „https://kde.org“.", 10),
+            Some(("https://kde.org".into(), 7, 15))
+        );
+        // A letter of two bytes in front of the address, in the same word.
+        assert_eq!(at("ä=https://kde.org", 5), Some(("https://kde.org".into(), 2, 15)));
     }
 
     #[test]
