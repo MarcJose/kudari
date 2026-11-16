@@ -542,6 +542,15 @@ impl TestHooks {
         queue(move |_| crate::kde::rk_test_grab(&crate::kde::qs(&path)));
     }
 
+    /// A property of the objects of QML with this `objectName`, with commas between them.
+    async fn property(&self, name: String, property: String) -> String {
+        ask(
+            move |_| crate::kde::rk_test_property(&crate::kde::qs(&name), &crate::kde::qs(&property)).to_string(),
+            String::new(),
+        )
+        .await
+    }
+
     async fn state(&self) -> String {
         ask(|_| crate::kde::rk_test_window_state().to_string(), String::new()).await
     }

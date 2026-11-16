@@ -366,6 +366,14 @@ active() { sessions activeSessionId; }
 tabs() { call tabs "$@"; }
 count() { sessions terminalIdsForSessionId "$1" | tr ',' '\n' | grep -c .; }
 first=$(active)
+# The first size of a new terminal is no change of its size to show.
+shown() { hook Property sizeHint visible | grep -q true && echo yes || echo no; }
+hook Trigger new-session; sleep 0.5
+check "a new terminal shows no size" no "$(shown)"
+hook SetSetting Width 70; sleep 0.5
+check "a new size shows the columns and lines" yes "$(shown)"
+hook SetSetting Width 90; sleep 1.2
+sessions removeSession "$(active)"; sleep 0.6
 hook Trigger new-session-two-horizontal; sleep 1; left_right=$(active)
 hook Trigger new-session-two-vertical; sleep 1; top_bottom=$(active)
 hook Trigger new-session-quad; sleep 1.2; quad=$(active)

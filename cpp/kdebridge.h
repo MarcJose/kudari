@@ -62,6 +62,7 @@ void rk_set_blur(bool enabled);
 void rk_test_key(const QString &sequence);
 void rk_test_input_method(const QString &preedit, const QString &commit);
 QString rk_test_window_state();
+QString rk_test_property(const QString &name, const QString &property);
 void rk_test_grab(const QString &path);
 QString rk_test_agent_question();
 void rk_test_answer_agent(bool allow);

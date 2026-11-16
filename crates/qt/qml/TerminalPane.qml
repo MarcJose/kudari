@@ -147,6 +147,9 @@ Item {
     TerminalItem {
         id: terminal
 
+        // Whether the terminal got its first size: that one is no change to show.
+        property bool sized: false
+
         anchors.fill: parent
         // From the setting, not from scrollBar.visible: that turns false with a hidden tab, and
         // the terminal would get more columns there and wrap again on every switch of tabs.
@@ -170,7 +173,9 @@ Item {
         // between would redraw its prompt, so only the final size is reported.
         function applySize() {
             if (!pane.resizePaused && width > cellWidth && height > cellHeight) {
+                // columns and lines change within `resizeTo`, still with sized false.
                 resizeTo(width, height);
+                sized = true;
             }
         }
 
@@ -178,8 +183,8 @@ Item {
         onHeightChanged: Qt.callLater(applySize)
         onCellWidthChanged: Qt.callLater(applySize)
         onCellHeightChanged: Qt.callLater(applySize)
-        onColumnsChanged: if (pane.visible && pane.width > 0) sizeHint.show()
-        onLinesChanged: if (pane.visible && pane.width > 0) sizeHint.show()
+        onColumnsChanged: if (sized && pane.visible && pane.width > 0) sizeHint.show()
+        onLinesChanged: if (sized && pane.visible && pane.width > 0) sizeHint.show()
         onCursorXChanged: Qt.inputMethod.update(Qt.ImCursorRectangle)
         onCursorYChanged: Qt.inputMethod.update(Qt.ImCursorRectangle)
         onActiveFocusChanged: {
@@ -442,6 +447,7 @@ Item {
             }
         }
 
+        objectName: "sizeHint"
         visible: false
         anchors.centerIn: parent
         width: sizeHintText.implicitWidth + pane.theme.largeSpacing * 2
