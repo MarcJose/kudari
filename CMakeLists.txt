@@ -22,8 +22,12 @@ find_program(CARGO cargo REQUIRED)
 
 set(CARGO_OUTPUT ${CMAKE_BINARY_DIR}/cargo)
 
+# The frameworks that CMake found, from <prefix>/lib/cmake/KF6I18n, for the C++ of build.rs.
+get_filename_component(KUDARI_KF6_PREFIX "${KF6I18n_DIR}/../../.." ABSOLUTE)
+
 add_custom_target(kudari ALL
-    COMMAND ${CMAKE_COMMAND} -E env CARGO_TARGET_DIR=${CARGO_OUTPUT} ${CARGO} build --release --locked
+    COMMAND ${CMAKE_COMMAND} -E env CARGO_TARGET_DIR=${CARGO_OUTPUT} KUDARI_KF6_PREFIX=${KUDARI_KF6_PREFIX}
+        ${CARGO} build --release --locked
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     USES_TERMINAL)
 

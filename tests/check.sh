@@ -60,8 +60,10 @@ echo "== C++ warnings"
 # The newest generated header: other builds in the target directory can be older.
 header=$(find "$target" -path '*/kudari/src/kde.cxx.h' -printf '%T@ %p\n' | sort -n | tail -n 1 | cut -d' ' -f2-)
 generated=$(dirname "$(dirname "$(dirname "$header")")")
-includes="-isystem /usr/include/qt6"
-for module in /usr/include/qt6/Qt* /usr/include/KF6/*; do
+# Where build.rs takes them from as well: the qmake of cxx-qt and the frameworks of CMake.
+qt_headers=$("${QMAKE:-qmake6}" -query QT_INSTALL_HEADERS 2>/dev/null || echo /usr/include/qt6)
+includes="-isystem $qt_headers"
+for module in "$qt_headers"/Qt* "${KUDARI_KF6_PREFIX:-/usr}"/include/KF6/*; do
     [ -d "$module" ] && includes="$includes -isystem $module"
 done
 # shellcheck disable=SC2086 # the include list is meant to split
