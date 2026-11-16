@@ -107,7 +107,9 @@ echo "== Man page"
 checkXML6 docs/man-kudari.1.docbook
 # Its English as well, turned into HTML with the entities of KDocTools resolved. xsltproc
 # reports an entity it cannot resolve but still succeeds, so any message of it fails here.
-man=$(mktemp -d)
+# Below the directory that the trap removes, also when a check here fails.
+man="$resources/man"
+mkdir "$man"
 XML_CATALOG_FILES=/usr/share/kf6/kdoctools/customization/catalog.xml \
     xsltproc --nonet .vale/docbook.xsl docs/man-kudari.1.docbook > "$man/page.html" 2> "$man/errors"
 if [ -s "$man/errors" ]; then
@@ -115,6 +117,5 @@ if [ -s "$man/errors" ]; then
     exit 1
 fi
 vale --ext=.html --no-wrap < "$man/page.html"
-rm -r "$man"
 
 echo "All checks passed."
