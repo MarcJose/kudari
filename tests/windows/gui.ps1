@@ -214,6 +214,15 @@ try {
     Test-Check 'starting Kudari again hides and shows its window' ($gone -and $front)
     if (-not ($gone -and $front)) { Write-Host "      hidden: $([bool] $gone), in front: process $(Get-ForegroundProcess), Kudari $($process.Id)" }
 
+    # The buttons of the search bar show glyphs of the icon font; a screen reader reads their
+    # names instead.
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.SendKeys]::SendWait('^+f')
+    $labels = 'Match Case', 'Regular Expression', 'Highlight All Matches', 'Find Previous', 'Find Next', 'Close Search'
+    $missing = @($labels | Where-Object { -not (Find-Element $_ 3) })
+    Test-Check 'the buttons of the search bar have names' ($missing.Count -eq 0)
+    if ($missing) { Write-Host "      missing: $($missing -join ', ')" }
+
     [void] (Invoke-Element 'Quit')
     Test-Check 'the quit button ends Kudari' ($process.WaitForExit(10000))
 

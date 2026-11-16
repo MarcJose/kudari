@@ -27,6 +27,8 @@ Item {
         display: glyphs ? QQC2.AbstractButton.TextOnly : QQC2.AbstractButton.IconOnly
         QQC2.ToolTip.text: label
         QQC2.ToolTip.visible: hovered
+        // A screen reader would read the glyph otherwise.
+        Accessible.name: label
 
         Binding on font.family {
             when: pane.theme.iconFont.length > 0
