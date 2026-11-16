@@ -85,6 +85,39 @@ pub struct View {
     last_motion: Option<Point>,
     /// The links that the link numbers show, as [`hint_links`] found them.
     hints: Vec<(String, i32, i32)>,
+    /// How far the wheel turned beyond the last whole step, in [`WHEEL_NOTCH`] units.
+    wheel_rest: f64,
+    /// The same for zooming with the wheel.
+    zoom_rest: f64,
+}
+
+/// What one notch of a mouse wheel turns, in the eighths of a degree that Qt counts. A notch
+/// scrolls three lines; wheels with a finer grid and touchpads send less, more often.
+pub const WHEEL_NOTCH: f64 = 120.0;
+/// Lines that one notch scrolls.
+const NOTCH_LINES: f64 = 3.0;
+
+/// How far the wheel turned, in [`WHEEL_NOTCH`] units: from the pixels a touchpad moved,
+/// one line to a cell, or else from the angle of the wheel.
+#[must_use]
+pub fn wheel_turn(angle: i32, pixels: i32, cell_height: f64) -> f64 {
+    if pixels != 0 && cell_height > 0.0 {
+        f64::from(pixels) / cell_height * WHEEL_NOTCH / NOTCH_LINES
+    } else {
+        f64::from(angle)
+    }
+}
+
+/// Adds `turn` to `rest` and takes the whole steps of `step` out of it, up as positive. A
+/// turn the other way starts again from nothing.
+fn whole_steps(rest: &mut f64, turn: f64, step: f64) -> i32 {
+    if *rest * turn < 0.0 {
+        *rest = 0.0;
+    }
+    *rest += turn;
+    let steps = (*rest / step).trunc();
+    *rest -= steps * step;
+    steps as i32
 }
 
 /// Whether the selection mode is on: it uses alacritty's vi mode.
@@ -464,34 +497,62 @@ impl View {
             .collect()
     }
 
-    /// The wheel turned over `point`: the program learns about it, full-screen programs get
-    /// arrow keys, or the view scrolls.
+    /// The wheel turned by `turn` over `point`, up as positive; see [`wheel_turn`]. The
+    /// program learns about each whole notch, full-screen programs get an arrow key for each
+    /// line, or the view scrolls by the lines. A turn of nothing, as a sideways wheel or the
+    /// start of a gesture on a touchpad sends, does nothing.
     pub fn wheel<T>(
-        &self,
+        &mut self,
         term: &Term<T>,
         point: Option<Point>,
-        up: bool,
+        turn: f64,
         alternate_scrolling: bool,
         context: &Context,
     ) -> Vec<Effect> {
         let mode = *term.mode();
+        if turn == 0.0 {
+            return Vec::new();
+        }
         if reports_mouse(term, Modifiers::NONE, context) {
-            let event = if up { MouseEvent::WheelUp } else { MouseEvent::WheelDown };
-            let mut effects: Vec<Effect> = point
-                .and_then(|point| mouse_report(term, event, Modifiers::NONE, point))
-                .into_iter()
-                .collect();
-            effects.push(Effect::Refresh);
-            effects
+            let notches = whole_steps(&mut self.wheel_rest, turn, WHEEL_NOTCH);
+            let event = if notches > 0 {
+                MouseEvent::WheelUp
+            } else {
+                MouseEvent::WheelDown
+            };
+            let report = point
+                .filter(|_| notches != 0)
+                .and_then(|point| mouse_report(term, event, Modifiers::NONE, point));
+            let Some(Effect::Write(report)) = report else {
+                return Vec::new();
+            };
+            return vec![
+                Effect::Write(report.repeat(notches.unsigned_abs() as usize)),
+                Effect::Refresh,
+            ];
+        }
+        let lines = whole_steps(&mut self.wheel_rest, turn, WHEEL_NOTCH / NOTCH_LINES);
+        if lines == 0 {
+            Vec::new()
         } else if mode.contains(TermMode::ALT_SCREEN)
             && mode.contains(TermMode::ALTERNATE_SCROLL)
             && alternate_scrolling
         {
-            let arrow = if up { "\x1bOA" } else { "\x1bOB" };
-            vec![Effect::Write(arrow.repeat(3).into_bytes()), Effect::Refresh]
+            let arrow = if lines > 0 { "\x1bOA" } else { "\x1bOB" };
+            let count = (lines.unsigned_abs() as usize).min(term.screen_lines());
+            vec![Effect::Write(arrow.repeat(count).into_bytes()), Effect::Refresh]
         } else {
-            vec![Effect::Scroll(if up { 3 } else { -3 })]
+            vec![Effect::Scroll(lines)]
         }
+    }
+
+    /// The steps to zoom by after the wheel turned by `turn` with Ctrl held: one for each
+    /// notch, up as larger.
+    pub fn wheel_zoom(&mut self, turn: f64) -> i32 {
+        if turn == 0.0 {
+            return 0;
+        }
+        whole_steps(&mut self.zoom_rest, turn, WHEEL_NOTCH)
     }
 
     /// Searches from the selection, or from the cursor, and selects what it finds. With
@@ -2007,7 +2068,7 @@ mod tests {
             [Effect::Write(b"\x1b[<0;4;2m".to_vec())]
         );
         assert_eq!(
-            view.wheel(&term, Some(cell.0), true, true, &context),
+            view.wheel(&term, Some(cell.0), WHEEL_NOTCH, true, &context),
             [Effect::Write(b"\x1b[<64;3;2M".to_vec()), Effect::Refresh]
         );
         // Shift keeps the mouse for selecting, and so does a terminal that may not track it.
@@ -2032,19 +2093,67 @@ mod tests {
     fn the_wheel_scrolls_or_sends_arrows() {
         let options = Options::default();
         let context = context(&options, true, &nowhere);
-        let view = View::default();
+        let mut view = View::default();
         let term = term_with("");
-        assert_eq!(view.wheel(&term, None, true, true, &context), [Effect::Scroll(3)]);
-        assert_eq!(view.wheel(&term, None, false, true, &context), [Effect::Scroll(-3)]);
+        assert_eq!(view.wheel(&term, None, 120.0, true, &context), [Effect::Scroll(3)]);
+        assert_eq!(view.wheel(&term, None, -120.0, true, &context), [Effect::Scroll(-3)]);
         let full_screen = term_with("\x1b[?1049h\x1b[?1007h");
         assert_eq!(
-            view.wheel(&full_screen, None, false, true, &context),
+            view.wheel(&full_screen, None, -120.0, true, &context),
             [Effect::Write(b"\x1bOB\x1bOB\x1bOB".to_vec()), Effect::Refresh]
         );
         assert_eq!(
-            view.wheel(&full_screen, None, true, false, &context),
+            view.wheel(&full_screen, None, 120.0, false, &context),
             [Effect::Scroll(3)]
         );
+    }
+
+    #[test]
+    fn the_wheel_scrolls_by_how_far_it_turned() {
+        let options = Options::default();
+        let context = context(&options, true, &nowhere);
+        let mut view = View::default();
+        let term = term_with("");
+        // A sideways wheel, or the start of a gesture on a touchpad.
+        assert!(view.wheel(&term, None, 0.0, true, &context).is_empty());
+        // A wheel with eight steps to a notch: three lines for the notch, not twenty-four.
+        let lines: i32 = (0..8)
+            .flat_map(|_| view.wheel(&term, None, 15.0, true, &context))
+            .map(|effect| match effect {
+                Effect::Scroll(lines) => lines,
+                other => panic!("{other:?}"),
+            })
+            .sum();
+        assert_eq!(lines, 3);
+        // What is left of a turn does not count the other way.
+        assert!(view.wheel(&term, None, 30.0, true, &context).is_empty());
+        assert_eq!(view.wheel(&term, None, -40.0, true, &context), [Effect::Scroll(-1)]);
+        // A touchpad moves pixels, a line for the height of a cell.
+        assert_eq!(wheel_turn(0, 36, 18.0), 80.0);
+        assert_eq!(wheel_turn(120, 0, 18.0), 120.0);
+        assert_eq!(
+            view.wheel(&term, None, wheel_turn(0, -36, 18.0), true, &context),
+            [Effect::Scroll(-2)]
+        );
+    }
+
+    #[test]
+    fn programs_get_the_wheel_once_for_each_notch() {
+        let options = Options::default();
+        let context = context(&options, true, &nowhere);
+        let mut view = View::default();
+        let term = tracking_term();
+        let at = Some(Point::new(Line(0), Column(2)));
+        let reports: Vec<Effect> = (0..8)
+            .flat_map(|_| view.wheel(&term, at, -15.0, true, &context))
+            .collect();
+        assert_eq!(reports, [Effect::Write(b"\x1b[<65;3;1M".to_vec()), Effect::Refresh]);
+        assert!(view.wheel(&term, at, 0.0, true, &context).is_empty());
+        // Zooming with Ctrl takes a step for each notch as well, and none for nothing.
+        assert_eq!(view.wheel_zoom(0.0), 0);
+        assert_eq!((0..7).map(|_| view.wheel_zoom(15.0)).sum::<i32>(), 0);
+        assert_eq!(view.wheel_zoom(15.0), 1);
+        assert_eq!(view.wheel_zoom(-240.0), -2);
     }
 
     #[test]

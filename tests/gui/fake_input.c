@@ -55,10 +55,15 @@ int main(int argc, char **argv)
         }
         org_kde_kwin_fake_input_button(fake, 272, 0); wl_display_roundtrip(display); usleep(80000);
     } else if (!strcmp(cmd, "wheel")) {
+        // wheel X Y VALUE [TIMES [AXIS]]: AXIS 0 is the vertical one, 1 the horizontal one.
+        int times = argc > 5 ? atoi(argv[5]) : 1;
+        uint32_t axis = argc > 6 ? (uint32_t)atoi(argv[6]) : 0;
         org_kde_kwin_fake_input_pointer_motion_absolute(fake, wl_fixed_from_double(atof(argv[2])), wl_fixed_from_double(atof(argv[3])));
         wl_display_roundtrip(display); usleep(150000);
-        org_kde_kwin_fake_input_axis(fake, 0, wl_fixed_from_double(atof(argv[4])));
-        wl_display_roundtrip(display); usleep(100000);
+        for (int i = 0; i < times; ++i) {
+            org_kde_kwin_fake_input_axis(fake, axis, wl_fixed_from_double(atof(argv[4])));
+            wl_display_roundtrip(display); usleep(100000);
+        }
     } else if (!strcmp(cmd, "keydown")) {
         org_kde_kwin_fake_input_keyboard_key(fake, atoi(argv[2]), 1);
     } else if (!strcmp(cmd, "keyup")) {

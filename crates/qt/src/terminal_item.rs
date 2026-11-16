@@ -150,8 +150,14 @@ pub mod qobject {
         #[qinvokable]
         fn mouse_release(self: Pin<&mut Self>, x: f64, y: f64, button: i32, modifiers: i32);
 
+        /// The wheel turned by `angle` (`angleDelta.y`) or, on a touchpad, `pixels`
+        /// (`pixelDelta.y`) over `x`, `y`.
         #[qinvokable]
-        fn wheel(self: Pin<&mut Self>, delta: i32, x: f64, y: f64);
+        fn wheel(self: Pin<&mut Self>, angle: i32, pixels: i32, x: f64, y: f64);
+
+        /// The steps to zoom by after the wheel turned with Ctrl held; see `wheel`.
+        #[qinvokable]
+        fn wheel_zoom(self: Pin<&mut Self>, angle: i32, pixels: i32) -> i32;
 
         #[qinvokable]
         fn scroll_to_position(self: Pin<&mut Self>, position: f64);
@@ -654,13 +660,19 @@ impl qobject::TerminalItem {
         });
     }
 
-    fn wheel(self: Pin<&mut Self>, delta: i32, x: f64, y: f64) {
+    fn wheel(self: Pin<&mut Self>, angle: i32, pixels: i32, x: f64, y: f64) {
         let cells = self.as_ref().cells();
         let alternate_scrolling = *self.alternate_scrolling();
+        let turn = view::wheel_turn(angle, pixels, *self.cell_height());
         self.handle(|view, term, context| {
             let point = Some(cells.at(term, x, y).0);
-            view.wheel(term, point, delta > 0, alternate_scrolling, context)
+            view.wheel(term, point, turn, alternate_scrolling, context)
         });
+    }
+
+    fn wheel_zoom(mut self: Pin<&mut Self>, angle: i32, pixels: i32) -> i32 {
+        let turn = view::wheel_turn(angle, pixels, *self.cell_height());
+        self.as_mut().rust_mut().view.wheel_zoom(turn)
     }
 
     /// Scrolls the view and marks the lines that came in for a moment.
