@@ -449,8 +449,10 @@ impl App {
     /// tried again with the next [`Effect::Publish`].
     pub fn started(&mut self, terminals: &[TerminalId]) {
         self.running.extend(terminals);
-        self.pending_directories.clear();
+        // Those that failed keep their directory for the next try; closed ones go.
         let stack = &self.stack;
+        self.pending_directories
+            .retain(|(terminal, _)| !terminals.contains(terminal) && stack.session_for_terminal(*terminal).is_some());
         self.shells
             .retain(|terminal, _| stack.session_for_terminal(*terminal).is_some());
     }
@@ -1601,7 +1603,26 @@ mod tests {
         let expected = PathBuf::from(format!("/work/{first}"));
         assert!(starts.iter().all(|start| start.directory.as_ref() == Some(&expected)));
         let (new, _) = app.split(session, None, &Here);
-        assert!(new.is_some());
+        let new = new.unwrap();
+        let inherited = |app: &App| {
+            app.pending_starts()
+                .into_iter()
+                .find(|start| start.terminal == new)
+                .and_then(|start| start.directory)
+        };
+        // That of the terminal split.
+        let expected = inherited(&app);
+        assert!(
+            expected
+                .as_ref()
+                .is_some_and(|directory| directory.starts_with("/work"))
+        );
+        // The program of the new terminal fails to start; the next try starts it in the same
+        // directory.
+        app.started(&[]);
+        assert_eq!(inherited(&app), expected, "after a failed start");
+        app.started(&[new]);
+        assert!(!app.pending_directories.iter().any(|(terminal, _)| *terminal == new));
         assert_eq!(app.split(-5, None, &Here), (None, Vec::new()));
         let home = app_with(&[("InheritDirectory", "false")]);
         assert_eq!(home.active_directory(&Here), crate::process::home());
