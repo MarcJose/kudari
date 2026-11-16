@@ -175,6 +175,12 @@ pub fn install(catalogue: &str) {
     crate::i18n::set_translator(translate);
 }
 
+/// Translates through the catalogue for `languages` from now on; see [`choose`]. Without
+/// one, the texts stay English, and their markup still becomes rich text.
+pub fn install_for(languages: &[String], catalogues: &[(&str, &str)]) {
+    install(choose(languages, catalogues).unwrap_or_default());
+}
+
 fn translate(context: &str, text: &str, argument: &str) -> String {
     let found = CATALOG
         .get()
