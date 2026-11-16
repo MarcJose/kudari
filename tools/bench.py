@@ -137,6 +137,9 @@ def report(directory, order):
         # The results of a run, not the screens of the frames load.
         if run.isdigit():
             runs.setdefault(terminal, []).append(measure(directory, path.stem))
+    if not runs:
+        print("\nNo run finished; the logs of the terminals tell why.")
+        return
     terminals = [t for t in order if t in runs] + sorted(t for t in runs if t not in order)
     count = max(len(measured) for measured in runs.values())
     print(f"\n{count} runs per terminal; seconds per load (average, fastest and slowest run),")

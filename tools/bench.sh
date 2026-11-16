@@ -59,6 +59,9 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
     work=$KUDARI_BENCH_WORK
     say() { echo "$*" >> "$work/progress.log"; }
     fail() { echo "$*" > "$work/failed"; exit 1; }
+    # Any other end before the last run, as a command that fails under set -e, is a failure
+    # as well, not a measurement with runs missing.
+    trap '[ -e "$work/complete" ] || [ -e "$work/failed" ] || echo "the measurement ended early; see the logs in $work" > "$work/failed"' EXIT
     # Drop-down terminals on the session bus, which a call to their name would start instead.
     on_bus() {
         tries=0
@@ -98,7 +101,8 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
                         "$KUDARI_BENCH_BINARY" > "$log" 2>&1 &
                     pid=$!
                     on_bus io.github.marcjose.kudari
-                    qdbus6 io.github.marcjose.kudari /kudari/window io.github.marcjose.kudari.toggleWindowState > /dev/null
+                    qdbus6 io.github.marcjose.kudari /kudari/window io.github.marcjose.kudari.toggleWindowState > /dev/null ||
+                        fail "could not open $terminal; see $log"
                     ;;
                 yakuake)
                     printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nWidth=100\nHeight=100\n[Animation]\nFrames=0\n' \
@@ -106,7 +110,8 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
                     SHELL=$shell yakuake > "$log" 2>&1 &
                     pid=$!
                     on_bus org.kde.yakuake
-                    qdbus6 org.kde.yakuake /yakuake/window toggleWindowState > /dev/null
+                    qdbus6 org.kde.yakuake /yakuake/window toggleWindowState > /dev/null ||
+                        fail "could not open $terminal; see $log"
                     ;;
                 konsole) konsole --nofork --hide-menubar --hide-tabbar -e "$shell" > "$log" 2>&1 & pid=$! ;;
                 alacritty) alacritty -e "$shell" > "$log" 2>&1 & pid=$! ;;
@@ -125,17 +130,18 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
             until grep -q '^done' "$KUDARI_BENCH_OUT" 2> /dev/null; do
                 tries=$((tries + 1))
                 if [ "$tries" -gt 600 ] || ! kill -0 "$pid" 2> /dev/null; then
-                    kill "$pid" 2> /dev/null
+                    kill "$pid" 2> /dev/null || true
                     fail "$terminal did not finish its loads; see $log"
                 fi
                 sleep 0.5
             done
-            kill "$pid" 2> /dev/null
+            kill "$pid" 2> /dev/null || true
             wait "$pid" 2> /dev/null || true
             sleep 1
         done
         run=$((run + 1))
     done
+    : > "$work/complete"
     exit 0
 fi
 
@@ -246,3 +252,4 @@ if [ -e "$work/failed" ]; then
     die "$(cat "$work/failed")"
 fi
 grep -q . "$work/progress.log" || die "KWin did not start the measurement; see $work/kwin.log"
+[ -e "$work/complete" ] || die "the measurement ended early; its files are in $work"
