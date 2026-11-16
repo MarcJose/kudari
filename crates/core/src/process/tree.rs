@@ -44,6 +44,27 @@ pub fn foreground(processes: &[Process], shell: u32, counts: impl Fn(u32, &Proce
     current
 }
 
+/// The subsystem in the header of a program for Windows, from its first bytes: 2 for a
+/// program with windows, 3 for one of the console. `None` for anything else.
+#[must_use]
+pub fn subsystem(header: &[u8]) -> Option<u16> {
+    let bytes = |at: usize, count: usize| header.get(at..at.checked_add(count)?);
+    if bytes(0, 2)? != b"MZ" {
+        return None;
+    }
+    let pe = u32::from_le_bytes(bytes(0x3c, 4)?.try_into().ok()?) as usize;
+    if bytes(pe, 4)? != b"PE\0\0" {
+        return None;
+    }
+    // The optional header follows the signature and the file header of 20 bytes; its
+    // subsystem is at the same place for 32 and 64 bits.
+    let at = pe.checked_add(4 + 20 + 68)?;
+    Some(u16::from_le_bytes(bytes(at, 2)?.try_into().ok()?))
+}
+
+/// The subsystem of programs with windows; see [`subsystem`].
+pub const WINDOWS_SUBSYSTEM: u16 = 2;
+
 /// The name of a program without `.exe`, as Linux shows it.
 #[must_use]
 pub fn name(processes: &[Process], id: u32) -> Option<String> {
@@ -145,6 +166,27 @@ mod tests {
         let list = vec![process(1, 2, "a.exe"), process(2, 1, "b.exe"), process(3, 3, "c.exe")];
         assert!([1, 2].contains(&foreground(&list, 1, |_, _| true)));
         assert_eq!(foreground(&list, 3, |_, _| true), 3);
+    }
+
+    /// The first bytes of a program for Windows with `subsystem`.
+    fn header(subsystem: u16) -> Vec<u8> {
+        let mut bytes = vec![0; 0x200];
+        bytes[..2].copy_from_slice(b"MZ");
+        bytes[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+        bytes[0x80 + 92..0x80 + 94].copy_from_slice(&subsystem.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn the_header_tells_programs_with_windows() {
+        assert_eq!(subsystem(&header(2)), Some(WINDOWS_SUBSYSTEM));
+        assert_eq!(subsystem(&header(3)), Some(3));
+        assert_eq!(subsystem(b"#!/bin/sh"), None);
+        assert_eq!(subsystem(&header(2)[..0x90]), None, "cut short");
+        let mut far = header(2);
+        far[0x3c..0x40].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(subsystem(&far), None);
     }
 
     #[test]

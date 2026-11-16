@@ -6,8 +6,11 @@
 //! memory, so the directory comes from the marks of the shell and the command line is the
 //! name of the program alone.
 
+use std::collections::HashMap;
+use std::io::Read as _;
 use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
@@ -26,6 +29,8 @@ pub struct Console {
     shell: u32,
     /// When the shell started; `None` once it ended.
     shell_start: Option<u64>,
+    /// Whether the programs at these paths have windows; see [`tree::subsystem`].
+    with_windows: Mutex<HashMap<PathBuf, bool>>,
 }
 
 impl Console {
@@ -35,7 +40,26 @@ impl Console {
         Self {
             shell,
             shell_start: start_time(shell),
+            with_windows: Mutex::default(),
         }
+    }
+
+    /// Whether process `id` runs a program with windows, such as Notepad, which the shell
+    /// starts and returns to its prompt from: it is no program in the terminal.
+    fn has_windows(&self, id: u32) -> bool {
+        let Some(path) = image(id) else {
+            return false;
+        };
+        let mut known = self
+            .with_windows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *known.entry(path).or_insert_with_key(|path| {
+            let mut header = Vec::with_capacity(4096);
+            std::fs::File::open(path)
+                .and_then(|file| file.take(4096).read_to_end(&mut header))
+                .is_ok_and(|_| tree::subsystem(&header) == Some(tree::WINDOWS_SUBSYSTEM))
+        })
     }
 
     fn foreground(&self) -> (Vec<Process>, u32) {
@@ -53,6 +77,7 @@ impl Console {
             started(parent)
                 .zip(start_time(child.id))
                 .is_some_and(|(parent, child)| child >= parent)
+                && !self.has_windows(child.id)
         };
         let foreground = tree::foreground(&processes, self.shell, counts);
         (processes, foreground)
@@ -225,6 +250,29 @@ mod tests {
         let _ = shell.wait();
         assert!(busy, "{name:?}");
         assert!(name.is_some_and(|name| name.eq_ignore_ascii_case("ping")));
+    }
+
+    #[test]
+    fn a_program_with_windows_leaves_the_shell_in_the_foreground() {
+        // As `charmap` typed at the prompt: the shell starts it and waits for the next command.
+        let mut shell = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "$p = Start-Process charmap -PassThru; Start-Sleep 4; $p | Stop-Process",
+            ])
+            .spawn()
+            .unwrap();
+        let console = Console::new(shell.id());
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        let (processes, foreground) = console.foreground();
+        let started = processes
+            .iter()
+            .any(|process| process.parent == shell.id() && process.name.eq_ignore_ascii_case("charmap.exe"));
+        let busy = console.is_busy();
+        let _ = shell.wait();
+        assert!(started, "charmap did not start");
+        assert!(!busy, "foreground {foreground}");
     }
 
     #[test]
