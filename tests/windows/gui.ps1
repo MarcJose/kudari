@@ -191,9 +191,18 @@ try {
         Get-Content $ini | ForEach-Object { Write-Host "      ini: $_" }
     }
 
-    # The pin button of the bar, switched as a screen reader does it.
+    # A switch that was switched still follows its setting when that changes elsewhere, here
+    # by the pin button of the bar, which UI Automation switches as a screen reader does.
     [void] (Invoke-Element 'Behavior')
     $keep = 'Keep the window open when another window gets the focus'
+    function Get-SwitchState([string] $name) {
+        foreach ($element in Find-All $name) {
+            $pattern = $null
+            if ($element.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref] $pattern)) {
+                return [string] $pattern.Current.ToggleState
+            }
+        }
+    }
     function Get-KeepOpen { if ((Get-Setting 'KeepOpen') -eq 'false') { 'false' } else { 'true' } }
     $before = Get-KeepOpen
     [void] (Invoke-Element $keep)
@@ -201,8 +210,11 @@ try {
     [void] (Invoke-Element 'Keep open when the focus moves elsewhere')
     $pinned = Wait-For { if ((Get-KeepOpen) -eq $before) { $true } }
     Test-Check 'the pin button switches as a screen reader does it' ($switched -and $pinned)
-    if (-not ($switched -and $pinned)) {
-        Write-Host "      before: $before, now: $(Get-KeepOpen)"
+    $expected = if ($before -eq 'true') { 'On' } else { 'Off' }
+    $follows = Wait-For { if ((Get-SwitchState $keep) -eq $expected) { $true } } 3
+    Test-Check 'a switch follows its setting after it was switched' ($pinned -and $follows)
+    if (-not ($switched -and $pinned -and $follows)) {
+        Write-Host "      before: $before, now: $(Get-KeepOpen), switch: $(Get-SwitchState $keep)"
     }
 
     if ($settings) {
