@@ -32,6 +32,9 @@ uses the same global shortcut, Kudari asks before taking it over.
   terminal alone. "One-Shot Monitors" in the tab menu ends a monitor after its first alert.
 - A double click on the scrollbar sets or removes a marker. Search matches appear there
   while "Highlight All Matches" is on.
+- Locking the keyboard input of a terminal, in the menu of its tab, keeps the mouse from the
+  program in it as well: a click selects as with Shift held, and the wheel scrolls the
+  history instead of sending arrow keys or reports of the wheel.
 - File links accept `name:line:column`. With an editor command such as
   `kate --line LINE --column COLUMN PATH`, they open at that position.
 

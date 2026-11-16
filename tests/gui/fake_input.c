@@ -44,6 +44,15 @@ int main(int argc, char **argv)
             org_kde_kwin_fake_input_button(fake, b, 1); wl_display_roundtrip(display); usleep(40000);
             org_kde_kwin_fake_input_button(fake, b, 0); wl_display_roundtrip(display); usleep(40000);
         }
+    } else if (!strcmp(cmd, "click2")) {
+        // click2 X1 Y1 X2 Y2: a click at each place, as quickly as a double click.
+        for (int i = 0; i < 2; ++i) {
+            double x = atof(argv[2 + 2 * i]), y = atof(argv[3 + 2 * i]);
+            org_kde_kwin_fake_input_pointer_motion_absolute(fake, wl_fixed_from_double(x), wl_fixed_from_double(y));
+            wl_display_roundtrip(display); usleep(40000);
+            org_kde_kwin_fake_input_button(fake, 272, 1); wl_display_roundtrip(display); usleep(40000);
+            org_kde_kwin_fake_input_button(fake, 272, 0); wl_display_roundtrip(display); usleep(40000);
+        }
     } else if (!strcmp(cmd, "drag")) {
         double x1 = atof(argv[2]), y1 = atof(argv[3]), x2 = atof(argv[4]), y2 = atof(argv[5]);
         org_kde_kwin_fake_input_pointer_motion_absolute(fake, wl_fixed_from_double(x1), wl_fixed_from_double(y1));

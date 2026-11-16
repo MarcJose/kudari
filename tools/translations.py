@@ -130,6 +130,21 @@ def parse_entry(block):
     }
 
 
+# An entry of a list model in QML with a fixed text, as {text: "Ctrl", value: "ctrl"}: a
+# text that a user sees, which goes past the translations.
+FIXED_ENTRY = re.compile(r'\{\s*text:\s*"([^"]*[A-Za-z][^"]*)"')
+
+
+def fixed_entries():
+    places = []
+    for directory in ("qml", "crates"):
+        for path in sorted((ROOT / directory).rglob("*.qml")):
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                for match in FIXED_ENTRY.finditer(line):
+                    places.append(f"{path.relative_to(ROOT)}:{number}: {match.group(1)!r}")
+    return places
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--check", action="store_true", help="exit with 1 on problems")
@@ -142,6 +157,9 @@ def main():
     used, dynamic = used_strings()
     for place in dynamic:
         print(f"not a literal, cannot be checked: {place}")
+    fixed = fixed_entries()
+    for place in fixed:
+        print(f"a fixed text that is not translated: {place}")
 
     unused_anywhere, translated_somewhere, rows = set(), set(), []
     for po in sorted((ROOT / "po").glob("*/kudari.po")):
@@ -189,7 +207,7 @@ def main():
         f"{len(unused_anywhere)} unused, {len(nowhere)} without any translation"
     )
 
-    failed = dynamic or unused_anywhere or nowhere or (options.strict and gaps)
+    failed = dynamic or fixed or unused_anywhere or nowhere or (options.strict and gaps)
     return 1 if options.check and failed else 0
 
 if __name__ == "__main__":

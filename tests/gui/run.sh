@@ -355,6 +355,15 @@ input key 2; sleep 0.1; input key 3; sleep 0.4
 input click 700 433; sleep 0.5
 check "a special value can be overwritten" 12 "$(setting FontSize)"
 input key 1; sleep 0.6
+# A size above 72 points, from Konsole perhaps, shows as it is and stays.
+hook SetSetting FontSize 96; sleep 0.5
+hook Trigger options_configure; sleep 2
+input click 250 316; sleep 1.2
+check "the settings show a font size above 72" 96 "$(hook Property fontSize value)"
+input click 700 354; sleep 0.3
+input click 700 433; sleep 0.5
+check "a font size above 72 stays" 96 "$(setting FontSize)"
+input key 1; sleep 0.6
 hook SetSetting Height 50; hook SetSetting FontSize 0; sleep 0.5
 
 hook Trigger options_configure; sleep 2
@@ -366,6 +375,23 @@ active() { sessions activeSessionId; }
 tabs() { call tabs "$@"; }
 count() { sessions terminalIdsForSessionId "$1" | tr ',' '\n' | grep -c .; }
 first=$(active)
+# The first size of a new terminal is no change of its size to show.
+shown() { hook Property sizeHint visible | grep -q true && echo yes || echo no; }
+hook Trigger new-session; sleep 0.5
+check "a new terminal shows no size" no "$(shown)"
+hook SetSetting Width 70; sleep 0.5
+check "a new size shows the columns and lines" yes "$(shown)"
+hook SetSetting Width 90; sleep 1.2
+sessions removeSession "$(active)"; sleep 0.6
+# The search bar is as wide as the terminal, beside the scrollbar wherever that is.
+for position in left hidden right; do
+    hook SetSetting ScrollBarPosition "$position"; sleep 0.5
+    hook Trigger edit_find; sleep 0.5
+    check "the search bar lines up with the terminal, scrollbar $position" \
+        "$(hook Property terminal x) $(hook Property terminal width)" \
+        "$(hook Property searchBar x) $(hook Property searchBar width)"
+    input key 1; sleep 0.3
+done
 hook Trigger new-session-two-horizontal; sleep 1; left_right=$(active)
 hook Trigger new-session-two-vertical; sleep 1; top_bottom=$(active)
 hook Trigger new-session-quad; sleep 1.2; quad=$(active)
@@ -442,6 +468,11 @@ hook Trigger edit_find; sleep 0.6
 for code in 34 18 33; do input key "$code"; sleep 0.1; done
 hook Trigger edit_find_next; sleep 0.2
 hook Trigger edit_find_prev; sleep 0.2
+# Matches in new output appear on the scrollbar a moment later, without searching again.
+marks() { hook Property terminal searchLines | grep -o '[0-9.][0-9.]*' | wc -l; }
+before=$(marks)
+run "seq 1 50; echo gefunden"; sleep 0.6
+check "matches in new output reach the scrollbar" yes "$([ "$(marks)" -gt "$before" ] && echo yes || echo "no: $before $(marks)")"
 input key 1; sleep 0.4
 for action in edit_select_all edit_copy select-line select-mode select-mode; do hook Trigger "$action"; sleep 0.3; done
 
@@ -576,6 +607,30 @@ run "clear; printf '\033]52;c;%s\a' \$(printf osc | base64)"
 run "clear; cat > $work/osc"
 hook Trigger edit_paste; sleep 0.3; end_input
 check "programs can copy to the clipboard" "osc|" "$(content "$work/osc")"
+# A blocked keyboard: the wheel sends no arrow keys to a program on the alternate screen.
+before_wheel=$(active)
+hook Trigger new-session; sleep 1
+wheeled=$(active)
+run "clear; stty raw -echo; printf '\033[?1049h'; timeout 3 cat > $work/wheel; printf '\033[?1049l'; stty sane"
+sessions setSessionKeyboardInputEnabled "$wheeled" false; sleep 0.3
+input wheel 130 8 15 3; sleep 0.3
+# Given back its keyboard, the terminal takes the arrow key of one notch again.
+sessions setSessionKeyboardInputEnabled "$wheeled" true; sleep 0.3
+input wheel 130 8 15 1; sleep 2.5
+wheel=$(tr '\033' E < "$work/wheel")
+check "a blocked terminal takes no arrow keys from the wheel" one \
+    "$(echo "$wheel" | grep -qxE 'EO[AB]' && echo one || echo "$wheel")"
+sessions removeSession "$wheeled"; sleep 0.6
+sessions raiseSession "$before_wheel"; sleep 0.4
+# Two quick clicks at different places are two single clicks: the second selects no word.
+run "clear; printf '\033]52;c;%s\a' \$(printf before | base64)"
+run "clear; printf 'apple %s\n' bananabananabananabananabananabananabananabanana"
+input click2 12 8 300 8; sleep 0.3
+hook Trigger edit_copy; sleep 0.3
+run "clear; cat > $work/clicks"
+hook Trigger edit_paste; sleep 0.3; end_input
+check "two quick clicks at different places select no word" no \
+    "$(content "$work/clicks" | grep -q banana && echo yes || echo no)"
 # sh has no bracketed paste, so it would run pasted lines one by one: Kudari asks first.
 run "clear; printf '\033]52;c;%s\a' \$(printf 'one\ntwo\n' | base64)"
 run "clear; cat > $work/lines"

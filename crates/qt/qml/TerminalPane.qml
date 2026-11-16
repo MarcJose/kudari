@@ -27,6 +27,8 @@ Item {
         display: glyphs ? QQC2.AbstractButton.TextOnly : QQC2.AbstractButton.IconOnly
         QQC2.ToolTip.text: label
         QQC2.ToolTip.visible: hovered
+        // A screen reader would read the glyph otherwise.
+        Accessible.name: label
 
         Binding on font.family {
             when: pane.theme.iconFont.length > 0
@@ -145,6 +147,10 @@ Item {
     TerminalItem {
         id: terminal
 
+        // Whether the terminal got its first size: that one is no change to show.
+        property bool sized: false
+
+        objectName: "terminal"
         anchors.fill: parent
         // From the setting, not from scrollBar.visible: that turns false with a hidden tab, and
         // the terminal would get more columns there and wrap again on every switch of tabs.
@@ -168,7 +174,9 @@ Item {
         // between would redraw its prompt, so only the final size is reported.
         function applySize() {
             if (!pane.resizePaused && width > cellWidth && height > cellHeight) {
+                // columns and lines change within `resizeTo`, still with sized false.
                 resizeTo(width, height);
+                sized = true;
             }
         }
 
@@ -176,10 +184,18 @@ Item {
         onHeightChanged: Qt.callLater(applySize)
         onCellWidthChanged: Qt.callLater(applySize)
         onCellHeightChanged: Qt.callLater(applySize)
-        onColumnsChanged: if (pane.visible && pane.width > 0) sizeHint.show()
-        onLinesChanged: if (pane.visible && pane.width > 0) sizeHint.show()
-        onCursorXChanged: Qt.inputMethod.update(Qt.ImCursorRectangle)
-        onCursorYChanged: Qt.inputMethod.update(Qt.ImCursorRectangle)
+        onColumnsChanged: if (sized && pane.visible && pane.width > 0) sizeHint.show()
+        onLinesChanged: if (sized && pane.visible && pane.width > 0) sizeHint.show()
+        // The cursor changes column and line one after the other, while the terminal is being
+        // refreshed: the input method hears of it once, afterwards, with both.
+        function reportCursor() {
+            if (activeFocus) {
+                Qt.inputMethod.update(Qt.ImCursorRectangle);
+            }
+        }
+
+        onCursorXChanged: Qt.callLater(reportCursor)
+        onCursorYChanged: Qt.callLater(reportCursor)
         onActiveFocusChanged: {
             if (activeFocus) {
                 pane.controller.activateTerminal(pane.terminalId);
@@ -202,22 +218,44 @@ Item {
             }
             event.accepted = true;
         }
+        // Finds the places of the matches for the scrollbar again after output, at most four
+        // times a second.
         Timer {
+            interval: 250
+            running: terminal.searchLinesStale
+            onTriggered: terminal.updateSearchLines()
+        }
+
+        // Whether the cursor blinks starts to change while the terminal is being refreshed;
+        // the cursor shows again after that.
+        Timer {
+            function reset() {
+                terminal.cursorHidden = false;
+            }
+
             interval: 500
             repeat: true
             running: terminal.cursorBlinks && terminal.focused && !(pane.config.AnimatedCursor ?? false)
-            onRunningChanged: terminal.cursorHidden = false
+            onRunningChanged: Qt.callLater(reset)
             onTriggered: terminal.cursorHidden = !terminal.cursorHidden
         }
 
-        // The fading variant of the blinking cursor.
-        SequentialAnimation on cursorFade {
-            running: terminal.cursorBlinks && terminal.focused && (pane.config.AnimatedCursor ?? false)
-            loops: Animation.Infinite
-            onRunningChanged: terminal.cursorFade = 1
+        // The fading variant of the blinking cursor, in a second. Its brightness comes from the
+        // time that passed: an animation of Qt Quick moves with the frames of the primary
+        // screen, too fast or in steps when Kudari is on a screen with another rate.
+        Timer {
+            property real start: 0
 
-            NumberAnimation { from: 1; to: 0; duration: 500; easing.type: Easing.InOutSine }
-            NumberAnimation { from: 0; to: 1; duration: 500; easing.type: Easing.InOutSine }
+            function reset() {
+                start = Date.now();
+                terminal.cursorFade = 1;
+            }
+
+            interval: 33
+            repeat: true
+            running: terminal.cursorBlinks && terminal.focused && (pane.config.AnimatedCursor ?? false)
+            onRunningChanged: Qt.callLater(reset)
+            onTriggered: terminal.cursorFade = 0.5 + 0.5 * Math.cos(2 * Math.PI * (Date.now() - start) / 1000)
         }
 
         // Carries selected text to other programs and terminals.
@@ -302,6 +340,9 @@ Item {
 
             property int clicks: 1
             property real lastPress: 0
+            // Only a press near the last one, with the same button, counts on from it.
+            property point lastPoint: Qt.point(0, 0)
+            property int lastButton: Qt.NoButton
             // Where a press on the selection started; moving away from it drags the text.
             property var dragStart: null
 
@@ -330,8 +371,13 @@ Item {
                     return;
                 }
                 const now = Date.now();
-                clicks = now - lastPress < Qt.styleHints.mouseDoubleClickInterval ? clicks % 3 + 1 : 1;
+                const distance = Qt.styleHints.mouseDoubleClickDistance;
+                const near = Math.abs(event.x - lastPoint.x) <= distance && Math.abs(event.y - lastPoint.y) <= distance;
+                const again = near && event.button === lastButton && now - lastPress < Qt.styleHints.mouseDoubleClickInterval;
+                clicks = again ? clicks % 3 + 1 : 1;
                 lastPress = now;
+                lastPoint = Qt.point(event.x, event.y);
+                lastButton = event.button;
                 terminal.mousePress(event.x, event.y, event.button, clicks, event.modifiers);
             }
             onPositionChanged: event => {
@@ -440,6 +486,7 @@ Item {
             }
         }
 
+        objectName: "sizeHint"
         visible: false
         anchors.centerIn: parent
         width: sizeHintText.implicitWidth + pane.theme.largeSpacing * 2
@@ -468,11 +515,14 @@ Item {
 
         property bool failed: false
 
+        objectName: "searchBar"
         visible: false
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.rightMargin: scrollBar.width
+        // As wide as the terminal, beside the scrollbar wherever that is.
+        anchors.leftMargin: terminal.anchors.leftMargin
+        anchors.rightMargin: terminal.anchors.rightMargin
         height: searchRow.implicitHeight + pane.theme.smallSpacing * 2
         color: pane.theme.backgroundColor
 

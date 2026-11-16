@@ -70,9 +70,11 @@
 #include <QMimeData>
 #include <QPrintDialog>
 #include <QPrinter>
+#include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QRect>
+#include <QSet>
 #include <QTextDocument>
 #include <QTimer>
 #include <QUrl>
@@ -996,6 +998,46 @@ QString rk_test_window_state()
     auto window = mainWindow();
     return QStringLiteral("visible=%1 active=%2 height=%3").arg(window->isVisible()).arg(window->isActive()).arg(window->height());
 }
+
+// The objects named `name` under `object`, as children of objects and of items: what a
+// Repeater or Loader makes is an item of its parent, not always an object of it.
+static void namedObjects(QObject *object, const QString &name, QSet<QObject *> &seen, QList<QObject *> &found)
+{
+    if (!object || seen.contains(object)) {
+        return;
+    }
+    seen.insert(object);
+    if (object->objectName() == name) {
+        found.append(object);
+    }
+    for (QObject *child : object->children()) {
+        namedObjects(child, name, seen, found);
+    }
+    if (auto item = qobject_cast<QQuickItem *>(object)) {
+        for (QQuickItem *child : item->childItems()) {
+            namedObjects(child, name, seen, found);
+        }
+    }
+}
+
+// `property` of every object of QML in the windows of Kudari whose `objectName` is `name`,
+// with commas between them.
+QString rk_test_property(const QString &name, const QString &property)
+{
+    QSet<QObject *> seen;
+    QList<QObject *> found;
+    for (QWindow *window : QGuiApplication::topLevelWindows()) {
+        namedObjects(window, name, seen, found);
+        if (auto quickWindow = qobject_cast<QQuickWindow *>(window)) {
+            namedObjects(quickWindow->contentItem(), name, seen, found);
+        }
+    }
+    QStringList values;
+    for (QObject *object : found) {
+        values.append(object->property(property.toUtf8().constData()).toString());
+    }
+    return values.join(QLatin1Char(','));
+}
 #else
 void rk_test_key(const QString &)
 {
@@ -1015,6 +1057,11 @@ void rk_test_answer_agent(bool)
 }
 
 QString rk_test_window_state()
+{
+    return {};
+}
+
+QString rk_test_property(const QString &, const QString &)
 {
     return {};
 }

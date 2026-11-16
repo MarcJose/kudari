@@ -1436,3 +1436,27 @@ msgstr "Light"
 msgctxt "@item:inlistbox"
 msgid "Dark"
 msgstr "Dark"
+
+msgctxt "@item:inlistbox keyboard modifier"
+msgid "Ctrl"
+msgstr "Ctrl"
+
+msgctxt "@item:inlistbox keyboard modifier"
+msgid "Alt"
+msgstr "Alt"
+
+msgctxt "@item:inlistbox keyboard modifier"
+msgid "Meta"
+msgstr "Meta"
+
+msgctxt "@item:inlistbox keyboard modifier"
+msgid "Ctrl+Shift"
+msgstr "Ctrl+Shift"
+
+msgctxt "@item:inlistbox keyboard modifier"
+msgid "Ctrl+Alt"
+msgstr "Ctrl+Alt"
+
+msgctxt "@item:inlistbox keyboard modifier"
+msgid "Shift+Alt"
+msgstr "Shift+Alt"
