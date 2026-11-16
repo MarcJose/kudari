@@ -8,20 +8,26 @@ file(STRINGS Cargo.toml KUDARI_VERSION REGEX "^version = " LIMIT_COUNT 1)
 string(REGEX REPLACE "^version = \"([0-9]+\\.[0-9]+\\.[0-9]+)[^\"]*\".*" "\\1" KUDARI_VERSION "${KUDARI_VERSION}")
 project(kudari VERSION ${KUDARI_VERSION} LANGUAGES CXX)
 
-find_package(ECM 6.0 REQUIRED NO_MODULE)
+find_package(ECM 6.8 REQUIRED NO_MODULE)
 list(APPEND CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
 
 include(KDEInstallDirs)
 include(ECMInstallIcons)
-find_package(KF6 6.0 REQUIRED COMPONENTS I18n)
+find_package(KF6 6.8 REQUIRED COMPONENTS I18n KIO XmlGui Notifications NotifyConfig GlobalAccel Crash
+    Config ConfigWidgets CoreAddons Service JobWidgets StatusNotifierItem WidgetsAddons WindowSystem
+    ColorScheme)
 # Optional, as in other KDE programs: without it everything but the man page is built.
 find_package(KF6DocTools 6.0)
 find_program(CARGO cargo REQUIRED)
 
 set(CARGO_OUTPUT ${CMAKE_BINARY_DIR}/cargo)
 
+# The frameworks that CMake found, from <prefix>/lib/cmake/KF6I18n, for the C++ of build.rs.
+get_filename_component(KUDARI_KF6_PREFIX "${KF6I18n_DIR}/../../.." ABSOLUTE)
+
 add_custom_target(kudari ALL
-    COMMAND ${CMAKE_COMMAND} -E env CARGO_TARGET_DIR=${CARGO_OUTPUT} ${CARGO} build --release --locked
+    COMMAND ${CMAKE_COMMAND} -E env CARGO_TARGET_DIR=${CARGO_OUTPUT} KUDARI_KF6_PREFIX=${KUDARI_KF6_PREFIX}
+        ${CARGO} build --release --locked
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     USES_TERMINAL)
 

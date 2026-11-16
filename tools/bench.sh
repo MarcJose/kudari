@@ -59,6 +59,9 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
     work=$KUDARI_BENCH_WORK
     say() { echo "$*" >> "$work/progress.log"; }
     fail() { echo "$*" > "$work/failed"; exit 1; }
+    # Any other end before the last run, as a command that fails under set -e, is a failure
+    # as well, not a measurement with runs missing.
+    trap '[ -e "$work/complete" ] || [ -e "$work/failed" ] || echo "the measurement ended early; see the logs in $work" > "$work/failed"' EXIT
     # Drop-down terminals on the session bus, which a call to their name would start instead.
     on_bus() {
         tries=0
@@ -70,6 +73,10 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
             sleep 0.1
         done
         sleep 2
+        # A terminal that ended meanwhile would leave the name to the bus, which starts the
+        # installed one in its place.
+        owner=$(qdbus6 org.freedesktop.DBus / org.freedesktop.DBus.GetConnectionUnixProcessID "$1" 2> /dev/null || true)
+        [ "$owner" = "$pid" ] || fail "$terminal ended after it started; see $log"
     }
     # KWin's --scale only enlarges the virtual screen; the scale that programs see is a setting
     # of the screen.
@@ -98,7 +105,8 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
                         "$KUDARI_BENCH_BINARY" > "$log" 2>&1 &
                     pid=$!
                     on_bus io.github.marcjose.kudari
-                    qdbus6 io.github.marcjose.kudari /kudari/window io.github.marcjose.kudari.toggleWindowState > /dev/null
+                    qdbus6 io.github.marcjose.kudari /kudari/window io.github.marcjose.kudari.toggleWindowState > /dev/null ||
+                        fail "could not open $terminal; see $log"
                     ;;
                 yakuake)
                     printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nWidth=100\nHeight=100\n[Animation]\nFrames=0\n' \
@@ -106,7 +114,8 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
                     SHELL=$shell yakuake > "$log" 2>&1 &
                     pid=$!
                     on_bus org.kde.yakuake
-                    qdbus6 org.kde.yakuake /yakuake/window toggleWindowState > /dev/null
+                    qdbus6 org.kde.yakuake /yakuake/window toggleWindowState > /dev/null ||
+                        fail "could not open $terminal; see $log"
                     ;;
                 konsole) konsole --nofork --hide-menubar --hide-tabbar -e "$shell" > "$log" 2>&1 & pid=$! ;;
                 alacritty) alacritty -e "$shell" > "$log" 2>&1 & pid=$! ;;
@@ -125,17 +134,18 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
             until grep -q '^done' "$KUDARI_BENCH_OUT" 2> /dev/null; do
                 tries=$((tries + 1))
                 if [ "$tries" -gt 600 ] || ! kill -0 "$pid" 2> /dev/null; then
-                    kill "$pid" 2> /dev/null
+                    kill "$pid" 2> /dev/null || true
                     fail "$terminal did not finish its loads; see $log"
                 fi
                 sleep 0.5
             done
-            kill "$pid" 2> /dev/null
+            kill "$pid" 2> /dev/null || true
             wait "$pid" 2> /dev/null || true
             sleep 1
         done
         run=$((run + 1))
     done
+    : > "$work/complete"
     exit 0
 fi
 
@@ -205,7 +215,10 @@ if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
     # The bus and the portals it starts complain about what the virtual session lacks; that
     # goes to a file, and the measurement itself writes to file descriptor 3.
     # shellcheck disable=SC2086 # the terminals are words of their own
-    if env -u WAYLAND_DISPLAY -u DISPLAY KUDARI_BENCH_WORK="$work" \
+    # Qt's own render loop and backend, whatever the environment sets. A Kudari or Yakuake
+    # that the bus would start finds neither the settings nor the services of the user.
+    if env -u WAYLAND_DISPLAY -u DISPLAY -u QSG_RENDER_LOOP -u QT_QUICK_BACKEND -u QSG_RHI_BACKEND \
+        XDG_CONFIG_HOME=/nonexistent XDG_DATA_HOME=/nonexistent KUDARI_BENCH_WORK="$work" \
         dbus-run-session -- "$0" --binary "$binary" --runs "$runs" --scale "$scale" --loads "$(echo $loads | tr " " ",")" $terminals \
         < /dev/null 3>&2 2> "$work/dbus.log"; then
         python3 "$tools/bench.py" report "$work" $terminals
@@ -244,3 +257,4 @@ if [ -e "$work/failed" ]; then
     die "$(cat "$work/failed")"
 fi
 grep -q . "$work/progress.log" || die "KWin did not start the measurement; see $work/kwin.log"
+[ -e "$work/complete" ] || die "the measurement ended early; its files are in $work"

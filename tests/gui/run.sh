@@ -27,6 +27,10 @@ if [ -z "${KUDARI_GUI_TEST:-}" ]; then
         env -u WAYLAND_DISPLAY -u DISPLAY XDG_CONFIG_HOME=/nonexistent XDG_DATA_HOME=/nonexistent \
         KUDARI_GUI_TEST=1 dbus-run-session -- "$0" "$binary" > "$report" 2>&1 < /dev/null &
     test=$!
+    # Ctrl+C reaches this shell, tail and grep, but not timeout, which runs in a process
+    # group of its own. timeout passes TERM on to its group, the private bus, KWin and
+    # Kudari, and the trap of the test below cleans up.
+    trap 'kill -TERM "$test" 2>/dev/null; wait "$test"; rm -f "$report"; exit 130' INT TERM
     # Each check as it comes, so that a run that hangs shows where.
     tail -n +1 -f --pid="$test" "$report" | grep --line-buffered -E '^(ok|FAIL|[0-9]+ checks|Error in)'
     wait "$test"
@@ -42,7 +46,14 @@ fi
 work=$(mktemp -d)
 kwin=
 kudari=
+# Waits up to five seconds for a process to end, as Kudari after quitting: an end of its own
+# writes what is left, such as the profile of a run for the coverage.
+wait_quit() { # pid
+    tries=0
+    while kill -0 "$1" 2>/dev/null && [ "$tries" -lt 50 ]; do sleep 0.1; tries=$((tries + 1)); done
+}
 finish() {
+    [ -n "$kudari" ] && wait_quit "$kudari"
     kill "$kudari" 2>/dev/null
     sleep 0.5
     kill -9 "$kudari" "$kwin" 2>/dev/null
@@ -863,8 +874,7 @@ check "our QML reports no errors" 0 "$(grep -cE "$pattern" "$work/log")"
 grep -E "$pattern" "$work/log" | head -5 | sed 's/^/Error in QML: /'
 
 hook Trigger file_quit
-tries=0
-while kill -0 "$kudari" 2>/dev/null && [ "$tries" -lt 50 ]; do sleep 0.1; tries=$((tries + 1)); done
+wait_quit "$kudari"
 check "quitting ends the program" no "$(kill -0 "$kudari" 2>/dev/null && echo yes || echo no)"
 # Skins used to be images made at runtime; the bars are drawn now.
 check "no skin directory is created" "" "$(find "$XDG_RUNTIME_DIR" -maxdepth 1 -type d -name 'kudari-*' -print -quit)"
@@ -890,8 +900,7 @@ early_activation() { # settings
     sleep 3
     state
     hook Trigger file_quit
-    tries=0
-    while kill -0 "$early" 2>/dev/null && [ "$tries" -lt 50 ]; do sleep 0.1; tries=$((tries + 1)); done
+    wait_quit "$early"
     kill -9 "$early" 2>/dev/null
 }
 check "activating Kudari while it starts opens the window" visible=1 "$(early_activation '')"
@@ -909,11 +918,11 @@ first_setting() { sed -n "s/^$1=//p" "$work/first/kudarirc"; }
 check "accepting the welcome takes over Yakuake's settings without asking" "80 false" \
     "$(first_setting Width) $(first_setting FirstRun)"
 hook Trigger file_quit
+wait_quit "$kudari"
+check "quitting after the first start ends the program" no "$(kill -0 "$kudari" 2>/dev/null && echo yes || echo no)"
 
 # Two screens, and one goes away while the window is open: KWin closes the window, and the
 # next shortcut shows it again rather than hiding a window that is gone.
-tries=0
-while kill -0 "$kudari" 2>/dev/null && [ "$tries" -lt 50 ]; do sleep 0.1; tries=$((tries + 1)); done
 kill "$kwin" 2>/dev/null
 wait "$kwin" 2>/dev/null
 kwin_wayland --virtual --no-lockscreen --socket="$WAYLAND_DISPLAY" --output-count 2 --width 1280 --height 800 \
@@ -932,6 +941,8 @@ kscreen-doctor "output.$output.disable" > /dev/null 2>&1; sleep 2
 window toggleWindowState; sleep 1.5
 check "the shortcut shows the window again after a screen went away" "visible=1 visible=1" "$shown $(state)"
 hook Trigger file_quit
+wait_quit "$kudari"
+check "quitting after a screen went away ends the program" no "$(kill -0 "$kudari" 2>/dev/null && echo yes || echo no)"
 
 echo "$checks checks, $failures failed"
 if [ "$failures" != 0 ]; then

@@ -7,6 +7,20 @@ set -eu
 cd "$(dirname "$0")/.."
 target=${CARGO_TARGET_DIR:-target}
 
+# The tools of the checks, before any of them runs: a missing one would stop them halfway
+# with no more than "command not found". CONTRIBUTING.md names where they come from.
+# qmllint lies among the tools of Qt, which qmake names, the one that cxx-qt builds with.
+qmllint=$("${QMAKE:-qmake6}" -query QT_HOST_BINS 2>/dev/null)/qmllint
+[ -x "$qmllint" ] || qmllint=/usr/lib/qt6/bin/qmllint
+missing=""
+for tool in namcap vale g++ checkXML6 xsltproc "$qmllint"; do
+    command -v "$tool" > /dev/null || missing="$missing $tool"
+done
+if [ -n "$missing" ]; then
+    echo "The checks need:$missing; see Setting up in CONTRIBUTING.md." >&2
+    exit 1
+fi
+
 echo "== Version"
 python3 tools/release.py --check
 
@@ -18,6 +32,9 @@ python3 tools/box_drawing.py --check
 
 echo "== Translations"
 python3 tools/translations.py --check --strict --quiet
+
+echo "== Tools"
+python3 tests/bench_test.py
 
 echo "== Packages for the AUR"
 python3 tools/aur.py --check
@@ -43,8 +60,10 @@ echo "== C++ warnings"
 # The newest generated header: other builds in the target directory can be older.
 header=$(find "$target" -path '*/kudari/src/kde.cxx.h' -printf '%T@ %p\n' | sort -n | tail -n 1 | cut -d' ' -f2-)
 generated=$(dirname "$(dirname "$(dirname "$header")")")
-includes="-isystem /usr/include/qt6"
-for module in /usr/include/qt6/Qt* /usr/include/KF6/*; do
+# Where build.rs takes them from as well: the qmake of cxx-qt and the frameworks of CMake.
+qt_headers=$("${QMAKE:-qmake6}" -query QT_INSTALL_HEADERS 2>/dev/null || echo /usr/include/qt6)
+includes="-isystem $qt_headers"
+for module in "$qt_headers"/Qt* "${KUDARI_KF6_PREFIX:-/usr}"/include/KF6/*; do
     [ -d "$module" ] && includes="$includes -isystem $module"
 done
 # shellcheck disable=SC2086 # the include list is meant to split
@@ -68,7 +87,7 @@ echo "== QML"
 # Qt's linter cannot see into the types of cxx-qt, so these categories only give false alarms.
 # `pragma ComponentBehavior: Bound` and the QML compiler in the build cover part of them.
 qmllint() {
-    env -u QT_LOGGING_RULES /usr/lib/qt6/bin/qmllint --max-warnings 0 \
+    env -u QT_LOGGING_RULES "$qmllint" --max-warnings 0 \
         --import disable --unresolved-type disable --missing-property disable --missing-type disable \
         --incompatible-type disable --unqualified disable \
         -I "$target/cxxqt/qml_modules" -I /usr/lib/qt6/qml "$@"
@@ -107,7 +126,9 @@ echo "== Man page"
 checkXML6 docs/man-kudari.1.docbook
 # Its English as well, turned into HTML with the entities of KDocTools resolved. xsltproc
 # reports an entity it cannot resolve but still succeeds, so any message of it fails here.
-man=$(mktemp -d)
+# Below the directory that the trap removes, also when a check here fails.
+man="$resources/man"
+mkdir "$man"
 XML_CATALOG_FILES=/usr/share/kf6/kdoctools/customization/catalog.xml \
     xsltproc --nonet .vale/docbook.xsl docs/man-kudari.1.docbook > "$man/page.html" 2> "$man/errors"
 if [ -s "$man/errors" ]; then
@@ -115,6 +136,5 @@ if [ -s "$man/errors" ]; then
     exit 1
 fi
 vale --ext=.html --no-wrap < "$man/page.html"
-rm -r "$man"
 
 echo "All checks passed."

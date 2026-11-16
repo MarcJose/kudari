@@ -128,8 +128,8 @@ ZIP archive needs no installation: unpack it and start `kudari.exe`.
 
 ### From source
 
-Kudari needs Rust 1.100 or newer, CMake, Qt 6 and KDE Frameworks 6 with Layer Shell Qt. On
-Arch Linux, these are
+Kudari needs Rust 1.100 or newer, CMake, Qt 6 and KDE Frameworks 6.8 or newer with Layer
+Shell Qt. On Arch Linux, these are
 
 ```sh
 sudo pacman -S --needed rust cmake lld $(grep -v '^#' .github/arch-packages.txt)
