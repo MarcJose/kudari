@@ -408,8 +408,14 @@ ApplicationWindow {
 
         property int questionId: -1
         property string confirm: "continue"
+        // Questions that came while one was open: each gets its own answer, one after the other.
+        property var waiting: []
 
         function ask(id, title, text, confirm) {
+            if (visible) {
+                waiting.push({id: id, title: title, text: text, confirm: confirm});
+                return;
+            }
             questionId = id;
             question.title = title;
             body.text = text;
@@ -427,6 +433,12 @@ ApplicationWindow {
                                 questionTitle.advanceWidth + leftPadding + rightPadding)
         onAccepted: app.answerQuestion(questionId, true)
         onRejected: app.answerQuestion(questionId, false)
+        onClosed: {
+            const next = waiting.shift();
+            if (next) {
+                ask(next.id, next.title, next.text, next.confirm);
+            }
+        }
 
         // As the buttons of KDE: what the question is about, and Cancel.
         footer: DialogButtonBox {

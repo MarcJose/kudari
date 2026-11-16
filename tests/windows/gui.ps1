@@ -249,8 +249,9 @@ try {
     Test-Check 'the buttons of the search bar have names' ($missing.Count -eq 0)
     if ($missing) { Write-Host "      missing: $($missing -join ', ')" }
 
-    # The button that answers yes says what it does, as under KDE. The quit button of the bar
-    # is held on to, since the button of the question has its name.
+    # Two questions at once: each gets its own answer, the second after the first. The button
+    # that answers yes says what it does, as under KDE. The quit button of the bar is held on
+    # to, since the button of the question has its name.
     [void] (Invoke-Element 'New Session')
     $button = [System.Windows.Automation.ControlType]::Button
     function Get-QuitButtons { @(Find-All 'Quit' | Where-Object { $_.Current.ControlType -eq $button }) }
@@ -258,9 +259,15 @@ try {
     function Press($element) { $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
     Press $quitButton
     $asked = Wait-For { if (@(Get-QuitButtons).Count -eq 2) { $true } }
+    Press $quitButton
+    Start-Sleep -Milliseconds 500
     [void] (Invoke-Element 'Cancel')
-    [void] (Wait-For { if (@(Get-QuitButtons).Count -eq 1) { $true } })
+    Start-Sleep -Seconds 1
+    $waited = @(Get-QuitButtons).Count -eq 2
+    [void] (Invoke-Element 'Cancel')
+    $answered = Wait-For { if (@(Get-QuitButtons).Count -eq 1) { $true } }
     Test-Check 'the question about quitting has a Quit button' ([bool] $asked)
+    Test-Check 'a second question waits for the answer to the first' ($waited -and $answered)
     [void] (Invoke-Element 'Close Session')
     [void] (Wait-For { if ((Get-TabCount) -eq $tabs) { $true } })
 
