@@ -56,7 +56,7 @@ impl Source<'_> {
 }
 
 /// Settings that can be changed at runtime, with their configuration group.
-const KEYS: [(&str, &str); 106] = [
+const KEYS: [(&str, &str); 107] = [
     ("Screen", "Window"),
     ("Width", "Window"),
     ("Height", "Window"),
@@ -106,6 +106,7 @@ const KEYS: [(&str, &str); 106] = [
     ("LineSpacing", "Terminal"),
     ("BoldIntense", "Terminal"),
     ("BlinkingCursor", "Terminal"),
+    ("CursorBlinkTimeout", "Terminal"),
     ("KittyKeyboard", "Terminal"),
     ("Margin", "Terminal"),
     ("CenterContent", "Terminal"),
@@ -254,6 +255,9 @@ pub struct Settings {
     pub line_spacing: i32,
     pub bold_intense: bool,
     pub blinking_cursor: bool,
+    /// Seconds without input or output after which the cursor stops blinking and stays
+    /// shown; 0 never stops it.
+    pub cursor_blink_timeout: i32,
     pub kitty_keyboard: bool,
     pub margin: i32,
     pub center_content: bool,
@@ -400,6 +404,7 @@ impl Settings {
             line_spacing: source.int("Terminal", "LineSpacing", 0, 0, 20),
             bold_intense: source.boolean("Terminal", "BoldIntense", true),
             blinking_cursor: source.boolean("Terminal", "BlinkingCursor", false),
+            cursor_blink_timeout: source.int("Terminal", "CursorBlinkTimeout", 15, 0, 3600),
             kitty_keyboard: source.boolean("Terminal", "KittyKeyboard", false),
             margin: source.int("Terminal", "Margin", 0, 0, 50),
             center_content: source.boolean("Terminal", "CenterContent", false),
@@ -514,6 +519,7 @@ impl Settings {
             "LineSpacing": self.line_spacing,
             "BoldIntense": self.bold_intense,
             "BlinkingCursor": self.blinking_cursor,
+            "CursorBlinkTimeout": self.cursor_blink_timeout,
             "KittyKeyboard": self.kitty_keyboard,
             "Margin": self.margin,
             "CenterContent": self.center_content,

@@ -357,6 +357,14 @@ msgctxt "@option:check"
 msgid "Blinking cursor"
 msgstr "Blinkender Cursor"
 
+msgctxt "@label:spinbox"
+msgid "Stop blinking after:"
+msgstr "Blinken beenden nach:"
+
+msgctxt "@item:inrange stop blinking"
+msgid "Never"
+msgstr "Nie"
+
 msgctxt "@option:check"
 msgid "Change the font size with Ctrl+mouse wheel"
 msgstr "Schriftgröße mit Strg+Mausrad ändern"
