@@ -542,9 +542,7 @@ impl App {
     }
 
     fn keyboard_input(&self, terminal: TerminalId) -> bool {
-        self.stack()
-            .terminal_state(terminal)
-            .is_none_or(|state| state.keyboard_input_enabled)
+        self.accepts_keyboard(terminal)
     }
 
     fn prompt(&self, terminal: TerminalId, running: &dyn Terminal) -> Prompt {

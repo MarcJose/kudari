@@ -586,6 +586,14 @@ impl App {
             .or_else(crate::process::home)
     }
 
+    /// Whether `terminal` takes what the user types, which the user can block per terminal.
+    #[must_use]
+    pub fn accepts_keyboard(&self, terminal: TerminalId) -> bool {
+        self.stack
+            .terminal_state(terminal)
+            .is_none_or(|state| state.keyboard_input_enabled)
+    }
+
     /// The folder that "Open File Manager" shows for `terminal`: where it is, whether new
     /// terminals inherit it or not, or the home directory.
     #[must_use]

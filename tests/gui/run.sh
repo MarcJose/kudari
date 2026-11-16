@@ -243,6 +243,14 @@ check "dropping pastes the quoted path" "'$work/source/a.txt' |" "$(content "$wo
 hook Popup "$work/source/a.txt"; sleep 1; menu_entry 2
 check "dropping copies a file" "a|" "$(content "$work/home/a.txt")"
 check "copying keeps the source" "a|" "$(content "$work/source/a.txt")"
+# The keyboard of the terminal is blocked: the menu of a drop types nothing either.
+run "clear; cat > $work/blocked"
+blocked=$(sessions activeSessionId)
+sessions setSessionKeyboardInputEnabled "$blocked" false; sleep 0.3
+hook Popup "$work/source/a.txt"; sleep 1; menu_entry 1
+sessions setSessionKeyboardInputEnabled "$blocked" true; sleep 0.3
+end_input
+check "a blocked terminal takes no path from the menu of a drop" "|" "$(content "$work/blocked")"
 hook Popup "$work/source/b.txt"; sleep 1; menu_entry 3
 check "dropping moves a file" "b|" "$(content "$work/home/b.txt")"
 check "moving removes the source" no "$([ -e "$work/source/b.txt" ] && echo yes || echo no)"

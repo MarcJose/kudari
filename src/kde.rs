@@ -117,7 +117,12 @@ fn kde_tab_color(session: i32, color: i32) {
 
 fn kde_terminal_paths(terminal: i32, paths: &QString, change_directory: bool) {
     let paths = paths.to_string();
-    crate::controller::queue(move |_| crate::terminal::send_paths(terminal, &paths, change_directory));
+    // The menu can stay open while the keyboard of the terminal gets blocked.
+    crate::controller::queue(move |controller| {
+        if controller.app().accepts_keyboard(terminal) {
+            crate::terminal::send_paths(terminal, &paths, change_directory);
+        }
+    });
 }
 
 fn kde_theme_changed() {
