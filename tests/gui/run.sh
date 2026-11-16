@@ -571,6 +571,11 @@ sleep 2
 run "clear; cat > $work/reset"
 hook Trigger clear-history-and-reset; sleep 0.6; end_input
 check "a reset types nothing into a program that reads lines" "" "$(tr -d '\n' < "$work/reset" | od -An -c | tr -d ' ')"
+# In a pipeline whose first program ended, the title names the one that runs.
+run "true | sleep 3"; sleep 1.5
+check "a pipeline shows its program after its first one ended" yes \
+    "$(tabs tabTitle "$first" | grep -q sleep && echo yes || echo "no: $(tabs tabTitle "$first")")"
+sleep 2
 # No window of X11 is the terminal's, nor one of Alacritty.
 run "echo \"[\$WINDOWID][\$ALACRITTY_WINDOW_ID]\" > $work/windowid"
 check "shells get no number of a window" "[][]" "$(cat "$work/windowid" 2>/dev/null)"

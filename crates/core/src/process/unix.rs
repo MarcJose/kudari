@@ -50,6 +50,47 @@ impl Pty {
     fn file(&self, pid: i32, name: &str) -> PathBuf {
         self.proc.join(pid.to_string()).join(name)
     }
+
+    /// A living process of the group `group`, to read about in `/proc`: its leader, or when
+    /// the leader is gone, as `cat` ends first in `cat file | less`, the last child of the
+    /// shell in the group, the end of the pipeline.
+    fn member(&self, group: i32) -> i32 {
+        if self.lives_in(group, group) {
+            return group;
+        }
+        let children = std::fs::read_to_string(
+            self.proc
+                .join(self.shell.to_string())
+                .join("task")
+                .join(self.shell.to_string())
+                .join("children"),
+        )
+        .unwrap_or_default();
+        children
+            .split_whitespace()
+            .filter_map(|child| child.parse::<i32>().ok())
+            .rev()
+            .find(|child| self.lives_in(*child, group))
+            .unwrap_or(group)
+    }
+
+    /// Whether process `pid` runs, not a zombie, in the group `group`.
+    fn lives_in(&self, pid: i32, group: i32) -> bool {
+        let Ok(stat) = std::fs::read_to_string(self.file(pid, "stat")) else {
+            return false;
+        };
+        // The name in parentheses can contain spaces; the state, the parent and the group
+        // follow it.
+        let mut fields = stat.rsplit_once(')').map_or("", |(_, rest)| rest).split_whitespace();
+        let state = fields.next();
+        let in_group = fields.nth(1).and_then(|field| field.parse::<i32>().ok()) == Some(group);
+        in_group && state.is_some_and(|state| state != "Z")
+    }
+
+    /// The program in the foreground to read about in `/proc`.
+    fn reading(&self) -> i32 {
+        self.member(self.foreground())
+    }
 }
 
 /// Whether the effective user in the `Uid:` line of `/proc/<pid>/status` is root.
@@ -63,7 +104,7 @@ fn is_root_status(status: &str) -> bool {
 
 impl Programs for Pty {
     fn is_root(&self) -> bool {
-        std::fs::read_to_string(self.file(self.foreground(), "status")).is_ok_and(|status| is_root_status(&status))
+        std::fs::read_to_string(self.file(self.reading(), "status")).is_ok_and(|status| is_root_status(&status))
     }
 
     fn is_busy(&self) -> bool {
@@ -71,19 +112,19 @@ impl Programs for Pty {
     }
 
     fn working_directory(&self) -> Option<PathBuf> {
-        std::fs::read_link(self.file(self.foreground(), "cwd"))
+        std::fs::read_link(self.file(self.reading(), "cwd"))
             .or_else(|_| std::fs::read_link(self.file(self.shell, "cwd")))
             .ok()
     }
 
     fn name(&self) -> Option<String> {
-        std::fs::read_to_string(self.file(self.foreground(), "comm"))
+        std::fs::read_to_string(self.file(self.reading(), "comm"))
             .ok()
             .map(|name| name.trim().to_string())
     }
 
     fn arguments(&self) -> Option<Vec<String>> {
-        let command_line = std::fs::read(self.file(self.foreground(), "cmdline")).ok()?;
+        let command_line = std::fs::read(self.file(self.reading(), "cmdline")).ok()?;
         let mut arguments: Vec<String> = command_line
             .split(|byte| *byte == 0)
             .map(|part| String::from_utf8_lossy(part).into_owned())
@@ -203,6 +244,31 @@ mod tests {
                 std::os::fd::FromRawFd::from_raw_fd(other),
             )
         }
+    }
+
+    #[test]
+    fn a_pipeline_whose_leader_ended_shows_its_last_program() {
+        // `cat file | less`: cat, 100, led the group and ended; less, 101, runs on, and an
+        // ended child of the group, 102, is a zombie.
+        let root = std::env::temp_dir().join(format!("kudari-pty-group-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let pty = shell(&root);
+        let task = root.join("42/task/42");
+        std::fs::create_dir_all(&task).unwrap();
+        std::fs::write(task.join("children"), "100 101 102 ").unwrap();
+        for (pid, stat) in [("101", "101 (less) S 42 100 100"), ("102", "102 (x y) Z 42 100 100")] {
+            std::fs::create_dir_all(root.join(pid)).unwrap();
+            std::fs::write(root.join(pid).join("stat"), stat).unwrap();
+        }
+        std::fs::write(root.join("101/comm"), "less\n").unwrap();
+        assert_eq!(pty.member(100), 101);
+        // A leader that runs is the group's.
+        std::fs::create_dir_all(root.join("100")).unwrap();
+        std::fs::write(root.join("100/stat"), "100 (cat) R 42 100 100").unwrap();
+        assert_eq!(pty.member(100), 100);
+        // A group with nobody left stays as it is.
+        assert_eq!(pty.member(300), 300);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
