@@ -248,7 +248,8 @@ fn parse_line(line: &str) -> Option<Rule> {
     let action = action.trim();
     let action = match action.strip_prefix('"') {
         Some(text) => Action::Text(text_bytes(text)?),
-        None => Action::Command(command(action)?),
+        // A command is one word; a comment can follow it, as in Konsole's files.
+        None => Action::Command(command(action.split('#').next()?.split_whitespace().next()?)?),
     };
     Some(Rule {
         key,
@@ -421,6 +422,14 @@ mod tests {
         assert_eq!(text_bytes(r#"\E[\x7f\t\\\"x""#), Some(b"\x1b[\x7f\t\\\"x".to_vec()));
         assert_eq!(text_bytes(r#"\f""#), Some(b"\x0c".to_vec()));
         assert_eq!(text_bytes("never closed"), None);
+    }
+
+    #[test]
+    fn a_comment_after_a_rule_leaves_it_whole() {
+        let rules = parse("key PgUp+Shift : scrollPageUp # a page up\nkey X : \"a#b\" # c\n");
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].action, Action::Command(Command::PageUp));
+        assert_eq!(rules[1].action, Action::Text(b"a#b".to_vec()));
     }
 
     #[test]
