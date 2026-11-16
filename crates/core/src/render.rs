@@ -344,10 +344,14 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             });
         }
         if point == cursor.point {
-            // The whole cell, with its accents, which the block cursor covers.
+            // The whole cell, with its accents, which the block cursor covers; nothing of a
+            // hidden one, as a program shows a password with SGR 8.
             let mut text = String::from(cell.c);
             if let Some(zero_width) = cell.zerowidth() {
                 text.extend(zero_width.iter().take(MAX_ZERO_WIDTH));
+            }
+            if flags.contains(Flags::HIDDEN) {
+                text.clear();
             }
             cursor_glyph = Some((text, cell.c, flags, is_picture(flags, cell.zerowidth())));
         }
@@ -376,7 +380,8 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             fill(rect, color, &mut paints);
         }
         if shape == CursorShape::Block
-            && let Some((text, glyph, flags, picture)) = cursor_glyph.filter(|(_, glyph, ..)| !glyph.is_whitespace())
+            && let Some((text, glyph, flags, picture)) =
+                cursor_glyph.filter(|(text, glyph, ..)| !text.is_empty() && !glyph.is_whitespace())
         {
             let (x, y) = geometry.baseline(column, line);
             paints.push(Paint::Text {
@@ -501,6 +506,18 @@ mod tests {
             Paint::Text { text, color: drawn, .. } if *drawn == color => Some(text.clone()),
             _ => None,
         })
+    }
+
+    #[test]
+    fn hidden_text_stays_hidden_under_the_block_cursor() {
+        // A PIN behind SGR 8, the cursor on its first digit; the text of the cursor in a color
+        // of its own, so that it shows.
+        let options = Options {
+            cursor_text_color: Some(Rgb { r: 1, g: 2, b: 3 }),
+            ..Options::default()
+        };
+        assert_eq!(cursor_text("\x1b[8m1234\x1b[0m\x1b[4D", &options), None);
+        assert_eq!(cursor_text("1234\x1b[4D", &options).as_deref(), Some("1"));
     }
 
     #[test]
