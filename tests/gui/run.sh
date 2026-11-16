@@ -607,6 +607,21 @@ run "clear; printf '\033]52;c;%s\a' \$(printf osc | base64)"
 run "clear; cat > $work/osc"
 hook Trigger edit_paste; sleep 0.3; end_input
 check "programs can copy to the clipboard" "osc|" "$(content "$work/osc")"
+# A blocked keyboard: the wheel sends no arrow keys to a program on the alternate screen.
+before_wheel=$(active)
+hook Trigger new-session; sleep 1
+wheeled=$(active)
+run "clear; stty raw -echo; printf '\033[?1049h'; timeout 3 cat > $work/wheel; printf '\033[?1049l'; stty sane"
+sessions setSessionKeyboardInputEnabled "$wheeled" false; sleep 0.3
+input wheel 130 8 15 3; sleep 0.3
+# Given back its keyboard, the terminal takes the arrow key of one notch again.
+sessions setSessionKeyboardInputEnabled "$wheeled" true; sleep 0.3
+input wheel 130 8 15 1; sleep 2.5
+wheel=$(tr '\033' E < "$work/wheel")
+check "a blocked terminal takes no arrow keys from the wheel" one \
+    "$(echo "$wheel" | grep -qxE 'EO[AB]' && echo one || echo "$wheel")"
+sessions removeSession "$wheeled"; sleep 0.6
+sessions raiseSession "$before_wheel"; sleep 0.4
 # Two quick clicks at different places are two single clicks: the second selects no word.
 run "clear; printf '\033]52;c;%s\a' \$(printf before | base64)"
 run "clear; printf 'apple %s\n' bananabananabananabananabananabananabananabanana"

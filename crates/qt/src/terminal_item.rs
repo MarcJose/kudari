@@ -549,9 +549,10 @@ impl qobject::TerminalItem {
         };
         let options = terminal::options().unwrap_or_default();
         let directory = || backend.working_directory();
+        // With its keyboard blocked, the program sees the mouse no more than the keys.
         let context = Context {
             options: &options,
-            tracks_mouse: backend.tracks_mouse(),
+            tracks_mouse: backend.tracks_mouse() && *self.keyboard_enabled(),
             directory: &directory,
         };
         let effects = {
@@ -719,7 +720,8 @@ impl qobject::TerminalItem {
 
     fn wheel(self: Pin<&mut Self>, angle: i32, pixels: i32, x: f64, y: f64) {
         let cells = self.as_ref().cells();
-        let alternate_scrolling = *self.alternate_scrolling();
+        // The arrow keys that the wheel sends are input from the keyboard.
+        let alternate_scrolling = *self.alternate_scrolling() && *self.keyboard_enabled();
         let turn = view::wheel_turn(angle, pixels, *self.cell_height());
         self.handle(|view, term, context| {
             let point = Some(cells.at(term, x, y).0);
