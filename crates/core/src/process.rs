@@ -65,6 +65,10 @@ pub trait Programs: Send + Sync {
     fn supports(&self, signal: Signal) -> bool;
     /// Whether Ctrl+S and Ctrl+Q stop and resume the output.
     fn set_flow_control(&self, enabled: bool);
+    /// Whether the program in the foreground runs as root, for `%B` in titles.
+    fn is_root(&self) -> bool {
+        false
+    }
 }
 
 /// The home directory of the user.

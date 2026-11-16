@@ -41,7 +41,20 @@ impl Pty {
     }
 }
 
+/// Whether the effective user in the `Uid:` line of `/proc/<pid>/status` is root.
+fn is_root_status(status: &str) -> bool {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Uid:"))
+        .and_then(|ids| ids.split_whitespace().nth(1))
+        == Some("0")
+}
+
 impl Programs for Pty {
+    fn is_root(&self) -> bool {
+        std::fs::read_to_string(self.file(self.foreground(), "status")).is_ok_and(|status| is_root_status(&status))
+    }
+
     fn is_busy(&self) -> bool {
         self.foreground() != self.shell
     }
@@ -132,6 +145,13 @@ pub(super) fn program(proc: &Path, pid: u32, own: Option<&Path>) -> Option<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_effective_user_tells_root() {
+        assert!(is_root_status("Name:\tsudo\nUid:\t1000\t0\t0\t0\n"));
+        assert!(!is_root_status("Uid:\t0\t1000\t1000\t1000\n"));
+        assert!(!is_root_status("Name:\tbash\n"));
+    }
 
     /// A fake `/proc` with one process, the shell, since no descriptor means no foreground.
     fn shell(root: &Path) -> Pty {
