@@ -1020,15 +1020,17 @@ static void namedObjects(QObject *object, const QString &name, QSet<QObject *> &
     }
 }
 
-// `property` of every object of QML in the main window whose objectName is `name`, with
-// commas between them.
+// `property` of every object of QML in the windows of Kudari whose `objectName` is `name`,
+// with commas between them.
 QString rk_test_property(const QString &name, const QString &property)
 {
     QSet<QObject *> seen;
     QList<QObject *> found;
-    if (auto window = mainWindow()) {
+    for (QWindow *window : QGuiApplication::topLevelWindows()) {
         namedObjects(window, name, seen, found);
-        namedObjects(window->contentItem(), name, seen, found);
+        if (auto quickWindow = qobject_cast<QQuickWindow *>(window)) {
+            namedObjects(quickWindow->contentItem(), name, seen, found);
+        }
     }
     QStringList values;
     for (QObject *object : found) {

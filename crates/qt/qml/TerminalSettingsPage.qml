@@ -45,9 +45,12 @@ FormCard.FormCardPage {
         FormCard.FormDelegateSeparator {}
 
         NumberField {
+            objectName: "fontSize"
             label: root.controller.translate("@label:spinbox", "Font size:")
             from: 0
-            to: 72
+            // As far as the settings take it, so that a larger size, from Konsole perhaps,
+            // stays.
+            to: 200
             value: root.config.FontSize
             unit: "pt"
             zeroText: root.systemDefault

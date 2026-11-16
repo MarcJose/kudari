@@ -355,6 +355,15 @@ input key 2; sleep 0.1; input key 3; sleep 0.4
 input click 700 433; sleep 0.5
 check "a special value can be overwritten" 12 "$(setting FontSize)"
 input key 1; sleep 0.6
+# A size above 72 points, from Konsole perhaps, shows as it is and stays.
+hook SetSetting FontSize 96; sleep 0.5
+hook Trigger options_configure; sleep 2
+input click 250 316; sleep 1.2
+check "the settings show a font size above 72" 96 "$(hook Property fontSize value)"
+input click 700 354; sleep 0.3
+input click 700 433; sleep 0.5
+check "a font size above 72 stays" 96 "$(setting FontSize)"
+input key 1; sleep 0.6
 hook SetSetting Height 50; hook SetSetting FontSize 0; sleep 0.5
 
 hook Trigger options_configure; sleep 2
