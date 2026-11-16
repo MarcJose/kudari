@@ -42,12 +42,13 @@ pub enum Report {
     /// end drops it right before it reads the terminal: output that arrives meanwhile is
     /// reported anew.
     Output(Pending),
-    Bell,
+    /// The bell rang. Further bells are reported only once this is dropped.
+    Bell(Pending),
     /// The shell ended.
     Exited,
 }
 
-/// Holds back further reports of output while it lives.
+/// Holds back further reports of the same kind while it lives.
 #[derive(Debug)]
 pub struct Pending(Arc<AtomicBool>);
 
@@ -204,10 +205,55 @@ fn least_columns(columns: u16) -> u16 {
     columns.max(MIN_COLUMNS as u16)
 }
 
+/// An answer that a program asked for, in the order it asked. Some need the thread of the
+/// user interface, so all of them go there, or an answer would overtake an earlier one.
+enum Reply {
+    Text(String),
+    /// The text of the clipboard.
+    Paste(Arc<dyn Fn(&str) -> String + Send + Sync>),
+}
+
+/// What the thread of a PTY leaves for the thread of the user interface. A program can ring
+/// the bell, set its title or copy text a million times a second; the user interface hears
+/// of it once until it has taken what is there, instead of once each time.
+#[derive(Default)]
+struct Mailbox {
+    repaint_queued: Arc<AtomicBool>,
+    bell_queued: Arc<AtomicBool>,
+    /// Title set by the running program.
+    title: Mutex<String>,
+    /// The text the program copied last, until the user interface takes it.
+    copied: Mutex<Option<String>>,
+    replies: Mutex<Vec<Reply>>,
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[derive(Clone)]
 pub struct Proxy {
     id: TerminalId,
-    repaint_queued: Arc<AtomicBool>,
+    mailbox: Arc<Mailbox>,
+}
+
+impl Proxy {
+    /// Queues an answer, and the work that sends the answers if none is queued yet.
+    fn reply(&self, reply: Reply) {
+        let first = {
+            let mut replies = lock(&self.mailbox.replies);
+            replies.push(reply);
+            replies.len() == 1
+        };
+        if first {
+            let id = self.id;
+            run(move || {
+                if let Some(backend) = backend(id) {
+                    backend.answer();
+                }
+            });
+        }
+    }
 }
 
 impl EventListener for Proxy {
@@ -216,44 +262,51 @@ impl EventListener for Proxy {
         let Some(listener) = listener() else {
             return;
         };
+        let mailbox = &self.mailbox;
         match event {
-            Event::Wakeup if !self.repaint_queued.swap(true, Ordering::AcqRel) => {
-                listener.report(id, Report::Output(Pending(self.repaint_queued.clone())));
+            Event::Wakeup if !mailbox.repaint_queued.swap(true, Ordering::AcqRel) => {
+                listener.report(id, Report::Output(Pending(mailbox.repaint_queued.clone())));
             }
-            Event::Title(title) => run(move || {
-                if let Some(backend) = backend(id) {
-                    *backend
-                        .program_title
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) = title;
+            Event::Bell if !mailbox.bell_queued.swap(true, Ordering::AcqRel) => {
+                listener.report(id, Report::Bell(Pending(mailbox.bell_queued.clone())));
+            }
+            // The titles are read with the output, so they need no work of their own.
+            Event::Title(title) => *lock(&mailbox.title) = title,
+            Event::ResetTitle => lock(&mailbox.title).clear(),
+            Event::ClipboardStore(_, text) => {
+                if lock(&mailbox.copied).replace(text).is_none() {
+                    let mailbox = Arc::clone(mailbox);
+                    run(move || {
+                        if let Some(text) = lock(&mailbox.copied).take() {
+                            listener.clipboard().copy(&text, Selection::Clipboard);
+                        }
+                    });
                 }
-            }),
-            Event::ResetTitle => run(move || {
-                if let Some(backend) = backend(id) {
-                    backend
-                        .program_title
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .clear();
-                }
-            }),
-            Event::PtyWrite(text) => run(move || {
-                if let Some(backend) = backend(id) {
-                    backend.write(text.into_bytes());
-                }
-            }),
-            Event::Bell => listener.report(id, Report::Bell),
-            Event::ClipboardStore(_, text) => run(move || listener.clipboard().copy(&text, Selection::Clipboard)),
-            Event::ClipboardLoad(_, format) => run(move || {
-                let text = listener.clipboard().paste(Selection::Clipboard);
-                if let Some(backend) = backend(id) {
-                    backend.write(format(&text).into_bytes());
-                }
-            }),
+            }
+            Event::PtyWrite(text) => self.reply(Reply::Text(text)),
+            Event::ClipboardLoad(_, format) => self.reply(Reply::Paste(format)),
             Event::ChildExit(_) | Event::Exit => listener.report(id, Report::Exited),
             _ => {}
         }
     }
+}
+
+/// What a terminal knows to answer with, for [`answers`].
+struct Answering<'a> {
+    paste: &'a dyn Fn() -> String,
+}
+
+/// The bytes that answer `replies`, in their order.
+fn answers(replies: Vec<Reply>, answering: &Answering) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for reply in replies {
+        let text = match reply {
+            Reply::Text(text) => text,
+            Reply::Paste(format) => format(&(answering.paste)()),
+        };
+        bytes.extend_from_slice(text.as_bytes());
+    }
+    bytes
 }
 
 /// What the operating system tells about the programs of a terminal.
@@ -270,8 +323,8 @@ pub struct Backend {
     /// What the shell said about itself in its output.
     marks: Arc<Mutex<Marks>>,
     pub last_output: Mutex<Instant>,
-    /// Title set by the running program.
-    program_title: Mutex<String>,
+    /// What the thread of the PTY left for the user interface.
+    mailbox: Arc<Mailbox>,
     /// File the terminal content is saved to regularly.
     pub auto_save: Mutex<Option<PathBuf>>,
     /// Scrollback size of this terminal, instead of the configured one.
@@ -293,9 +346,10 @@ impl Backend {
         shell: Option<&str>,
     ) -> Result<Arc<Self>, String> {
         let columns = least_columns(columns);
+        let mailbox = Arc::<Mailbox>::default();
         let proxy = Proxy {
             id,
-            repaint_queued: Arc::default(),
+            mailbox: Arc::clone(&mailbox),
         };
         let term = Term::new(config(), &TermSize::new(columns.into(), lines.into()), proxy.clone());
         let term = Arc::new(FairMutex::new(term));
@@ -374,7 +428,7 @@ impl Backend {
             programs,
             marks,
             last_output: Mutex::new(Instant::now()),
-            program_title: Mutex::new(String::new()),
+            mailbox,
             auto_save: Mutex::new(None),
             history_lines: Mutex::new(None),
             mouse_tracking: Mutex::new(None),
@@ -446,6 +500,17 @@ impl Backend {
         self.notifier.notify(bytes);
     }
 
+    /// Sends the program the answers it asked for, on the thread of the user interface.
+    fn answer(&self) {
+        let replies = std::mem::take(&mut *lock(&self.mailbox.replies));
+        let paste = || listener().map_or_else(String::new, |listener| listener.clipboard().paste(Selection::Clipboard));
+        let answering = Answering { paste: &paste };
+        let bytes = answers(replies, &answering);
+        if !bytes.is_empty() {
+            self.write(bytes);
+        }
+    }
+
     /// Input always returns the view to the bottom of the scrollback.
     pub fn write_user_input(&self, bytes: Vec<u8>) {
         self.term.lock().scroll_display(Scroll::Bottom);
@@ -499,10 +564,7 @@ impl Backend {
     }
 
     fn program_title(&self) -> String {
-        self.program_title
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        lock(&self.mailbox.title).clone()
     }
 
     /// The title of the terminal: the remote format while `ssh` runs, else `format`.
@@ -766,6 +828,134 @@ mod tests {
         let mut parser: Processor<StdSyncHandler> = Processor::new();
         parser.advance(&mut term, text.replace('\n', "\r\n").as_bytes());
         term
+    }
+
+    std::thread_local! {
+        static WORK: std::cell::RefCell<Vec<Box<dyn FnOnce() + Send>>> = std::cell::RefCell::default();
+        static REPORTS: std::cell::RefCell<Vec<Report>> = std::cell::RefCell::default();
+        static COPIED: std::cell::RefCell<Vec<String>> = std::cell::RefCell::default();
+    }
+
+    /// A front end that keeps what it hears, for the test that runs on its thread.
+    struct Kept;
+
+    impl Listener for Kept {
+        fn run(&self, work: Box<dyn FnOnce() + Send>) {
+            WORK.with_borrow_mut(|kept| kept.push(work));
+        }
+
+        fn report(&self, _terminal: TerminalId, report: Report) {
+            REPORTS.with_borrow_mut(|kept| kept.push(report));
+        }
+
+        fn clipboard(&self) -> &dyn Clipboard {
+            self
+        }
+    }
+
+    impl Clipboard for Kept {
+        fn copy(&self, text: &str, _target: Selection) {
+            COPIED.with_borrow_mut(|kept| kept.push(text.to_string()));
+        }
+
+        fn copy_rich(&self, _text: &str, _html: &str) {}
+
+        fn paste(&self, _source: Selection) -> String {
+            "pasted".to_string()
+        }
+    }
+
+    /// A proxy that reports to [`Kept`].
+    fn kept_proxy() -> Proxy {
+        set_listener(&Kept);
+        Proxy {
+            id: 0,
+            mailbox: Arc::default(),
+        }
+    }
+
+    /// Runs the work that the proxy left for the thread of the user interface.
+    fn run_work() -> usize {
+        let work = WORK.take();
+        let count = work.len();
+        for work in work {
+            work();
+        }
+        count
+    }
+
+    #[test]
+    fn a_flood_of_bells_is_reported_once_until_the_front_end_takes_it() {
+        let proxy = kept_proxy();
+        // `yes $'\a'`, or a binary file shown by mistake.
+        for _ in 0..1000 {
+            proxy.send_event(Event::Bell);
+        }
+        let mut reports = REPORTS.take();
+        assert_eq!(reports.len(), 1, "one report for a thousand bells");
+        assert!(matches!(reports[0], Report::Bell(_)));
+        // Once the front end has the report, the next bell rings again.
+        reports.clear();
+        proxy.send_event(Event::Bell);
+        assert_eq!(REPORTS.take().len(), 1);
+    }
+
+    #[test]
+    fn titles_wait_in_the_terminal_without_work_for_the_front_end() {
+        let proxy = kept_proxy();
+        for number in 0..1000 {
+            proxy.send_event(Event::Title(format!("title {number}")));
+        }
+        assert_eq!(run_work(), 0);
+        assert_eq!(*lock(&proxy.mailbox.title), "title 999");
+        proxy.send_event(Event::ResetTitle);
+        assert_eq!(*lock(&proxy.mailbox.title), "");
+    }
+
+    #[test]
+    fn only_the_text_copied_last_reaches_the_clipboard() {
+        let proxy = kept_proxy();
+        // OSC 52, a thousand times while the front end is busy.
+        for number in 0..1000 {
+            proxy.send_event(Event::ClipboardStore(
+                alacritty_terminal::term::ClipboardType::Clipboard,
+                format!("text {number}"),
+            ));
+        }
+        assert_eq!(run_work(), 1);
+        assert_eq!(COPIED.take(), ["text 999"]);
+        // Text copied afterwards comes through as well.
+        proxy.send_event(Event::ClipboardStore(
+            alacritty_terminal::term::ClipboardType::Clipboard,
+            "later".to_string(),
+        ));
+        assert_eq!(run_work(), 1);
+        assert_eq!(COPIED.take(), ["later"]);
+    }
+
+    /// What the terminal answers to `output`.
+    fn answer_to(output: &str) -> (usize, String) {
+        let proxy = kept_proxy();
+        let mut term = Term::new(Config::default(), &TermSize::new(80, 24), proxy.clone());
+        let mut parser: Processor<StdSyncHandler> = Processor::new();
+        parser.advance(&mut term, output.as_bytes());
+        let work = run_work();
+        let replies = std::mem::take(&mut *lock(&proxy.mailbox.replies));
+        let answering = Answering {
+            paste: &|| "pasted".to_string(),
+        };
+        (
+            work,
+            String::from_utf8(answers(replies, &answering)).unwrap_or_default(),
+        )
+    }
+
+    #[test]
+    fn a_flood_of_questions_is_one_piece_of_work_for_the_front_end() {
+        // `yes $'\e[c'`: a thousand questions for the device attributes.
+        let (work, answer) = answer_to(&"\x1b[c".repeat(1000));
+        assert_eq!(work, 1);
+        assert_eq!(answer, "\x1b[?6c".repeat(1000));
     }
 
     #[test]
