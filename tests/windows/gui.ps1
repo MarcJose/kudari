@@ -287,6 +287,28 @@ try {
     Test-Check 'Windows takes Ctrl+Alt+^ as the shortcut' (-not (Select-String -Quiet 'refused the shortcut' $characterLog))
     [void] (Invoke-Element 'Quit')
     [void] $process.WaitForExit(10000)
+
+    # In German, the credits and the buttons of the dialogs are German as well. The script
+    # stays ASCII for Windows PowerShell, so the umlauts come as their codes.
+    $env:LANGUAGE = 'de'
+    $germanLog = Join-Path $work 'german.txt'
+    $process = Start-Process $Program -PassThru -RedirectStandardError $germanLog -WorkingDirectory $work
+    Remove-Item Env:LANGUAGE
+    $ByProcess = New-Object System.Windows.Automation.PropertyCondition ($Automation::ProcessIdProperty, $process.Id)
+    [void] (Wait-For { Get-Windows | Where-Object { -not $_.Current.BoundingRectangle.IsEmpty } | Select-Object -First 1 } 15)
+    [void] (Invoke-Element "Men$([char]0xFC) $([char]0xF6)ffnen")
+    [void] (Invoke-Element "$([char]0xDC)ber Kudari")
+    $credits = Wait-For {
+        foreach ($element in Find-ByType ([System.Windows.Automation.ControlType]::Text)) {
+            if ($element.Current.Name -like '*Das Konsole-Team: *') { return $true }
+        }
+    }
+    $close = "Schlie$([char]0xDF)en"
+    Test-Check 'the credits are German in German' ([bool] $credits)
+    Test-Check 'the buttons of the dialogs are German in German' ($null -ne (Find-Element $close 3))
+    [void] (Invoke-Element $close)
+    [void] (Invoke-Element 'Beenden')
+    [void] $process.WaitForExit(10000)
 } catch {
     Test-Check "the test runs through: $($_.Exception.Message)" $false
 } finally {

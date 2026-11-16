@@ -578,8 +578,10 @@ ApplicationWindow {
 
             Label {
                 Layout.fillWidth: true
-                text: "Eike Hein and the Yakuake developers: " + app.translate("@info:credit", "Yakuake, the drop-down terminal Kudari grew out of")
-                    + "\nThe Konsole developers: " + app.translate("@info:credit", "Ideas for many terminal options")
+                text: app.translate("@info:credit", "Eike Hein and the Yakuake developers") + ": "
+                    + app.translate("@info:credit", "Yakuake, the drop-down terminal Kudari grew out of") + "\n"
+                    + app.translate("@info:credit", "The Konsole developers") + ": "
+                    + app.translate("@info:credit", "Ideas for many terminal options")
                 wrapMode: Text.Wrap
                 color: palette.placeholderText
             }

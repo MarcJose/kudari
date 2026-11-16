@@ -428,11 +428,11 @@ void rk_command_line(const QString &version)
                      QString());
     about.setOrganizationDomain(QByteArray("marcjose.github.io"));
     about.setDesktopFileName(QStringLiteral("io.github.marcjose.kudari"));
-    about.addCredit(QStringLiteral("Eike Hein and the Yakuake developers"),
+    about.addCredit(i18nc("@info:credit", "Eike Hein and the Yakuake developers"),
                     xi18nc("@info:credit", "Yakuake, the drop-down terminal Kudari grew out of"),
                     QString(),
                     QStringLiteral("https://apps.kde.org/yakuake"));
-    about.addCredit(QStringLiteral("The Konsole developers"),
+    about.addCredit(i18nc("@info:credit", "The Konsole developers"),
                     xi18nc("@info:credit", "Ideas for many terminal options"),
                     QString(),
                     QStringLiteral("https://konsole.kde.org"));

@@ -1461,7 +1461,6 @@ msgctxt "@item:inlistbox keyboard modifier"
 msgid "Shift+Alt"
 msgstr "Shift+Alt"
 
-
 msgctxt "@action:button"
 msgid "Quit"
 msgstr "Quit"
@@ -1481,3 +1480,11 @@ msgstr "Cancel"
 msgctxt "@action:button"
 msgid "OK"
 msgstr "OK"
+
+msgctxt "@info:credit"
+msgid "Eike Hein and the Yakuake developers"
+msgstr "Eike Hein and the Yakuake developers"
+
+msgctxt "@info:credit"
+msgid "The Konsole developers"
+msgstr "The Konsole developers"
