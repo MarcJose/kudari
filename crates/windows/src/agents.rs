@@ -70,17 +70,26 @@ pub fn listen() {
 /// Asks the user whether `agent` may use Kudari, with the name of its program.
 pub fn ask_user(agent: String) {
     let process = processes(|processes| processes.get(&agent).copied());
-    // Finding the program reads the list of processes, which takes a moment.
-    std::thread::spawn(move || {
-        let own = std::env::current_exe().ok();
-        let program = process.and_then(|process| kudari_core::process::program(process, own.as_deref()));
+    // Finding the program reads the list of processes, which takes a moment. Without a
+    // thread, as when the user has as many processes as allowed, the question comes without
+    // the name of the program.
+    let ask = |agent: String, program: Option<String>| {
         queue(move |mut controller| {
             // The question is part of the window, which shows for it.
             if controller.as_mut().ask_about_agent(&agent, program.as_deref()) && !*controller.window_visible() {
                 controller.toggle_window();
             }
         });
+    };
+    let unnamed = agent.clone();
+    let asked = std::thread::Builder::new().name("agent".to_string()).spawn(move || {
+        let own = std::env::current_exe().ok();
+        let program = process.and_then(|process| kudari_core::process::program(process, own.as_deref()));
+        ask(agent, program);
     });
+    if asked.is_err() {
+        ask(unnamed, None);
+    }
 }
 
 /// Withdraws the question about an agent that went.

@@ -738,11 +738,28 @@ impl App {
     /// Removes a terminal from its session, closing the session when it was the last one.
     pub fn close_terminal(&mut self, terminal: TerminalId) -> Vec<Effect> {
         let mut effects = vec![self.forget_terminal(terminal)];
-        match self.stack.close_terminal(terminal) {
-            Some(session) => effects.extend(self.finish_session_removal(session)),
-            None => effects.extend(self.refresh()),
+        let session = self.stack.session_for_terminal(terminal);
+        if let Some(removed) = self.stack.close_terminal(terminal) {
+            effects.extend(self.finish_session_removal(removed));
+        } else {
+            self.sync_tab_title(session);
+            effects.extend(self.refresh());
         }
         effects
+    }
+
+    /// The tab of `session` takes the title of its active terminal, as it does when that
+    /// title changes: after another terminal of the session became active, or one closed.
+    fn sync_tab_title(&mut self, session: Option<SessionId>) {
+        if !self.settings.dynamic_tab_titles {
+            return;
+        }
+        let found = session
+            .and_then(|session| self.stack.session(session))
+            .map(|session| (session.id, session.title.clone()));
+        if let Some((session, title)) = found {
+            self.stack.set_tab_title(session, &title, false);
+        }
     }
 
     /// The program of a terminal ended.
@@ -1064,6 +1081,7 @@ impl App {
         } else {
             self.stack.focus_previous_terminal();
         }
+        self.sync_tab_title(self.stack.active_id());
         let mut effects = self.refresh();
         if self.settings.terminal_highlight_on_manual_activation
             && let Some(terminal) = self.active_terminal()
@@ -1089,6 +1107,7 @@ impl App {
 
     pub fn activate_terminal(&mut self, terminal: TerminalId) -> Vec<Effect> {
         self.stack.set_active_terminal(terminal);
+        self.sync_tab_title(self.stack.session_for_terminal(terminal));
         // It has the keyboard already: the user clicked it.
         self.focused.set(self.active_terminal());
         vec![Effect::Publish]
@@ -1853,6 +1872,25 @@ mod tests {
             fixed.stack().tab_title(fixed.stack().active_id().unwrap()),
             Some("Shell")
         );
+    }
+
+    #[test]
+    fn the_tab_follows_the_terminal_that_becomes_active() {
+        let mut app = app_with(&[]);
+        let session = app.stack().active_id().unwrap();
+        let left = app.active_terminal().unwrap();
+        let (right, _) = app.split(session, None, &Here);
+        let right = right.unwrap();
+        app.activate_terminal(left);
+        // `htop` on the left, a shell that idles on the right.
+        app.poll(&[status(left, "~ : htop", true, 0), status(right, "~ : zsh", false, 0)]);
+        assert_eq!(app.stack().tab_title(session), Some("~ : htop"));
+        app.activate_terminal(right);
+        assert_eq!(app.stack().tab_title(session), Some("~ : zsh"), "by a click");
+        app.focus_neighbor(true);
+        assert_eq!(app.stack().tab_title(session), Some("~ : htop"), "by a shortcut");
+        app.close_terminal(left);
+        assert_eq!(app.stack().tab_title(session), Some("~ : zsh"), "by closing");
     }
 
     #[test]

@@ -19,7 +19,7 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::color::{COUNT, Colors};
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::{Config, MIN_COLUMNS, Term, TermMode};
+use alacritty_terminal::term::{ClipboardType, Config, MIN_COLUMNS, Term, TermMode};
 use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::{CursorStyle, Handler, Processor, Rgb, StdSyncHandler};
 
@@ -130,6 +130,11 @@ fn shell_environment(custom: &str) -> HashMap<String, String> {
     let mut environment = HashMap::from([
         ("TERM".to_string(), "xterm-256color".to_string()),
         ("COLORTERM".to_string(), "truecolor".to_string()),
+        // `alacritty_terminal` sets both to the number of the terminal, which is no window of
+        // X11: `w3mimgdisplay` or `xdotool` would draw into or act on another window, and tools
+        // would take Kudari for Alacritty.
+        ("WINDOWID".to_string(), String::new()),
+        ("ALACRITTY_WINDOW_ID".to_string(), String::new()),
     ]);
     environment.extend(parse_environment(custom));
     environment
@@ -238,7 +243,36 @@ struct Mailbox {
     title: Mutex<String>,
     /// The text the program copied last, until the user interface takes it.
     copied: Mutex<Option<String>>,
+    /// The same for the primary selection, which a middle click pastes.
+    selected: Mutex<Option<String>>,
     replies: Mutex<Vec<Reply>>,
+}
+
+/// The most bytes of a title that a program sets: tabs, the window and notifications show
+/// little of it, and a longer one only takes time to copy and lay out.
+const MAX_TITLE: usize = 1024;
+
+/// A title that a program set, cut to [`MAX_TITLE`] at the end of a character, with spaces
+/// for control characters.
+fn bounded_title(title: &str) -> String {
+    let mut end = title.len().min(MAX_TITLE);
+    while !title.is_char_boundary(end) {
+        end -= 1;
+    }
+    title[..end]
+        .chars()
+        .map(|character| if character.is_control() { ' ' } else { character })
+        .collect()
+}
+
+impl Mailbox {
+    /// Where the text copied for `target` waits.
+    fn slot(&self, target: Selection) -> &Mutex<Option<String>> {
+        match target {
+            Selection::Clipboard => &self.copied,
+            Selection::Primary => &self.selected,
+        }
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -285,14 +319,19 @@ impl EventListener for Proxy {
                 listener.report(id, Report::Bell(Pending(mailbox.bell_queued.clone())));
             }
             // The titles are read with the output, so they need no work of their own.
-            Event::Title(title) => *lock(&mailbox.title) = title,
+            Event::Title(title) => *lock(&mailbox.title) = bounded_title(&title),
             Event::ResetTitle => lock(&mailbox.title).clear(),
-            Event::ClipboardStore(_, text) => {
-                if lock(&mailbox.copied).replace(text).is_none() {
+            // OSC 52 with `p` or `s`, as `tmux` and `neovim` send it, names the primary selection.
+            Event::ClipboardStore(kind, text) => {
+                let target = match kind {
+                    ClipboardType::Clipboard => Selection::Clipboard,
+                    ClipboardType::Selection => Selection::Primary,
+                };
+                if lock(mailbox.slot(target)).replace(text).is_none() {
                     let mailbox = Arc::clone(mailbox);
                     run(move || {
-                        if let Some(text) = lock(&mailbox.copied).take() {
-                            listener.clipboard().copy(&text, Selection::Clipboard);
+                        if let Some(text) = lock(mailbox.slot(target)).take() {
+                            listener.clipboard().copy(&text, target);
                         }
                     });
                 }
@@ -464,6 +503,15 @@ impl Backend {
         );
         let event_loop = EventLoop::new(term.clone(), proxy, pty, false, false).map_err(|error| error.to_string())?;
         let notifier = Notifier(event_loop.channel());
+        // `alacritty_terminal` ends the process when it cannot start the thread of the PTY, as
+        // when the user has as many processes as allowed: Kudari would end with all its
+        // terminals. A thread that just started tells that one can.
+        std::thread::Builder::new()
+            .name("probe".to_string())
+            .spawn(|| {})
+            .map_err(|error| format!("no thread for the terminal: {error}"))?
+            .join()
+            .map_err(|_| "no thread for the terminal".to_string())?;
         event_loop.spawn();
 
         let backend = Arc::new(Self {
@@ -697,9 +745,13 @@ impl Backend {
 
     /// Forgets the scrollback and returns to the initial terminal state.
     pub fn reset(&self) {
-        self.term.lock().reset_state();
-        // Ctrl+L makes the shell draw its prompt again.
-        self.write(vec![0x0c]);
+        let mut term = self.term.lock();
+        let full_screen = term.mode().contains(TermMode::ALT_SCREEN);
+        term.reset_state();
+        drop(term);
+        if redraws_after_reset(self.is_busy(), full_screen) {
+            self.write(vec![0x0c]);
+        }
     }
 
     /// Terminal output can hold passwords and tokens, so a new file is private. A file
@@ -710,6 +762,13 @@ impl Backend {
     pub fn save_output(&self, path: &std::path::Path) -> std::io::Result<()> {
         process::write_private(path, self.full_text().as_bytes())
     }
+}
+
+/// Whether a reset types Ctrl+L, which makes the shell or a full-screen program draw itself
+/// again. Other programs read it as input: `cat > notes` would write it into the file, and a
+/// question for a password would take it for part of the password.
+fn redraws_after_reset(busy: bool, full_screen: bool) -> bool {
+    !busy || full_screen
 }
 
 /// What AI agents see of a terminal.
@@ -895,6 +954,7 @@ mod tests {
         static WORK: std::cell::RefCell<Vec<Box<dyn FnOnce() + Send>>> = std::cell::RefCell::default();
         static REPORTS: std::cell::RefCell<Vec<Report>> = std::cell::RefCell::default();
         static COPIED: std::cell::RefCell<Vec<String>> = std::cell::RefCell::default();
+        static SELECTED: std::cell::RefCell<Vec<String>> = std::cell::RefCell::default();
     }
 
     /// A front end that keeps what it hears, for the test that runs on its thread.
@@ -915,8 +975,13 @@ mod tests {
     }
 
     impl Clipboard for Kept {
-        fn copy(&self, text: &str, _target: Selection) {
-            COPIED.with_borrow_mut(|kept| kept.push(text.to_string()));
+        fn copy(&self, text: &str, target: Selection) {
+            let kept = if target == Selection::Clipboard {
+                &COPIED
+            } else {
+                &SELECTED
+            };
+            kept.with_borrow_mut(|kept| kept.push(text.to_string()));
         }
 
         fn copy_rich(&self, _text: &str, _html: &str) {}
@@ -992,6 +1057,37 @@ mod tests {
         ));
         assert_eq!(run_work(), 1);
         assert_eq!(COPIED.take(), ["later"]);
+    }
+
+    #[test]
+    fn a_reset_types_ctrl_l_only_for_the_shell_or_a_full_screen_program() {
+        assert!(redraws_after_reset(false, false), "the shell at its prompt");
+        assert!(redraws_after_reset(true, true), "vim or htop");
+        assert!(!redraws_after_reset(true, false), "cat or a question for a password");
+    }
+
+    #[test]
+    fn titles_of_programs_have_a_bound() {
+        let proxy = kept_proxy();
+        // `printf '\e]2;%s\a' "$(head -c 50000000 /dev/zero | tr '\0' x)"`, in short.
+        proxy.send_event(Event::Title("x".repeat(5_000_000)));
+        assert_eq!(lock(&proxy.mailbox.title).len(), MAX_TITLE);
+        // Cut at the end of a character, with spaces for control characters.
+        proxy.send_event(Event::Title(format!("{}ä\ttab", "x".repeat(MAX_TITLE - 1))));
+        assert_eq!(lock(&proxy.mailbox.title).len(), MAX_TITLE - 1);
+        proxy.send_event(Event::Title("a\tb\u{7}c".to_string()));
+        assert_eq!(*lock(&proxy.mailbox.title), "a b c");
+    }
+
+    #[test]
+    fn copies_for_the_primary_selection_leave_the_clipboard() {
+        let proxy = kept_proxy();
+        // `printf '\e]52;p;aGk=\a'`, as tmux sends it for the primary selection.
+        proxy.send_event(Event::ClipboardStore(ClipboardType::Selection, "hi".to_string()));
+        proxy.send_event(Event::ClipboardStore(ClipboardType::Clipboard, "ho".to_string()));
+        assert_eq!(run_work(), 2);
+        assert_eq!(SELECTED.take(), ["hi"]);
+        assert_eq!(COPIED.take(), ["ho"]);
     }
 
     /// What the terminal answers to `output`, with the default scheme, cells of 8 by 16
@@ -1099,6 +1195,10 @@ mod tests {
         let environment = shell_environment("");
         assert_eq!(environment["TERM"], "xterm-256color");
         assert_eq!(environment["COLORTERM"], "truecolor");
+        // No window of X11, nor of Alacritty, unless the user sets one.
+        assert_eq!(environment["WINDOWID"], "");
+        assert_eq!(environment["ALACRITTY_WINDOW_ID"], "");
+        assert_eq!(shell_environment("WINDOWID=42")["WINDOWID"], "42");
     }
 
     #[test]

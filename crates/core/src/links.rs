@@ -25,16 +25,32 @@ pub fn resolve(link: &str, editor: &str) -> Open {
     if is_full_path(path)
         && let Some(mut words) = split_command(editor)
     {
-        let replace = |word: &str| {
-            word.replace("PATH", path)
-                .replace("LINE", line.unwrap_or("1"))
-                .replace("COLUMN", column.unwrap_or("1"))
-        };
+        let replace = |word: &str| fill(word, path, line.unwrap_or("1"), column.unwrap_or("1"));
         let program = expand_home(&replace(&words.remove(0)));
         let arguments = words.iter().map(|word| replace(word)).collect();
         return Open::Editor { program, arguments };
     }
     Open::Url(path.to_string())
+}
+
+/// `word` with `PATH`, `LINE` and `COLUMN` in place, in one pass: what goes in is not looked
+/// at again, so that a path such as `GUIDELINES.md` keeps its name.
+fn fill(word: &str, path: &str, line: &str, column: &str) -> String {
+    let mut out = String::with_capacity(word.len() + path.len());
+    let mut rest = word;
+    while let Some(character) = rest.chars().next() {
+        let found = [("PATH", path), ("LINE", line), ("COLUMN", column)]
+            .into_iter()
+            .find_map(|(name, value)| rest.strip_prefix(name).map(|after| (value, after)));
+        if let Some((value, after)) = found {
+            out.push_str(value);
+            rest = after;
+        } else {
+            out.push(character);
+            rest = &rest[character.len_utf8()..];
+        }
+    }
+    out
 }
 
 /// Whether a path names a share on the network, which Windows would log in to with the
@@ -167,11 +183,23 @@ pub fn open(link: &str, editor: &str, schemes: &[String], desktop: &dyn Desktop)
                 .stderr(std::process::Stdio::null())
                 .spawn();
             match spawned {
-                // The child must not stay behind as a zombie.
-                Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
+                Ok(child) => reap(child),
                 Err(error) => eprintln!("kudari: could not start the editor: {error}"),
             }
         }
+    }
+}
+
+/// Waits for `child` on a thread of its own, so that it does not stay behind as a zombie.
+/// When the user has as many processes as allowed, as with a fork bomb in a terminal, no
+/// thread starts: the child then stays a zombie until Kudari ends, instead of ending Kudari
+/// with all its terminals.
+fn reap(mut child: std::process::Child) {
+    let waiting = std::thread::Builder::new()
+        .name("editor".to_string())
+        .spawn(move || child.wait());
+    if let Err(error) = waiting {
+        eprintln!("kudari: no thread to wait for the editor: {error}");
     }
 }
 
@@ -278,6 +306,56 @@ mod tests {
             Open::Editor {
                 program: "vim".into(),
                 arguments: ["+1", "/nonexistent/a.rs"].map(String::from).to_vec(),
+            }
+        );
+    }
+
+    /// Runs in a process of its own, as the test itself again, with no processes left to the
+    /// user: starting a thread fails there. Root has no such limit.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_full_limit_of_processes_ends_nothing() {
+        const INSIDE: &str = "KUDARI_TEST_NO_THREADS";
+        if std::env::var_os(INSIDE).is_some() {
+            let child = std::process::Command::new("true").spawn().unwrap();
+            let none = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            // SAFETY: a plain system call with a valid limit, in this process of the test alone.
+            unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &raw const none) };
+            reap(child);
+            return;
+        }
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "links::tests::a_full_limit_of_processes_ends_nothing",
+                "--test-threads=1",
+            ])
+            .env(INSIDE, "1")
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "{status}");
+    }
+
+    #[test]
+    fn placeholders_in_the_path_stay_as_they_are() {
+        assert_eq!(
+            resolve("/nonexistent/GUIDELINES.md:10", "kate --line LINE --column COLUMN PATH"),
+            Open::Editor {
+                program: "kate".into(),
+                arguments: ["--line", "10", "--column", "1", "/nonexistent/GUIDELINES.md"]
+                    .map(String::from)
+                    .to_vec(),
+            }
+        );
+        assert_eq!(
+            resolve("/nonexistent/COLUMNS.csv:3:4", "vim +LINE PATH"),
+            Open::Editor {
+                program: "vim".into(),
+                arguments: ["+3", "/nonexistent/COLUMNS.csv"].map(String::from).to_vec(),
             }
         );
     }

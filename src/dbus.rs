@@ -753,7 +753,12 @@ pub fn serve() -> zbus::Result<Option<Connection>> {
         Ok(zbus::fdo::RequestNameReply::PrimaryOwner | zbus::fdo::RequestNameReply::AlreadyOwner) => {
             let _ = CONNECTION.set(connection.clone());
             let watched = connection.clone();
-            std::thread::spawn(move || block_on(watch_disconnects(watched)));
+            let watching = std::thread::Builder::new()
+                .name("agents gone".to_string())
+                .spawn(move || block_on(watch_disconnects(watched)));
+            if let Err(error) = watching {
+                eprintln!("kudari: agents that go are not noticed: {error}");
+            }
             Ok(Some(connection))
         }
         Ok(_) | Err(zbus::Error::NameTaken) => Ok(None),
