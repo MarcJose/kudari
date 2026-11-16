@@ -418,9 +418,20 @@ ApplicationWindow {
         anchors.centerIn: parent
         modal: true
         focus: true
+        // The width of the title from its text: that of the header of the style, which elides
+        // it, follows the width of the dialog, which follows it, in a loop.
+        implicitWidth: Math.max(contentWidth + leftPadding + rightPadding, implicitFooterWidth,
+                                questionTitle.advanceWidth + leftPadding + rightPadding)
         standardButtons: Dialog.Yes | Dialog.Cancel
         onAccepted: app.answerQuestion(questionId, true)
         onRejected: app.answerQuestion(questionId, false)
+
+        TextMetrics {
+            id: questionTitle
+
+            text: question.title
+            font: question.header ? question.header.font : question.font
+        }
 
         Label {
             id: body
@@ -456,6 +467,8 @@ ApplicationWindow {
         anchors.centerIn: parent
         modal: true
         closePolicy: Popup.CloseOnEscape
+        implicitWidth: Math.max(contentWidth + leftPadding + rightPadding, implicitFooterWidth,
+                                agentTitle.advanceWidth + leftPadding + rightPadding)
         onRejected: {
             if (agent.length > 0) {
                 app.answerAgent(agent, false);
@@ -481,6 +494,13 @@ ApplicationWindow {
 
                 DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
             }
+        }
+
+        TextMetrics {
+            id: agentTitle
+
+            text: agentQuestion.title
+            font: agentQuestion.header ? agentQuestion.header.font : agentQuestion.font
         }
 
         Label {
