@@ -148,9 +148,11 @@ pub fn link_at<T>(term: &Term<T>, point: Point, files: bool, context: &Context) 
             cells: end - start + 1,
         });
     }
-    let line: String = (0..columns).map(|column| grid[point.line][Column(column)].c).collect();
-    let (start, _, text) = word_span(&line, point.column.0)?;
-    let (target, column, cells) = url_in(&text)
+    // An address can wrap onto the next lines, as the long ones for logging in often do.
+    let (first, line) = wrapped_text(term, point.line);
+    let row = (point.line.0 - first.0) as usize * columns;
+    let (start, _, text) = word_span(&line, row + point.column.0)?;
+    let (target, begin, cells) = url_in(&text)
         .map(|url| {
             let offset = text
                 .find(url.as_str())
@@ -163,11 +165,39 @@ pub fn link_at<T>(term: &Term<T>, point: Point, files: bool, context: &Context) 
             let (path, offset, cells) = file_in(&text, &directory)?;
             Some((path, start + offset, cells))
         })?;
-    Some(Link {
+    // The front end underlines the part on the line of the point.
+    let from = begin.max(row);
+    let to = (begin + cells).min(row + columns);
+    (from < to).then(|| Link {
         target,
-        start: Point::new(point.line, Column(column)),
-        cells,
+        start: Point::new(point.line, Column(from - row)),
+        cells: to - from,
     })
+}
+
+/// The most cells that the lines of one wrapped line can have for links, so that a long
+/// block of wrapped output costs little.
+const WRAPPED_CELLS: usize = 8192;
+
+/// The lines around `line` that wrap into one another, as the first of them and their
+/// text, one character for each cell.
+fn wrapped_text<T>(term: &Term<T>, line: Line) -> (Line, String) {
+    let grid = term.grid();
+    let columns = term.columns();
+    let reach = i32::try_from(WRAPPED_CELLS / columns.max(1)).unwrap_or(1).max(1);
+    let wraps = |line: Line| grid[line][Column(columns - 1)].flags.contains(Flags::WRAPLINE);
+    let mut first = line;
+    while first > grid.topmost_line() && line.0 - first.0 < reach && wraps(Line(first.0 - 1)) {
+        first = Line(first.0 - 1);
+    }
+    let mut last = line;
+    while last < grid.bottommost_line() && last.0 - line.0 < reach && wraps(last) {
+        last = Line(last.0 + 1);
+    }
+    let text = (first.0..=last.0)
+        .flat_map(|row| (0..columns).map(move |column| grid[Line(row)][Column(column)].c))
+        .collect();
+    (first, text)
 }
 
 /// Whether the selection covers a cell.
@@ -656,20 +686,33 @@ pub struct HintWord {
 #[must_use]
 pub fn hint_words<T>(term: &Term<T>) -> Vec<HintWord> {
     let offset = term.grid().display_offset() as i32;
+    let columns = term.columns().max(1);
+    let screen_lines = term.screen_lines() as i32;
     let mut words = Vec::new();
-    for screen_line in 0..term.screen_lines() as i32 {
-        let row = &term.grid()[Line(screen_line - offset)];
-        let text: String = (0..term.columns()).map(|column| row[Column(column)].c).collect();
-        let mut column = 0;
-        while let Some((start, end, word)) = next_word(&text, column) {
+    let mut screen_line = 0;
+    while screen_line < screen_lines {
+        // A word that wraps is one word, with one number where it starts.
+        let (first, text) = wrapped_text(term, Line(screen_line - offset));
+        let line_of = |index: usize| first.0 + (index / columns) as i32 + offset;
+        for (start, end, word) in words_in(&text) {
+            let (top, bottom) = (line_of(start), line_of(end - 1));
+            if bottom < 0 || top >= screen_lines {
+                continue;
+            }
+            // One that starts above the screen gets its number at the top.
+            let (line, column) = if top < 0 {
+                (0, 0)
+            } else {
+                (top, (start % columns) as i32)
+            };
             words.push(HintWord {
                 url: url_in(&word),
                 word,
-                line: screen_line,
-                column: start as i32,
+                line,
+                column,
             });
-            column = end;
         }
+        screen_line = line_of(text.chars().count().max(1) - 1) + 1;
     }
     words
 }
@@ -713,9 +756,29 @@ pub fn links_on_screen<T>(term: &Term<T>, directory: Option<&Path>) -> Vec<(Stri
     })
 }
 
-fn next_word(line: &str, from: usize) -> Option<(usize, usize, String)> {
-    let length = line.chars().count();
-    (from..length).find_map(|column| word_span(line, column))
+/// The words of `text` as `(start, end, word)`, counted in characters, in one pass.
+fn words_in(text: &str) -> Vec<(usize, usize, String)> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut start = 0;
+    let mut length = 0;
+    for (index, character) in text.chars().enumerate() {
+        length = index + 1;
+        if ends_word(character) {
+            if !word.is_empty() {
+                words.push((start, index, std::mem::take(&mut word)));
+            }
+        } else {
+            if word.is_empty() {
+                start = index;
+            }
+            word.push(character);
+        }
+    }
+    if !word.is_empty() {
+        words.push((start, length, word));
+    }
+    words
 }
 
 /// The links that get a number: the first nine, or the last nine when reversed.
@@ -738,17 +801,20 @@ pub fn pick_hint(links: &[(String, i32, i32)], index: usize, reverse: bool) -> O
     }
 }
 
+/// Whether a character ends a word that can be a link. Typographic quotes end it as the
+/// plain ones do: `„https://kde.org“`.
+fn ends_word(c: char) -> bool {
+    c.is_whitespace()
+        || matches!(
+            c,
+            '"' | '\'' | '<' | '>' | '`' | '„' | '“' | '”' | '‚' | '‘' | '’' | '«' | '»' | '‹' | '›'
+        )
+}
+
 /// The word around column `index` as `(start, end, text)`.
 fn word_span(line: &str, index: usize) -> Option<(usize, usize, String)> {
     let characters: Vec<char> = line.chars().collect();
-    // Typographic quotes end a word as the plain ones do: „https://kde.org“.
-    let is_end = |c: char| {
-        c.is_whitespace()
-            || matches!(
-                c,
-                '"' | '\'' | '<' | '>' | '`' | '„' | '“' | '”' | '‚' | '‘' | '’' | '«' | '»' | '‹' | '›'
-            )
-    };
+    let is_end = ends_word;
     if is_end(*characters.get(index)?) {
         return None;
     }
@@ -1263,6 +1329,52 @@ mod tests {
         );
         // A letter of two bytes in front of the address, in the same word.
         assert_eq!(at("ä=https://kde.org", 5), Some(("https://kde.org".into(), 2, 15)));
+    }
+
+    /// A device login of `gh` or `gcloud`, which wraps over three lines of 20 columns.
+    const DEVICE_LOGIN: &str = "https://example.org/login/device?code=ABCD-1234";
+
+    #[test]
+    fn addresses_that_wrap_open_whole() {
+        let term = term_of(20, &format!("go {DEVICE_LOGIN} now"));
+        let options = Options::default();
+        let context = context(&options, false, &nowhere);
+        let at = |line: i32, column: usize| {
+            link_at(&term, Point::new(Line(line), Column(column)), false, &context)
+                .map(|link| (link.target, link.start.line.0, link.start.column.0, link.cells))
+        };
+        // Each line underlines its own part of the address.
+        assert_eq!(at(0, 5), Some((DEVICE_LOGIN.into(), 0, 3, 17)));
+        assert_eq!(at(1, 2), Some((DEVICE_LOGIN.into(), 1, 0, 20)));
+        assert_eq!(at(2, 3), Some((DEVICE_LOGIN.into(), 2, 0, 10)));
+        assert_eq!(at(2, 12), None, "the word after it");
+        // The address has one number, where it starts.
+        assert_eq!(links_on_screen(&term, None), [(DEVICE_LOGIN.to_string(), 0, 3)]);
+    }
+
+    #[test]
+    fn an_address_that_starts_above_the_screen_has_its_number_at_the_top() {
+        // Three lines of the address, then four more: the first two scroll out of view.
+        let term = term_of(20, &format!("go {DEVICE_LOGIN}\r\na\r\nb\r\nc\r\nd"));
+        assert_eq!(links_on_screen(&term, None), [(DEVICE_LOGIN.to_string(), 0, 0)]);
+        let options = Options::default();
+        let context = context(&options, false, &nowhere);
+        let link = link_at(&term, Point::new(Line(0), Column(4)), false, &context).unwrap();
+        assert_eq!(link.target, DEVICE_LOGIN);
+    }
+
+    #[test]
+    fn words_are_found_in_one_pass() {
+        assert_eq!(
+            words_in("  a bc „d“"),
+            [
+                (2, 3, "a".to_string()),
+                (4, 6, "bc".to_string()),
+                (8, 9, "d".to_string())
+            ]
+        );
+        assert_eq!(words_in("x"), [(0, 1, "x".to_string())]);
+        assert!(words_in("   ").is_empty());
     }
 
     #[test]
