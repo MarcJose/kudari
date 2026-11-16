@@ -47,6 +47,8 @@ pub mod qobject {
         type QSizeF = cxx_qt_lib::QSizeF;
         include!("cxx-qt-lib/qvariant.h");
         type QVariant = cxx_qt_lib::QVariant;
+        include!("cxx-qt-lib/qlist.h");
+        type QList_QUrl = cxx_qt_lib::QList<cxx_qt_lib::QUrl>;
     }
 
     /// The queries this item answers; the other values of the Qt enum stay unnamed.
@@ -208,6 +210,11 @@ pub mod qobject {
         #[qinvokable]
         fn drop_text(self: Pin<&mut Self>, text: &QString, are_files: bool);
 
+        /// The paths of dropped `urls`, one on each line, for `drop_text`; see
+        /// `dropped_path`.
+        #[qinvokable]
+        fn local_paths(self: &Self, urls: &QList_QUrl) -> QString;
+
         /// `x,y,width` of the link at a position, in item coordinates, or an empty string.
         #[qinvokable]
         fn link_geometry(self: &Self, x: f64, y: f64, files: bool) -> QString;
@@ -360,6 +367,31 @@ pub fn paste_into(terminal: TerminalId, text: String) {
         return;
     }
     backend.write_user_input(prepare_paste(&text, bracketed).into_bytes());
+}
+
+/// The path of a dropped file as the shell takes it, from its local path as Qt gives it
+/// (`QUrl::toLocalFile`), or the address of anything else as it is. Windows gets its own
+/// separators, `C:\Users\…`. A name with a line break or another control character is left
+/// out: it would fall into two paths, and no shell takes it safely.
+fn dropped_path(local: Option<String>, address: String, windows: bool) -> Option<String> {
+    let path = match local {
+        Some(path) if windows => path.replace('/', "\\"),
+        Some(path) => path,
+        None => address,
+    };
+    (!path.is_empty() && !path.chars().any(char::is_control)).then_some(path)
+}
+
+/// The paths of dropped `urls`, one on each line; see [`dropped_path`].
+fn local_paths_of(urls: &cxx_qt_lib::QList<cxx_qt_lib::QUrl>, windows: bool) -> String {
+    let paths: Vec<String> = urls
+        .iter()
+        .filter_map(|url| {
+            let local = url.to_local_file().map(|path| path.to_string());
+            dropped_path(local, url.to_qstring().to_string(), windows)
+        })
+        .collect();
+    paths.join("\n")
 }
 
 /// What a drop on a terminal types: dropped text as pasted text, whose lines must not run
@@ -605,6 +637,11 @@ impl qobject::TerminalItem {
             backend.term.lock().scroll_display(Scroll::Delta(lines));
         }
         self.as_mut().refresh();
+    }
+
+    #[allow(clippy::unused_self, reason = "QML calls it on the item")]
+    fn local_paths(&self, urls: &cxx_qt_lib::QList<cxx_qt_lib::QUrl>) -> QString {
+        QString::from(&local_paths_of(urls, cfg!(windows)))
     }
 
     fn drop_text(self: Pin<&mut Self>, text: &QString, are_files: bool) {
@@ -1230,4 +1267,52 @@ impl Fonts {
 
 fn qcolor(rgb: Rgb) -> QColor {
     QColor::from_rgb(rgb.r.into(), rgb.g.into(), rgb.b.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use cxx_qt_lib::{QList, QString, QUrl};
+
+    use super::*;
+
+    fn urls(addresses: &[&str]) -> QList<QUrl> {
+        let mut list = QList::default();
+        for address in addresses {
+            list.append(QUrl::from(&QString::from(*address)));
+        }
+        list
+    }
+
+    #[test]
+    fn dropped_files_become_the_paths_of_the_platform() {
+        // From Dolphin, with a space in the name.
+        assert_eq!(
+            local_paths_of(&urls(&["file:///home/me/a%20b.txt", "file:///tmp/c"]), false),
+            "/home/me/a b.txt\n/tmp/c"
+        );
+        // A share keeps its server; an address stays as it is.
+        assert_eq!(
+            local_paths_of(&urls(&["file://server/share/a.txt"]), true),
+            "\\\\server\\share\\a.txt"
+        );
+        assert_eq!(local_paths_of(&urls(&["https://kde.org/"]), false), "https://kde.org/");
+    }
+
+    /// From the Explorer: Qt gives `C:/…` there, without the slash in front of it on Linux.
+    #[test]
+    #[cfg(windows)]
+    fn dropped_files_on_windows_get_a_drive() {
+        assert_eq!(
+            local_paths_of(&urls(&["file:///C:/Users/me/a.txt"]), true),
+            "C:\\Users\\me\\a.txt"
+        );
+    }
+
+    #[test]
+    fn a_name_with_a_line_break_is_left_out_and_not_split() {
+        assert_eq!(
+            local_paths_of(&urls(&["file:///tmp/one%0Atwo", "file:///tmp/three"]), false),
+            "/tmp/three"
+        );
+    }
 }

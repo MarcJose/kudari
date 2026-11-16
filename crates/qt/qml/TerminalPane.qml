@@ -276,12 +276,13 @@ Item {
             anchors.fill: parent
             onDropped: drop => {
                 if (drop.hasUrls) {
-                    const paths = drop.urls.map(url => decodeURIComponent(url.toString().replace(/^file:\/\//, "")));
+                    // Qt knows the paths of the platform: C:\ on Windows, any name on Linux.
+                    const paths = terminal.localPaths(drop.urls);
                     if (pane.config.DropUrlsAsText ?? true) {
-                        terminal.dropText(paths.join("\n"), true);
+                        terminal.dropText(paths, true);
                     } else {
                         const point = mapToItem(null, drop.x, drop.y);
-                        pane.controller.popupDropMenu(point.x, point.y, pane.terminalId, paths.join("\n"));
+                        pane.controller.popupDropMenu(point.x, point.y, pane.terminalId, paths);
                     }
                 } else if (drop.hasText) {
                     terminal.dropText(drop.text, false);
