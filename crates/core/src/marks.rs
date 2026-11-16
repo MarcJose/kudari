@@ -261,7 +261,7 @@ fn acceptable(path: PathBuf) -> Option<PathBuf> {
 
 /// The path of a `file://` address on this computer. A shell on another host, reached
 /// through ssh, reports a directory there, which is no place to open a terminal in.
-fn local_directory(url: &str) -> Option<PathBuf> {
+pub(crate) fn local_directory(url: &str) -> Option<PathBuf> {
     let rest = url.strip_prefix("file://")?;
     let (host, path) = rest.split_at(rest.find('/')?);
     let local =
