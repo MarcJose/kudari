@@ -98,6 +98,16 @@ ApplicationWindow {
             root.visible = true;
             root.requestActivate();
         }
+        // Sliding in from above, the window would pass over a screen above its own, where a
+        // scale of its own could even change the size of the terminals on the way.
+        const screens = Qt.application.screens;
+        const left = targetScreen.virtualX + windowX;
+        if (app.slidesIntoAnotherScreen(JSON.stringify(screens.map(screen => [screen.virtualX, screen.virtualY, screen.width, screen.height])),
+                                        screens.indexOf(targetScreen), left, left + windowWidth)) {
+            root.shown = visible ? 1 : 0;
+            root.visible = visible;
+            return;
+        }
         slide.to = visible ? 1 : 0;
         slide.start();
     }

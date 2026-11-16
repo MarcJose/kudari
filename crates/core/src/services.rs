@@ -109,9 +109,60 @@ pub fn work_area(screens: &dyn Screens, screen: i32) -> WorkArea {
     WorkArea { output, width, height }
 }
 
+/// A screen in the coordinates of the desktop: x, y, width and height.
+pub type ScreenRect = [i32; 4];
+
+/// Whether a window from `left` to `right` that slides in from the top edge of `target`
+/// would pass over another of `screens` on its way: one that lies above `target` and
+/// overlaps the window from side to side. Screens with another scale may not meet exactly
+/// in the coordinates of Qt, so a gap of a few pixels still counts as touching.
+#[must_use]
+pub fn slides_into_another_screen(target: ScreenRect, left: i32, right: i32, screens: &[ScreenRect]) -> bool {
+    const TOUCHING: i32 = 4;
+    let [_, top, _, _] = target;
+    screens
+        .iter()
+        .filter(|screen| **screen != target)
+        .any(|&[x, y, width, height]| {
+            let bottom = y + height;
+            y < top && bottom >= top - TOUCHING && x < right && x + width > left
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_screen_right_above_the_window_is_in_its_way() {
+        let laptop = [0, 1080, 1920, 1080];
+        let monitor = [0, 0, 2560, 1080];
+        // The monitor above the laptop, where the window is.
+        assert!(slides_into_another_screen(laptop, 0, 1700, &[monitor, laptop]));
+        // Side by side, or above only where the window is not.
+        assert!(!slides_into_another_screen(
+            laptop,
+            0,
+            1700,
+            &[[1920, 0, 1920, 1080], laptop]
+        ));
+        assert!(!slides_into_another_screen(
+            laptop,
+            0,
+            900,
+            &[[1000, 0, 1920, 1080], laptop]
+        ));
+        // A scaled screen that meets the target a pixel short.
+        assert!(slides_into_another_screen(
+            laptop,
+            0,
+            1700,
+            &[[0, 0, 1707, 1078], laptop]
+        ));
+        // The window on the upper screen: the lower one is not in the way, nor itself alone.
+        assert!(!slides_into_another_screen(monitor, 0, 1700, &[monitor, laptop]));
+        assert!(!slides_into_another_screen(laptop, 0, 1700, &[laptop]));
+    }
 
     struct Desk {
         outputs: Vec<String>,
