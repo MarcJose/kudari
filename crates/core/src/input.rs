@@ -206,25 +206,59 @@ fn keypad_sequence(mode: TermMode, key: Key, modifiers: Modifiers) -> Option<&'s
     })
 }
 
+/// The code of a key of the keypad in the kitty protocol, such as 57414 for its Enter.
+fn kitty_keypad(key: Key) -> Option<u32> {
+    Some(match key {
+        Key::Enter => 57414,
+        Key::Character(digit @ '0'..='9') => 57399 + (u32::from(digit) - u32::from('0')),
+        Key::Character('.' | ',') => 57409,
+        Key::Character('/') => 57410,
+        Key::Character('*') => 57411,
+        Key::Character('-') => 57412,
+        Key::Character('+') => 57413,
+        Key::Character('=') => 57415,
+        _ => return None,
+    })
+}
+
 /// Kitty keyboard protocol for key presses. Programs that enabled it can tell keys apart
 /// that legacy encodings mix up, such as Ctrl+I and Tab.
-fn kitty_sequence(mode: TermMode, key: Key, modifiers: Modifiers) -> Option<String> {
+fn kitty_sequence(mode: TermMode, key: Key, modifiers: Modifiers, text: &str) -> Option<String> {
     if !mode.intersects(TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALL_KEYS_AS_ESC) {
         return None;
     }
     let report_all = mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC);
-    let parameter = modifiers.parameter();
+    let mut parameter = modifiers.parameter();
+    // Qt tells nothing of Caps Lock; a capital letter without Shift shows it, and the
+    // program, which gets the code of the small letter, needs it to type the capital.
+    let mut letters = text.chars();
+    if report_all
+        && !modifiers.contains(Modifiers::SHIFT)
+        && let (Some(letter), None) = (letters.next(), letters.next())
+        && letter.is_uppercase()
+    {
+        parameter += 64;
+    }
+    let keypad = (report_all && modifiers.contains(Modifiers::KEYPAD))
+        .then(|| kitty_keypad(key))
+        .flatten();
     let code = match key {
+        _ if keypad.is_some() => keypad?,
         Key::Escape => 27,
         Key::Return | Key::Enter if report_all || parameter > 1 => 13,
         Key::Tab | Key::Backtab if report_all || parameter > 1 => 9,
         Key::Backspace if report_all || parameter > 1 => 127,
-        // A text key: with Ctrl or Alt, or always when all keys are reported.
-        Key::Character(character) if character == ' ' || character.is_ascii_graphic() => {
+        // A text key, also of letters such as ä or ж: with Ctrl or Alt, or always when all
+        // keys are reported. The code is the small letter.
+        Key::Character(character) if !character.is_control() => {
             if !report_all && !modifiers.intersects(Modifiers::CONTROL | Modifiers::ALT) {
                 return None;
             }
-            u32::from(character.to_ascii_lowercase())
+            let mut small = character.to_lowercase();
+            match (small.next(), small.next()) {
+                (Some(small), None) => u32::from(small),
+                _ => u32::from(character),
+            }
         }
         _ => return None,
     };
@@ -235,17 +269,44 @@ fn kitty_sequence(mode: TermMode, key: Key, modifiers: Modifiers) -> Option<Stri
     })
 }
 
+/// Whether the legacy sequence of a key holds its modifiers in a parameter, as `CSI 1;3A`
+/// does for Alt+Up.
+fn carries_modifiers(key: Key) -> bool {
+    matches!(
+        key,
+        Key::Insert
+            | Key::Delete
+            | Key::Home
+            | Key::End
+            | Key::Left
+            | Key::Up
+            | Key::Right
+            | Key::Down
+            | Key::PageUp
+            | Key::PageDown
+            | Key::Function(_)
+    )
+}
+
 /// What the program receives for a key that no key binding file took: the kitty protocol
 /// if the program asked for it, the application keypad, the sequence of a special key, or
-/// the text of the key. Alt sends Escape first, as in xterm's default.
+/// the text of the key. Alt sends Escape first, as in xterm's default, unless the sequence
+/// holds the modifiers itself: Alt+Esc is `ESC ESC`, and Alt+Shift+Tab `ESC CSI Z`.
 #[must_use]
 pub fn key_bytes(mode: TermMode, key: Key, modifiers: Modifiers, text: &str) -> Option<Vec<u8>> {
-    let sequence = kitty_sequence(mode, key, modifiers)
-        .or_else(|| keypad_sequence(mode, key, modifiers).map(str::to_string))
-        .or_else(|| key_sequence(key, modifiers, mode.contains(TermMode::APP_CURSOR)))
-        .or_else(|| (!text.is_empty()).then(|| text.to_string()))?;
+    let (sequence, carries_alt) = if let Some(sequence) = kitty_sequence(mode, key, modifiers, text) {
+        (sequence, true)
+    } else if let Some(sequence) = keypad_sequence(mode, key, modifiers) {
+        (sequence.to_string(), false)
+    } else if let Some(sequence) = key_sequence(key, modifiers, mode.contains(TermMode::APP_CURSOR)) {
+        (sequence, carries_modifiers(key))
+    } else if !text.is_empty() {
+        (text.to_string(), false)
+    } else {
+        return None;
+    };
     let mut bytes = sequence.into_bytes();
-    if modifiers.contains(Modifiers::ALT) && bytes.first() != Some(&0x1b) {
+    if modifiers.contains(Modifiers::ALT) && !carries_alt {
         bytes.insert(0, 0x1b);
     }
     Some(bytes)
@@ -483,32 +544,76 @@ mod tests {
 
     #[test]
     fn kitty_keys_need_the_protocol() {
-        assert_eq!(kitty_sequence(TermMode::empty(), Key::Escape, NONE), None);
+        assert_eq!(kitty_sequence(TermMode::empty(), Key::Escape, NONE, ""), None);
         let mode = TermMode::DISAMBIGUATE_ESC_CODES;
-        assert_eq!(kitty_sequence(mode, Key::Escape, NONE).as_deref(), Some("\x1b[27u"));
+        assert_eq!(kitty_sequence(mode, Key::Escape, NONE, "").as_deref(), Some("\x1b[27u"));
         assert_eq!(
-            kitty_sequence(mode, Key::Character('I'), CONTROL).as_deref(),
+            kitty_sequence(mode, Key::Character('I'), CONTROL, "").as_deref(),
             Some("\x1b[105;5u")
         );
-        assert_eq!(kitty_sequence(mode, Key::Character('A'), NONE), None);
-        assert_eq!(kitty_sequence(mode, Key::Return, NONE), None);
-        assert_eq!(kitty_sequence(mode, Key::Return, SHIFT).as_deref(), Some("\x1b[13;2u"));
-        assert_eq!(kitty_sequence(mode, Key::Up, CONTROL), None);
+        assert_eq!(kitty_sequence(mode, Key::Character('A'), NONE, ""), None);
+        assert_eq!(kitty_sequence(mode, Key::Return, NONE, ""), None);
+        assert_eq!(
+            kitty_sequence(mode, Key::Return, SHIFT, "").as_deref(),
+            Some("\x1b[13;2u")
+        );
+        assert_eq!(kitty_sequence(mode, Key::Up, CONTROL, ""), None);
     }
 
     #[test]
     fn kitty_can_report_every_key() {
         let mode = TermMode::REPORT_ALL_KEYS_AS_ESC;
         assert_eq!(
-            kitty_sequence(mode, Key::Character('A'), NONE).as_deref(),
+            kitty_sequence(mode, Key::Character('A'), NONE, "").as_deref(),
             Some("\x1b[97u")
         );
-        assert_eq!(kitty_sequence(mode, Key::Return, NONE).as_deref(), Some("\x1b[13u"));
-        assert_eq!(kitty_sequence(mode, Key::Tab, NONE).as_deref(), Some("\x1b[9u"));
-        assert_eq!(kitty_sequence(mode, Key::Backspace, NONE).as_deref(), Some("\x1b[127u"));
+        assert_eq!(kitty_sequence(mode, Key::Return, NONE, "").as_deref(), Some("\x1b[13u"));
+        assert_eq!(kitty_sequence(mode, Key::Tab, NONE, "").as_deref(), Some("\x1b[9u"));
         assert_eq!(
-            kitty_sequence(mode, Key::Character(' '), NONE).as_deref(),
+            kitty_sequence(mode, Key::Backspace, NONE, "").as_deref(),
+            Some("\x1b[127u")
+        );
+        assert_eq!(
+            kitty_sequence(mode, Key::Character(' '), NONE, "").as_deref(),
             Some("\x1b[32u")
+        );
+    }
+
+    #[test]
+    fn kitty_codes_know_caps_lock_letters_beyond_ascii_and_the_keypad() {
+        let all = TermMode::REPORT_ALL_KEYS_AS_ESC;
+        // Caps Lock: the code of the small letter, and the bit that makes it a capital.
+        assert_eq!(
+            kitty_sequence(all, Key::Character('A'), NONE, "A").as_deref(),
+            Some("\x1b[97;65u")
+        );
+        assert_eq!(
+            kitty_sequence(all, Key::Character('A'), SHIFT, "A").as_deref(),
+            Some("\x1b[97;2u")
+        );
+        assert_eq!(
+            kitty_sequence(all, Key::Character('A'), NONE, "a").as_deref(),
+            Some("\x1b[97u")
+        );
+        // Letters beyond ASCII, as Ctrl+ä on a German keyboard.
+        let disambiguate = TermMode::DISAMBIGUATE_ESC_CODES;
+        assert_eq!(
+            kitty_sequence(disambiguate, Key::Character('Ä'), CONTROL, "ä").as_deref(),
+            Some("\x1b[228;5u")
+        );
+        assert_eq!(kitty_sequence(disambiguate, Key::Character('Ä'), NONE, "ä"), None);
+        // The keypad has codes of its own.
+        assert_eq!(
+            kitty_sequence(all, Key::Enter, KEYPAD, "\r").as_deref(),
+            Some("\x1b[57414u")
+        );
+        assert_eq!(
+            kitty_sequence(all, Key::Character('5'), KEYPAD, "5").as_deref(),
+            Some("\x1b[57404u")
+        );
+        assert_eq!(
+            kitty_sequence(all, Key::Return, NONE, "\r").as_deref(),
+            Some("\x1b[13u")
         );
     }
 
@@ -520,9 +625,17 @@ mod tests {
         assert_eq!(key_bytes(plain, Key::Character('A'), SHIFT, "A").unwrap(), b"A");
         assert_eq!(key_bytes(plain, Key::Other, NONE, "ä").unwrap(), "ä".as_bytes());
         assert_eq!(key_bytes(plain, Key::Other, NONE, ""), None);
-        // Alt sends Escape first, unless the sequence starts with it already.
+        // Alt sends Escape first, unless the sequence holds the modifiers itself.
         assert_eq!(key_bytes(plain, Key::Character('B'), ALT, "b").unwrap(), b"\x1bb");
         assert_eq!(key_bytes(plain, Key::Up, ALT, "").unwrap(), b"\x1b[1;3A");
+        assert_eq!(key_bytes(plain, Key::Function(1), ALT, "").unwrap(), b"\x1b[1;3P");
+        // Also before sequences that start with Escape themselves, as `emacs` reads M-ESC.
+        assert_eq!(key_bytes(plain, Key::Escape, ALT, "\x1b").unwrap(), b"\x1b\x1b");
+        assert_eq!(key_bytes(plain, Key::Backtab, ALT | SHIFT, "").unwrap(), b"\x1b\x1b[Z");
+        assert_eq!(
+            key_bytes(plain, Key::Character('['), ALT | CONTROL, "\x1b").unwrap(),
+            b"\x1b\x1b"
+        );
         let keypad = key_bytes(TermMode::APP_KEYPAD, Key::Character('5'), KEYPAD, "5");
         assert_eq!(keypad.unwrap(), b"\x1bOu");
         let kitty = key_bytes(TermMode::DISAMBIGUATE_ESC_CODES, Key::Escape, NONE, "\x1b");

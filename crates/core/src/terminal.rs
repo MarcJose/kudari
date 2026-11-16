@@ -178,13 +178,19 @@ fn text_margin() -> (f64, f64) {
 pub fn text_origin(width: f64, height: f64, columns: f64, lines: f64) -> (f64, f64) {
     let (x, y) = text_margin();
     if options().is_some_and(|options| options.center) {
-        (
-            (width - columns).max(2.0 * x) / 2.0,
-            (height - lines).max(2.0 * y) / 2.0,
-        )
+        centered(width, height, columns, lines, (x, y))
     } else {
         (x, y)
     }
+}
+
+/// The corner of a grid centered in an item, at least `margin` from its edges, on whole
+/// pixels: the backgrounds of the cells and their glyphs round to the same ones then.
+fn centered(width: f64, height: f64, columns: f64, lines: f64, margin: (f64, f64)) -> (f64, f64) {
+    (
+        ((width - columns).max(2.0 * margin.0) / 2.0).floor(),
+        ((height - lines).max(2.0 * margin.1) / 2.0).floor(),
+    )
 }
 
 /// Columns and lines of a terminal pane of the given pixel size. The shell has to
@@ -1092,6 +1098,23 @@ mod tests {
         let environment = shell_environment("");
         assert_eq!(environment["TERM"], "xterm-256color");
         assert_eq!(environment["COLORTERM"], "truecolor");
+    }
+
+    #[test]
+    fn a_centered_grid_starts_on_whole_pixels() {
+        // One pixel left over on each axis.
+        let (x, y) = centered(101.0, 61.0, 80.0, 40.0, (4.0, 1.0));
+        assert_eq!((x, y), (10.0, 10.0));
+        let geometry = crate::render::Geometry {
+            origin_x: x,
+            origin_y: y,
+            cell_width: 8.0,
+            cell_height: 16.0,
+            ascent: 12.0,
+        };
+        assert_eq!(geometry.cell_rect(3, 1, 1.0).x, f64::from(geometry.baseline(3, 1).0));
+        // With no room, the margins stay.
+        assert_eq!(centered(50.0, 20.0, 80.0, 40.0, (4.0, 1.0)), (4.0, 1.0));
     }
 
     #[test]

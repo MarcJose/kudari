@@ -72,6 +72,10 @@ pub struct FontStyle {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Paint {
     Fill(Rect, Rgb),
+    /// A fill that lets through what is under it, from 0 for nothing to 255 for opaque: the
+    /// shades of ░▒▓ and a fading cursor, over the cell and, in a translucent terminal, the
+    /// desktop.
+    Shade(Rect, Rgb, u8),
     /// Text starting at a point of its baseline.
     Text {
         x: i32,
@@ -127,12 +131,20 @@ fn is_emoji(character: char) -> bool {
     matches!(u32::from(character), 0x2600..=0x27bf | 0x1f000..=0x1faff)
 }
 
-fn font_style(flags: Flags, character: char) -> FontStyle {
+/// The font of a character. Emoji take the emoji font where they show as pictures: wide ones,
+/// and narrow ones with the variation selector for emoji. Narrow ones such as ✔ or ❤ are text
+/// by default, and a picture would reach into the next cell.
+fn font_style(flags: Flags, character: char, picture: bool) -> FontStyle {
     FontStyle {
         bold: flags.contains(Flags::BOLD),
         italic: flags.contains(Flags::ITALIC),
-        emoji: is_emoji(character),
+        emoji: picture && is_emoji(character),
     }
+}
+
+/// Whether a cell shows its character as a picture; see [`font_style`].
+fn is_picture(flags: Flags, zero_width: Option<&[char]>) -> bool {
+    flags.contains(Flags::WIDE_CHAR) || zero_width.is_some_and(|zero_width| zero_width.contains(&'\u{fe0f}'))
 }
 
 /// Selected text in the theme's colors for selections, as everywhere else on the desktop;
@@ -145,10 +157,22 @@ fn selection_colors(foreground: Rgb, back: Rgb, scheme: &ColorScheme, swapped: b
     }
 }
 
-/// The rectangles of plain, double, curly, dotted or dashed underlines under `cells` cells.
+/// The rectangles of plain, double, curly, dotted or dashed underlines under `cells` cells,
+/// a pixel below the baseline, or higher where the font leaves less room below it: the lines
+/// stay in their cell, which the next line would paint over.
 fn underline_rects(geometry: &Geometry, column: i32, line: i32, cells: f64, flags: Flags) -> Vec<Rect> {
     let x = geometry.origin_x + f64::from(column) * geometry.cell_width;
-    let y = geometry.origin_y + f64::from(line) * geometry.cell_height + geometry.ascent + 1.0;
+    let top = geometry.origin_y + f64::from(line) * geometry.cell_height;
+    let height = geometry.cell_height;
+    // How many pixels the lines of each kind take below their first.
+    let below = if flags.contains(Flags::DOUBLE_UNDERLINE) {
+        2.0
+    } else if flags.contains(Flags::UNDERCURL) {
+        1.0
+    } else {
+        0.0
+    };
+    let y = top + (geometry.ascent + 1.0).min(height - 1.0 - below).max(0.0);
     let width = cells * geometry.cell_width;
     let steps = width as i32;
     let line_at = |y: f64| Rect {
@@ -165,7 +189,11 @@ fn underline_rects(geometry: &Geometry, column: i32, line: i32, cells: f64, flag
     };
     let dots = |period: i32, on: i32| (0..steps).filter(move |step| step % period < on);
     if flags.contains(Flags::DOUBLE_UNDERLINE) {
-        vec![line_at(y), line_at(y + 2.0)]
+        if height < 3.0 {
+            vec![line_at(y)]
+        } else {
+            vec![line_at(y), line_at(y + 2.0)]
+        }
     } else if flags.contains(Flags::UNDERCURL) {
         (0..steps).map(|step| pixel(step, f64::from((step / 2) % 2))).collect()
     } else if flags.contains(Flags::DOTTED_UNDERLINE) {
@@ -247,7 +275,7 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             foreground = brighten(cell.fg, foreground, palette, scheme);
         }
         if flags.contains(Flags::DIM) {
-            foreground = faint(cell.fg, foreground, scheme);
+            foreground = faint(cell.fg, foreground, palette, scheme);
         }
         if flags.contains(Flags::INVERSE) {
             std::mem::swap(&mut foreground, &mut back);
@@ -300,7 +328,11 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
                     width: piece.width,
                     height: piece.height,
                 };
-                fill(rect, blend(foreground, back, piece.alpha), &mut paints);
+                if piece.alpha >= 255 {
+                    fill(rect, foreground, &mut paints);
+                } else {
+                    paints.push(Paint::Shade(rect, foreground, piece.alpha as u8));
+                }
             }
         } else if cell.c != ' ' && cell.c != '\0' {
             // Every glyph goes to its own cell: the font's advance is fractional, while the
@@ -316,46 +348,66 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
                 y,
                 text,
                 color: foreground,
-                font: font_style(flags, cell.c),
+                font: font_style(flags, cell.c, is_picture(flags, cell.zerowidth())),
             });
         }
         if point == cursor.point {
-            cursor_glyph = Some((cell.c, flags));
+            // The whole cell, with its accents, which the block cursor covers; nothing of a
+            // hidden one, as a program shows a password with SGR 8.
+            let mut text = String::from(cell.c);
+            if let Some(zero_width) = cell.zerowidth() {
+                text.extend(zero_width.iter().take(MAX_ZERO_WIDTH));
+            }
+            if flags.contains(Flags::HIDDEN) {
+                text.clear();
+            }
+            cursor_glyph = Some((text, cell.c, flags, is_picture(flags, cell.zerowidth()), foreground));
         }
     }
     paints.append(&mut glyphs);
 
-    if cursor.shape != CursorShape::Hidden && !scene.cursor_hidden {
-        let line = cursor.point.line.0 + offset;
+    // While the view is scrolled back, the cursor can be below the last line: it is not on
+    // screen then, and the space below the grid shows nothing of it.
+    let cursor_line = cursor.point.line.0 + offset;
+    // A cursor that has faded out entirely leaves the cell as it is.
+    let fade = (scene.cursor_fade.clamp(0.0, 1.0) * 255.0) as u8;
+    if cursor.shape != CursorShape::Hidden && !scene.cursor_hidden && fade > 0 && (0..grid_lines).contains(&cursor_line)
+    {
+        let line = cursor_line;
         let column = cursor.point.column.0 as i32;
         let shape = if scene.focused {
             cursor.shape
         } else {
             CursorShape::HollowBlock
         };
-        let fade = (scene.cursor_fade.clamp(0.0, 1.0) * 255.0) as u32;
-        let color = blend(
-            options.cursor_color.unwrap_or(scheme.foreground),
-            scheme.background,
-            fade,
-        );
+        let color = options.cursor_color.unwrap_or(scheme.foreground);
         let cells = match cursor_glyph {
-            Some((_, flags)) if flags.contains(Flags::WIDE_CHAR) => 2.0,
+            Some((_, _, flags, ..)) if flags.contains(Flags::WIDE_CHAR) => 2.0,
             _ => 1.0,
         };
         for rect in cursor_rects(geometry, column, line, cells, shape) {
-            fill(rect, color, &mut paints);
+            if fade == 255 {
+                fill(rect, color, &mut paints);
+            } else {
+                paints.push(Paint::Shade(rect, color, fade));
+            }
         }
         if shape == CursorShape::Block
-            && let Some((glyph, flags)) = cursor_glyph.filter(|(glyph, _)| !glyph.is_whitespace())
+            && let Some((text, glyph, flags, picture, foreground)) =
+                cursor_glyph.filter(|(text, glyph, ..)| !text.is_empty() && !glyph.is_whitespace())
         {
             let (x, y) = geometry.baseline(column, line);
             paints.push(Paint::Text {
                 x,
                 y,
-                text: glyph.to_string(),
-                color: options.cursor_text_color.unwrap_or(scheme.background),
-                font: font_style(flags, glyph),
+                text,
+                // From the look of the cursor to the look of the cell as the cursor fades.
+                color: blend(
+                    options.cursor_text_color.unwrap_or(scheme.background),
+                    foreground,
+                    u32::from(fade),
+                ),
+                font: font_style(flags, glyph, picture),
             });
         }
     }
@@ -448,7 +500,7 @@ mod tests {
             .iter()
             .filter_map(|paint| match paint {
                 Paint::Text { text, color, font, .. } => Some((text.as_str(), *color, *font)),
-                Paint::Fill(..) => None,
+                Paint::Fill(..) | Paint::Shade(..) => None,
             })
             .collect()
     }
@@ -458,9 +510,140 @@ mod tests {
             .iter()
             .filter_map(|paint| match paint {
                 Paint::Fill(rect, color) => Some((*rect, *color)),
-                Paint::Text { .. } => None,
+                Paint::Text { .. } | Paint::Shade(..) => None,
             })
             .collect()
+    }
+
+    /// The text that the block cursor draws again over its cell.
+    fn cursor_text(output: &str, options: &Options) -> Option<String> {
+        let scheme = crate::colors::active();
+        let color = options.cursor_text_color.unwrap_or(scheme.background);
+        let paints = frame(&term_with(output), options, &scene(&scheme, &[], &[]));
+        paints.iter().rev().find_map(|paint| match paint {
+            Paint::Text { text, color: drawn, .. } if *drawn == color => Some(text.clone()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn shades_let_through_what_is_under_them() {
+        let scheme = crate::colors::active();
+        let options = Options {
+            own_line_characters: true,
+            ..Options::default()
+        };
+        // Without the cursor, which has the color of the text.
+        let paints = frame(
+            &term_with("\x1b[?25l\u{2591}\u{2588}"),
+            &options,
+            &scene(&scheme, &[], &[]),
+        );
+        let shades: Vec<(Rgb, u8)> = paints
+            .iter()
+            .filter_map(|paint| match paint {
+                Paint::Shade(_, color, alpha) => Some((*color, *alpha)),
+                _ => None,
+            })
+            .collect();
+        assert!(!shades.is_empty());
+        assert!(
+            shades
+                .iter()
+                .all(|(color, alpha)| *color == scheme.foreground && *alpha < 255),
+            "{shades:?}"
+        );
+        // No opaque fill in a color mixed with the background of the scheme: the full block
+        // is the only fill, in the color of the text.
+        assert!(fills(&paints).iter().all(|(_, color)| *color == scheme.foreground));
+    }
+
+    #[test]
+    fn a_cursor_below_the_screen_is_not_drawn() {
+        let scheme = crate::colors::active();
+        let mut term = term_with("1\r\n2\r\n3\r\n4\r\n5");
+        let below_grid = |term: &Term<VoidListener>| {
+            fills(&frame(term, &Options::default(), &scene(&scheme, &[], &[])))
+                .iter()
+                .any(|(rect, _)| rect.y + rect.height > GEOMETRY.origin_y + 3.0 * GEOMETRY.cell_height)
+        };
+        assert!(!below_grid(&term));
+        // One line back: the cursor in the last line is below the screen now.
+        term.scroll_display(alacritty_terminal::grid::Scroll::Delta(1));
+        assert!(!below_grid(&term));
+        let cursor = scheme.foreground;
+        let drawn = fills(&frame(&term, &Options::default(), &scene(&scheme, &[], &[])));
+        assert!(drawn.iter().all(|(_, color)| *color != cursor), "{drawn:?}");
+    }
+
+    #[test]
+    fn hidden_text_stays_hidden_under_the_block_cursor() {
+        // A PIN behind SGR 8, the cursor on its first digit; the text of the cursor in a color
+        // of its own, so that it shows.
+        let options = Options {
+            cursor_text_color: Some(Rgb { r: 1, g: 2, b: 3 }),
+            ..Options::default()
+        };
+        assert_eq!(cursor_text("\x1b[8m1234\x1b[0m\x1b[4D", &options), None);
+        assert_eq!(cursor_text("1234\x1b[4D", &options).as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn the_block_cursor_draws_the_accents_of_its_cell() {
+        // An e with a combining acute accent, the cursor on it.
+        assert_eq!(
+            cursor_text("e\u{301}x\x08\x08", &Options::default()).as_deref(),
+            Some("e\u{301}")
+        );
+    }
+
+    #[test]
+    fn underlines_stay_in_their_cell_with_little_room_below_the_baseline() {
+        // A small font: the baseline 3 pixels above the bottom of the cell.
+        let tight = Geometry {
+            cell_height: GEOMETRY.ascent + 3.0,
+            ..GEOMETRY
+        };
+        let bottom = tight.origin_y + tight.cell_height;
+        for flags in [
+            Flags::UNDERLINE,
+            Flags::DOUBLE_UNDERLINE,
+            Flags::UNDERCURL,
+            Flags::DOTTED_UNDERLINE,
+            Flags::DASHED_UNDERLINE,
+        ] {
+            let rects = underline_rects(&tight, 0, 0, 1.0, flags);
+            assert!(!rects.is_empty(), "{flags:?}");
+            assert!(
+                rects.iter().all(|rect| rect.y + rect.height <= bottom),
+                "{flags:?}: {rects:?}"
+            );
+        }
+        // With room enough, the lines stay a pixel below the baseline.
+        let plain = underline_rects(&GEOMETRY, 0, 0, 1.0, Flags::DOUBLE_UNDERLINE);
+        assert_eq!(plain[0].y, GEOMETRY.origin_y + GEOMETRY.ascent + 1.0);
+    }
+
+    #[test]
+    fn only_emoji_that_show_as_pictures_take_the_emoji_font() {
+        let scheme = crate::colors::active();
+        // A check mark and a heart are text; the heart with the selector for emoji and the
+        // wide face are pictures.
+        let term = term_with("\u{2714}\u{2764} \u{2764}\u{fe0f}\u{1f600}");
+        let paints = frame(&term, &Options::default(), &scene(&scheme, &[], &[]));
+        let emoji: Vec<(&str, bool)> = texts(&paints)
+            .iter()
+            .map(|(text, _, font)| (*text, font.emoji))
+            .collect();
+        assert_eq!(
+            emoji,
+            [
+                ("\u{2714}", false),
+                ("\u{2764}", false),
+                ("\u{2764}\u{fe0f}", true),
+                ("\u{1f600}", true)
+            ]
+        );
     }
 
     #[test]
@@ -626,6 +809,7 @@ mod tests {
             Some(faint(
                 alacritty_terminal::vte::ansi::Color::Named(alacritty_terminal::vte::ansi::NamedColor::Foreground),
                 scheme.foreground,
+                &alacritty_terminal::term::color::Colors::default(),
                 &scheme
             ))
         );
@@ -645,7 +829,7 @@ mod tests {
         let kinds: Vec<&str> = paints
             .iter()
             .map(|paint| match paint {
-                Paint::Fill(..) => "fill",
+                Paint::Fill(..) | Paint::Shade(..) => "fill",
                 Paint::Text { text, .. } => text.as_str(),
             })
             .collect();
@@ -750,9 +934,26 @@ mod tests {
         let mut blinking = scene(&scheme, &[], &[]);
         blinking.cursor_hidden = true;
         assert!(fills(&frame(&term, &options, &blinking)).is_empty());
+        // A fading cursor lets through the cell and what is under the terminal, instead of
+        // mixing with the background of the scheme.
         let mut fading = scene(&scheme, &[], &[]);
+        fading.cursor_fade = 0.5;
+        let paints = frame(&term, &options, &fading);
+        assert!(paints.contains(&Paint::Shade(GEOMETRY.cell_rect(1, 0, 1.0), scheme.foreground, 127)));
+        assert!(
+            !fills(&paints)
+                .iter()
+                .any(|(rect, _)| *rect == GEOMETRY.cell_rect(1, 0, 1.0))
+        );
+        // Its character goes from the color of the cursor text to its own, and stays visible.
+        let half = blend(Rgb { r: 9, g: 9, b: 9 }, scheme.foreground, 127);
+        assert_eq!(texts(&paints).last().map(|text| (text.0, text.1)), Some(("b", half)));
+        // Faded out, the cursor leaves the cell as it is.
         fading.cursor_fade = 0.0;
-        assert!(fills(&frame(&term, &options, &fading)).contains(&(GEOMETRY.cell_rect(1, 0, 1.0), scheme.background)));
+        let paints = frame(&term, &options, &fading);
+        assert!(!paints.iter().any(|paint| matches!(paint, Paint::Shade(..))));
+        assert_eq!(texts(&paints).iter().filter(|text| text.0 == "b").count(), 1);
+        assert_eq!(texts(&paints).last().map(|text| text.1), Some(scheme.foreground));
     }
 
     #[test]
