@@ -63,9 +63,7 @@ fn main() {
             .map(str::to_string)
             .collect(),
     };
-    if let Some(catalogue) = kudari_core::gettext::choose(&languages, CATALOGUES) {
-        kudari_core::gettext::install(catalogue);
-    }
+    kudari_core::gettext::install_for(&languages, CATALOGUES);
     kudari_qt::frontend::install(&frontend::Windows);
     if !win::rk_win_claim_instance(&cxx_qt_lib::QString::from(&instance_name())) {
         return;

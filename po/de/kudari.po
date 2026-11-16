@@ -1408,6 +1408,10 @@ msgctxt "@info"
 msgid "Another program already uses this shortcut."
 msgstr "Ein anderes Programm verwendet dieses Tastenkürzel bereits."
 
+msgctxt "@info"
+msgid "This key cannot be used as a global shortcut."
+msgstr "Diese Taste kann nicht als globales Tastenkürzel dienen."
+
 msgctxt "@action:inmenu"
 msgid "About Kudari"
 msgstr "Über Kudari"

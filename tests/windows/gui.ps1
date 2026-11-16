@@ -45,7 +45,8 @@ function Test-Check([string] $name, [bool] $passed) {
 $work = (New-Item -ItemType Directory -Force (Join-Path ([IO.Path]::GetTempPath()) "kudari-gui-$PID")).FullName
 $ini = Join-Path $work 'Kudari\kudari.ini'
 New-Item -ItemType Directory -Force (Split-Path $ini) | Out-Null
-Set-Content $ini "[Behavior]`nOpenAfterStart=true`n[Dialogs]`nFirstRun=false`n[Shortcuts]`ntoggle-window-state=Ctrl+Alt+F12"
+# The shortcut is a key that has no letter: Windows used to refuse those.
+Set-Content $ini "[Behavior]`nOpenAfterStart=true`n[Dialogs]`nFirstRun=false`n[Shortcuts]`ntoggle-window-state=Ctrl+Alt+Home"
 $log = Join-Path $work 'log.txt'
 $env:APPDATA = $work
 $env:QT_FORCE_STDERR_LOGGING = '1'
@@ -125,6 +126,7 @@ function Get-Setting([string] $key) {
 try {
     $window = Wait-For { Get-Windows | Where-Object { -not $_.Current.BoundingRectangle.IsEmpty } | Select-Object -First 1 } 15
     Test-Check 'the window opens' ($null -ne $window)
+    Test-Check 'Windows takes Ctrl+Alt+Home as the shortcut' (-not (Select-String -Quiet 'refused the shortcut' $log))
 
     $buttons = 'New Session', 'New Session With', 'Keep open when the focus moves elsewhere', 'Open Menu', 'Quit'
     $missing = @($buttons | Where-Object { -not (Find-Element $_ 3) })
@@ -193,12 +195,41 @@ try {
         $settings.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
     }
 
+    # Starting Kudari again hides the window of the first one, and the next start shows it in
+    # front. Whether it may take the front from a program the user just typed in, Windows
+    # decides by the input of the user, which a test without one cannot show.
+    Add-Type -Namespace Kudari -Name Foreground -MemberDefinition @'
+[DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr window, out uint process);
+'@
+    function Get-ForegroundProcess {
+        $owner = [uint32] 0
+        [void] [Kudari.Foreground]::GetWindowThreadProcessId([Kudari.Foreground]::GetForegroundWindow(), [ref] $owner)
+        $owner
+    }
+    Start-Process $Program -Wait -WorkingDirectory $work
+    $gone = Wait-For { if (-not (Get-Windows | Where-Object { -not $_.Current.BoundingRectangle.IsEmpty })) { $true } }
+    Start-Process $Program -Wait -WorkingDirectory $work
+    $front = Wait-For { if ((Get-ForegroundProcess) -eq $process.Id) { $true } }
+    Test-Check 'starting Kudari again hides and shows its window' ($gone -and $front)
+    if (-not ($gone -and $front)) { Write-Host "      hidden: $([bool] $gone), in front: process $(Get-ForegroundProcess), Kudari $($process.Id)" }
+
     [void] (Invoke-Element 'Quit')
     Test-Check 'the quit button ends Kudari' ($process.WaitForExit(10000))
 
     $errors = @(Get-Content $log -ErrorAction SilentlyContinue | Where-Object { $_ -match 'qrc:/|TypeError|ReferenceError|QML' })
     Test-Check 'the QML reports no errors' ($errors.Count -eq 0)
     if ($errors) { $errors | Select-Object -First 10 | ForEach-Object { Write-Host "      $_" } }
+
+    # A character takes the key that types it with the layout of the keyboard.
+    (Get-Content $ini) -replace '^toggle-window-state=.*', 'toggle-window-state=Ctrl+Alt+^' | Set-Content $ini
+    $characterLog = Join-Path $work 'character.txt'
+    $process = Start-Process $Program -PassThru -RedirectStandardError $characterLog -WorkingDirectory $work
+    $ByProcess = New-Object System.Windows.Automation.PropertyCondition ($Automation::ProcessIdProperty, $process.Id)
+    [void] (Wait-For { Get-Windows | Where-Object { -not $_.Current.BoundingRectangle.IsEmpty } | Select-Object -First 1 } 15)
+    Test-Check 'Windows takes Ctrl+Alt+^ as the shortcut' (-not (Select-String -Quiet 'refused the shortcut' $characterLog))
+    [void] (Invoke-Element 'Quit')
+    [void] $process.WaitForExit(10000)
 } catch {
     Test-Check "the test runs through: $($_.Exception.Message)" $false
 } finally {

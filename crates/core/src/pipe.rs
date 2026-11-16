@@ -293,8 +293,8 @@ mod windows {
         ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
     };
     use windows_sys::Win32::Security::{
-        EqualSid, GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
-        TokenUser,
+        EqualSid, GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, PSECURITY_DESCRIPTOR, PSID,
+        SECURITY_ATTRIBUTES, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TOKEN_USER, TokenIntegrityLevel, TokenUser,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION,
@@ -323,9 +323,27 @@ mod windows {
         )))
     }
 
+    /// The integrity level of the programs of a user who is not an administrator, or of an
+    /// administrator without elevation.
+    const MEDIUM: u32 = 0x2000;
+
     pub fn serve(address: &Path, handler: Arc<dyn Handler>) -> io::Result<()> {
+        let own = own_integrity()?;
+        serve_with(address, handler, (own > MEDIUM).then_some(own), own)
+    }
+
+    /// [`serve`] with the pipe labelled with the integrity level `label`, which keeps
+    /// programs below it from opening it, and connections from programs below `least`
+    /// closed. An elevated Kudari takes no agents without elevation: they could type into
+    /// terminals with the rights of an administrator.
+    pub(super) fn serve_with(
+        address: &Path,
+        handler: Arc<dyn Handler>,
+        label: Option<u32>,
+        least: u32,
+    ) -> io::Result<()> {
         let name = wide(address);
-        let descriptor = Descriptor::for_user(&own_user()?)?;
+        let descriptor = Descriptor::for_user(&own_user()?, label)?;
         let mut pipe = instance(&name, &descriptor, true)?;
         std::thread::Builder::new()
             .name("agent pipe".to_string())
@@ -347,6 +365,11 @@ mod windows {
                     // SAFETY: a connected pipe and a plain out parameter.
                     let known = unsafe { GetNamedPipeClientProcessId(current.as_raw_handle(), &raw mut process) } != 0;
                     let process = known.then_some(process);
+                    // The second guard behind the label: a client whose level is lower, or
+                    // cannot be read, is let go.
+                    if !process.is_some_and(|process| integrity_of(process).is_ok_and(|level| level >= least)) {
+                        continue;
+                    }
                     let handler = Arc::clone(&handler);
                     // Without a thread, the connection ends.
                     let _ = std::thread::Builder::new()
@@ -483,6 +506,57 @@ mod windows {
         }
     }
 
+    /// The integrity level of this process.
+    pub(super) fn own_integrity() -> io::Result<u32> {
+        // SAFETY: the pseudo handle of this process needs no closing.
+        integrity(unsafe { GetCurrentProcess() })
+    }
+
+    /// The integrity level of process `id`.
+    fn integrity_of(id: u32) -> io::Result<u32> {
+        // SAFETY: plain system calls on a handle that is checked and closed again.
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, id);
+            if handle.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            let level = integrity(handle);
+            CloseHandle(handle);
+            level
+        }
+    }
+
+    /// The integrity level of a process: the last part of the SID of its mandatory label,
+    /// such as `0x2000` for medium and `0x3000` for high.
+    fn integrity(process: HANDLE) -> io::Result<u32> {
+        // SAFETY: plain system calls; the buffer holds the size that Windows asked for and
+        // is aligned for the label, and the token is closed again.
+        unsafe {
+            let mut token = std::ptr::null_mut();
+            if OpenProcessToken(process, TOKEN_QUERY, &raw mut token) == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let mut size = 0;
+            GetTokenInformation(token, TokenIntegrityLevel, std::ptr::null_mut(), 0, &raw mut size);
+            let mut label: Vec<u64> = vec![0; (size as usize).div_ceil(size_of::<u64>()).max(1)];
+            let result = GetTokenInformation(
+                token,
+                TokenIntegrityLevel,
+                label.as_mut_ptr().cast(),
+                size,
+                &raw mut size,
+            );
+            let error = io::Error::last_os_error();
+            CloseHandle(token);
+            if result == 0 {
+                return Err(error);
+            }
+            let sid = (*label.as_ptr().cast::<TOKEN_MANDATORY_LABEL>()).Label.Sid;
+            let parts = u32::from(*GetSidSubAuthorityCount(sid));
+            Ok(*GetSidSubAuthority(sid, parts.saturating_sub(1)))
+        }
+    }
+
     /// The SID in a [`User`], valid while the buffer lives.
     fn sid(user: &User) -> PSID {
         // SAFETY: the buffer starts with a `TOKEN_USER`, aligned for it.
@@ -514,9 +588,11 @@ mod windows {
     unsafe impl Send for Descriptor {}
 
     impl Descriptor {
-        /// Full access for `user` alone, and nothing inherited.
-        fn for_user(user: &User) -> io::Result<Self> {
-            let text: Vec<u16> = format!("D:P(A;;GA;;;{})", sid_text(user)?)
+        /// Full access for `user` alone, and nothing inherited. With `label`, the integrity
+        /// level of the pipe: programs below it can neither write to it nor read from it.
+        fn for_user(user: &User, label: Option<u32>) -> io::Result<Self> {
+            let label = label.map_or_else(String::new, |level| format!("S:(ML;;NWNR;;;S-1-16-{level})"));
+            let text: Vec<u16> = format!("D:P(A;;GA;;;{}){label}", sid_text(user)?)
                 .encode_utf16()
                 .chain(std::iter::once(0))
                 .collect();
@@ -678,6 +754,100 @@ mod tests {
             decode_reply(&line),
             Ok(Err(Error::Invalid("The request names no known method.".to_string())))
         );
+    }
+
+    /// Runs `work` on this thread with the integrity level of programs without elevation.
+    #[cfg(windows)]
+    fn without_elevation<T>(work: impl FnOnce() -> T) -> T {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
+        use windows_sys::Win32::Security::{
+            DuplicateTokenEx, GetLengthSid, RevertToSelf, SID_AND_ATTRIBUTES, SecurityImpersonation,
+            SetTokenInformation, TOKEN_ADJUST_DEFAULT, TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_MANDATORY_LABEL,
+            TOKEN_QUERY, TokenImpersonation, TokenIntegrityLevel,
+        };
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken, SetThreadToken};
+        // The attribute of an integrity level among the groups of a token (`winnt.h`).
+        const SE_GROUP_INTEGRITY: u32 = 0x20;
+
+        // SAFETY: plain system calls; the token is closed again, and the SID that Windows
+        // allocated lives until the label is set.
+        unsafe {
+            let mut own = std::ptr::null_mut();
+            let access = TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ADJUST_DEFAULT | TOKEN_IMPERSONATE;
+            assert_ne!(OpenProcessToken(GetCurrentProcess(), access, &raw mut own), 0);
+            let mut lowered = std::ptr::null_mut();
+            let duplicated = DuplicateTokenEx(
+                own,
+                0,
+                std::ptr::null(),
+                SecurityImpersonation,
+                TokenImpersonation,
+                &raw mut lowered,
+            );
+            CloseHandle(own);
+            assert_ne!(duplicated, 0);
+            let medium: Vec<u16> = "S-1-16-8192".encode_utf16().chain(std::iter::once(0)).collect();
+            let mut sid = std::ptr::null_mut();
+            assert_ne!(ConvertStringSidToSidW(medium.as_ptr(), &raw mut sid), 0);
+            let label = TOKEN_MANDATORY_LABEL {
+                Label: SID_AND_ATTRIBUTES {
+                    Sid: sid,
+                    Attributes: SE_GROUP_INTEGRITY,
+                },
+            };
+            let size = size_of::<TOKEN_MANDATORY_LABEL>() as u32 + GetLengthSid(sid);
+            assert_ne!(
+                SetTokenInformation(lowered, TokenIntegrityLevel, (&raw const label).cast(), size),
+                0
+            );
+            windows_sys::Win32::Foundation::LocalFree(sid);
+            assert_ne!(SetThreadToken(std::ptr::null(), lowered), 0);
+            let result = work();
+            RevertToSelf();
+            CloseHandle(lowered);
+            result
+        }
+    }
+
+    /// An elevated Kudari labels its pipe with its level, and agents without elevation cannot
+    /// open it: they could type into terminals with the rights of an administrator. Without
+    /// elevation, there is nothing to check.
+    #[test]
+    #[cfg(windows)]
+    fn a_program_without_elevation_cannot_open_the_pipe_of_an_elevated_kudari() {
+        let own = windows::own_integrity().unwrap();
+        if own <= 0x2000 {
+            return;
+        }
+        let address = test_address("elevated");
+        windows::serve_with(&address, Arc::new(Recorder::default()), Some(own), own).unwrap();
+        let refused = without_elevation(|| connect(&address)).unwrap_err();
+        assert_eq!(refused.raw_os_error(), Some(5), "access denied: {refused}");
+        // An agent with elevation gets in.
+        assert!(connect(&address).is_ok());
+    }
+
+    /// The second guard: a program below the level that gets through is let go unheard.
+    #[test]
+    #[cfg(windows)]
+    fn a_program_below_the_level_of_kudari_is_let_go() {
+        let address = test_address("let-go");
+        let recorder = Arc::new(Recorder::default());
+        let above = windows::own_integrity().unwrap() + 0x1000;
+        windows::serve_with(&address, Arc::clone(&recorder) as Arc<dyn Handler>, None, above).unwrap();
+        let mut stream = connect(&address).unwrap();
+        // An agent that is let in waits for requests, and the read would not end.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut reply = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut stream, &mut reply);
+            let _ = sender.send(reply);
+        });
+        let reply = receiver.recv_timeout(Duration::from_secs(5));
+        assert_eq!(reply, Ok(Vec::new()), "the connection stayed open");
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(recorder.events().is_empty(), "{:?}", recorder.events());
     }
 
     #[test]

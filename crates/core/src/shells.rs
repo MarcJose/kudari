@@ -83,6 +83,8 @@ impl System for Here {
     fn distributions(&self, wsl: &Path) -> Option<Vec<u8>> {
         let mut command = Command::new(wsl);
         command.args(["--list", "--quiet"]);
+        // With WSL_UTF8=1, as scripts often set it, wsl.exe writes UTF-8 instead of UTF-16.
+        command.env_remove("WSL_UTF8");
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -205,17 +207,23 @@ fn on_path(system: &dyn System, program: &str) -> Option<PathBuf> {
         .find(|candidate| system.is_file(candidate))
 }
 
-/// The names in the output of `wsl.exe --list --quiet`, which is UTF-16. The distributions of
-/// Docker Desktop are for its engine, not for people.
+/// The names in the output of `wsl.exe --list --quiet`, which is UTF-16, or UTF-8 with
+/// `WSL_UTF8=1`. The distributions of Docker Desktop are for its engine, not for people.
 fn distributions(output: &[u8]) -> Vec<String> {
-    let units: Vec<u16> = output
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|pair| u16::from_le_bytes(*pair))
-        .collect();
-    String::from_utf16_lossy(&units)
-        .lines()
+    // UTF-16 starts with its byte order mark, and the names in it have zero bytes, which
+    // UTF-8 text never has.
+    let text = if output.starts_with(&[0xff, 0xfe]) || output.contains(&0) {
+        let units: Vec<u16> = output
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
+            .collect();
+        String::from_utf16_lossy(&units)
+    } else {
+        String::from_utf8_lossy(output).into_owned()
+    };
+    text.lines()
         .map(|line| {
             line.trim_matches(|character: char| {
                 character.is_whitespace() || character == '\u{feff}' || character == '\0'
@@ -346,7 +354,7 @@ function global:prompt {
     }
     "$marks$(& $global:KudariPrompt)$command"
 }
-if ((Get-Module PSReadLine) -and ((Get-PSReadLineKeyHandler -Chord Enter).Function -eq 'AcceptLine')) {
+if ((Get-Module PSReadLine) -and ((Get-PSReadLineKeyHandler -Bound | Where-Object Key -eq 'Enter' | Select-Object -First 1).Function -eq 'AcceptLine')) {
     Set-PSReadLineKeyHandler -Chord Enter -ScriptBlock {
         [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
         [Console]::Write("$([char]27)]133;C;$($global:KudariMark)$([char]27)\")
@@ -542,11 +550,20 @@ mod tests {
     }
 
     #[test]
+    fn distributions_are_read_in_utf_8_as_well() {
+        // wsl.exe with WSL_UTF8=1.
+        assert_eq!(distributions(b"Ubuntu\r\nDebian\r\n"), ["Ubuntu", "Debian"]);
+        assert_eq!(distributions(&utf16("Ubuntu\r\nDebian\r\n")), ["Ubuntu", "Debian"]);
+        assert_eq!(distributions(&utf16("\u{feff}Ubuntu\r\n")), ["Ubuntu"]);
+    }
+
+    #[test]
     fn a_broken_wsl_lists_no_distributions() {
         let mut system = windows(&["C:\\Windows\\System32\\wsl.exe"]);
         system.wsl = None;
         assert!(discover(&system).is_empty());
-        assert!(distributions(&[0x41]).is_empty());
+        // Half a unit of UTF-16.
+        assert!(distributions(&[0x00]).is_empty());
     }
 
     #[test]
@@ -602,6 +619,40 @@ mod tests {
         let off = super::launch("", Some("cmd"), "", false, &shells, None).unwrap();
         assert!(off.environment.is_empty());
         assert_eq!(off.key, None);
+    }
+
+    /// Windows PowerShell 5.1 has `PSReadLine` 2.0, which knows less than the one of
+    /// PowerShell 7: the script must start in both without an error, and take over Enter.
+    #[test]
+    #[cfg(windows)]
+    fn both_powershells_take_the_marks() {
+        let script = format!(
+            "$ProgressPreference = 'SilentlyContinue'\nImport-Module PSReadLine\n{POWERSHELL}\n\
+             'enter: ' + (Get-PSReadLineKeyHandler -Bound | Where-Object Key -eq 'Enter' | Select-Object -First 1).Function\n"
+        );
+        let mut ran = 0;
+        for shell in ["powershell.exe", "pwsh.exe"] {
+            let Ok(output) = Command::new(shell)
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-EncodedCommand",
+                    &encoded_command(&script),
+                ])
+                .output()
+            else {
+                // PowerShell 7 need not be installed.
+                continue;
+            };
+            ran += 1;
+            let (out, err) = (
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            assert!(!err.contains("Error") && !err.contains("Exception"), "{shell}: {err}");
+            assert!(out.contains("enter: CustomAction"), "{shell}: {out} {err}");
+        }
+        assert!(ran > 0, "no PowerShell");
     }
 
     #[test]
