@@ -235,17 +235,44 @@ fn kitty_sequence(mode: TermMode, key: Key, modifiers: Modifiers) -> Option<Stri
     })
 }
 
+/// Whether the legacy sequence of a key holds its modifiers in a parameter, as `CSI 1;3A`
+/// does for Alt+Up.
+fn carries_modifiers(key: Key) -> bool {
+    matches!(
+        key,
+        Key::Insert
+            | Key::Delete
+            | Key::Home
+            | Key::End
+            | Key::Left
+            | Key::Up
+            | Key::Right
+            | Key::Down
+            | Key::PageUp
+            | Key::PageDown
+            | Key::Function(_)
+    )
+}
+
 /// What the program receives for a key that no key binding file took: the kitty protocol
 /// if the program asked for it, the application keypad, the sequence of a special key, or
-/// the text of the key. Alt sends Escape first, as in xterm's default.
+/// the text of the key. Alt sends Escape first, as in xterm's default, unless the sequence
+/// holds the modifiers itself: Alt+Esc is `ESC ESC`, and Alt+Shift+Tab `ESC CSI Z`.
 #[must_use]
 pub fn key_bytes(mode: TermMode, key: Key, modifiers: Modifiers, text: &str) -> Option<Vec<u8>> {
-    let sequence = kitty_sequence(mode, key, modifiers)
-        .or_else(|| keypad_sequence(mode, key, modifiers).map(str::to_string))
-        .or_else(|| key_sequence(key, modifiers, mode.contains(TermMode::APP_CURSOR)))
-        .or_else(|| (!text.is_empty()).then(|| text.to_string()))?;
+    let (sequence, carries_alt) = if let Some(sequence) = kitty_sequence(mode, key, modifiers) {
+        (sequence, true)
+    } else if let Some(sequence) = keypad_sequence(mode, key, modifiers) {
+        (sequence.to_string(), false)
+    } else if let Some(sequence) = key_sequence(key, modifiers, mode.contains(TermMode::APP_CURSOR)) {
+        (sequence, carries_modifiers(key))
+    } else if !text.is_empty() {
+        (text.to_string(), false)
+    } else {
+        return None;
+    };
     let mut bytes = sequence.into_bytes();
-    if modifiers.contains(Modifiers::ALT) && bytes.first() != Some(&0x1b) {
+    if modifiers.contains(Modifiers::ALT) && !carries_alt {
         bytes.insert(0, 0x1b);
     }
     Some(bytes)
@@ -520,9 +547,17 @@ mod tests {
         assert_eq!(key_bytes(plain, Key::Character('A'), SHIFT, "A").unwrap(), b"A");
         assert_eq!(key_bytes(plain, Key::Other, NONE, "ä").unwrap(), "ä".as_bytes());
         assert_eq!(key_bytes(plain, Key::Other, NONE, ""), None);
-        // Alt sends Escape first, unless the sequence starts with it already.
+        // Alt sends Escape first, unless the sequence holds the modifiers itself.
         assert_eq!(key_bytes(plain, Key::Character('B'), ALT, "b").unwrap(), b"\x1bb");
         assert_eq!(key_bytes(plain, Key::Up, ALT, "").unwrap(), b"\x1b[1;3A");
+        assert_eq!(key_bytes(plain, Key::Function(1), ALT, "").unwrap(), b"\x1b[1;3P");
+        // Also before sequences that start with Escape themselves, as `emacs` reads M-ESC.
+        assert_eq!(key_bytes(plain, Key::Escape, ALT, "\x1b").unwrap(), b"\x1b\x1b");
+        assert_eq!(key_bytes(plain, Key::Backtab, ALT | SHIFT, "").unwrap(), b"\x1b\x1b[Z");
+        assert_eq!(
+            key_bytes(plain, Key::Character('['), ALT | CONTROL, "\x1b").unwrap(),
+            b"\x1b\x1b"
+        );
         let keypad = key_bytes(TermMode::APP_KEYPAD, Key::Character('5'), KEYPAD, "5");
         assert_eq!(keypad.unwrap(), b"\x1bOu");
         let kitty = key_bytes(TermMode::DISAMBIGUATE_ESC_CODES, Key::Escape, NONE, "\x1b");
