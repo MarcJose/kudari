@@ -720,7 +720,13 @@ check "a script reading input is no prompt for an agent" yes \
 input key 28; sleep 0.5
 check "the script got nothing from the agent" "got-|" "$(content "$work/agent-read")"
 hook SetSetting ConfirmAgentCommands false; sleep 0.3
-agent type_text "{\"terminal\": $mine, \"text\": \"echo ran-by-agent\", \"execute\": true}" > /dev/null; sleep 0.6
+# The agent was allowed when its commands waited for Return; Kudari asks about it again.
+check "commands that no longer wait end the access granted before" false "$(hook AgentAccess)"
+send type_text "{\"terminal\": $mine, \"text\": \"echo ran-by-agent\", \"execute\": true}"
+check "Kudari asks again before commands of an agent run at once" yes \
+    "$(question | grep -q 'read and control' && echo yes)"
+hook AnswerAgent true
+receive > /dev/null; sleep 0.6
 check "without confirmation an agent runs commands" yes \
     "$(agent read_terminal "{\"terminal\": $mine, \"lines\": 5}" | grep -qx 'ran-by-agent' && echo yes)"
 agent type_text "{\"terminal\": $mine, \"text\": \"sleep 30\", \"execute\": true}" > /dev/null; sleep 0.6

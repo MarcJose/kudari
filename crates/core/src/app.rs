@@ -323,6 +323,16 @@ impl App {
         self.settings.screen != old.screen
     }
 
+    /// Whether agents must be asked about again after the settings were `old`: they were
+    /// allowed for what the settings permitted then. Asking before running commands again
+    /// only narrows what they may do.
+    #[must_use]
+    pub fn agent_rights_changed(&self, old: &Settings) -> bool {
+        let new = &self.settings;
+        (new.allow_agent_reading, new.allow_agent_control) != (old.allow_agent_reading, old.allow_agent_control)
+            || (old.confirm_agent_commands && !new.confirm_agent_commands)
+    }
+
     #[must_use]
     pub fn stack(&self) -> &SessionStack {
         &self.stack
@@ -2107,6 +2117,28 @@ mod tests {
         // A hidden window that loses its screen stays as it is.
         app.toggle_window(true);
         assert_eq!(app.window_lost(), []);
+    }
+
+    #[test]
+    fn agents_are_asked_again_when_they_may_do_more() {
+        let table = Table::default();
+        let mut app = fresh();
+        table.write("Security", "AllowAgentControl", "true");
+        let _ = app.replace_settings(Settings::load(&table));
+        // Commands no longer wait for the Return of the user.
+        table.write("Security", "ConfirmAgentCommands", "false");
+        let old = app.replace_settings(Settings::load(&table));
+        assert!(old.confirm_agent_commands);
+        assert!(app.agent_rights_changed(&old));
+        // Asking again only narrows what agents may do.
+        table.write("Security", "ConfirmAgentCommands", "true");
+        let old = app.replace_settings(Settings::load(&table));
+        assert!(!app.agent_rights_changed(&old));
+        table.write("Security", "AllowAgentReading", "true");
+        let old = app.replace_settings(Settings::load(&table));
+        assert!(app.agent_rights_changed(&old));
+        let old = app.replace_settings(Settings::load(&table));
+        assert!(!app.agent_rights_changed(&old));
     }
 
     #[test]

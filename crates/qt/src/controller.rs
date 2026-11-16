@@ -924,9 +924,7 @@ impl qobject::Controller {
         let old = self.as_mut().rust_mut().app.replace_settings(settings);
         let new = self.app.settings();
         let skin_changed = new.skin != old.skin;
-        // Agents were allowed for what the settings permitted then; any change asks again.
-        let agents_changed =
-            (new.allow_agent_reading, new.allow_agent_control) != (old.allow_agent_reading, old.allow_agent_control);
+        let agents_changed = self.app.agent_rights_changed(&old);
         self.as_mut().apply_terminal_settings();
         if skin_changed {
             self.as_mut().apply_skin();
