@@ -487,6 +487,19 @@ check "matches in new output reach the scrollbar" yes "$([ "$(marks)" -gt "$befo
 input key 1; sleep 0.4
 for action in edit_select_all edit_copy select-line select-mode select-mode; do hook Trigger "$action"; sleep 0.3; done
 
+# A blinking cursor that a program hid, as htop does, stops blinking: each blink would draw
+# the same frame again, and a fading cursor 30 of them a second.
+hook SetSetting BlinkingCursor true; sleep 0.3
+run "clear"
+# The terminals that do not blink, of all of them: only the one in which the program runs.
+blinks() { hook Property terminal cursorBlinks | grep -o false | wc -l; }
+shown_blinks=$(blinks)
+run "printf '\\033[?25l'"
+hidden_blinks=$(blinks)
+run "printf '\\033[?25h'"
+check "a blinking cursor stops blinking while a program hides it" "0 1 0" "$shown_blinks $hidden_blinks $(blinks)"
+hook SetSetting BlinkingCursor false; sleep 0.3
+
 # The D-Bus interface, each method checked against its counterpart.
 two_h=$(sessions addSessionTwoHorizontal); sleep 1
 two_v=$(sessions addSessionTwoVertical); sleep 1

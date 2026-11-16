@@ -7,10 +7,10 @@
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::Point;
-use alacritty_terminal::term::Term;
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::search::Match;
+use alacritty_terminal::term::{RenderableCursor, Term};
 use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 
 use crate::colors::{self, ColorScheme, brighten, faint, resolve};
@@ -267,6 +267,19 @@ fn underline_rects(geometry: &Geometry, column: i32, line: i32, cells: f64, flag
 /// The rectangles a cursor of this shape fills.
 /// The shapes of the cursor over `cells` cells: two on a wide character, so that its glyph
 /// shows whole.
+/// Whether the frame shows the cursor at all: the program has not hidden it (in vi mode it is
+/// always there) and the view is not scrolled back so far that it is below the last line.
+/// Only then can its blinking or fading change a frame.
+pub fn cursor_on_screen<T: EventListener>(term: &Term<T>) -> bool {
+    let content = term.renderable_content();
+    shows(&content.cursor, content.display_offset, term.screen_lines())
+}
+
+fn shows(cursor: &RenderableCursor, offset: usize, lines: usize) -> bool {
+    let line = i64::from(cursor.point.line.0) + offset as i64;
+    cursor.shape != CursorShape::Hidden && (0..lines as i64).contains(&line)
+}
+
 fn cursor_rects(geometry: &Geometry, column: i32, line: i32, cells: f64, shape: CursorShape) -> Vec<Rect> {
     let (x, y) = (0.0, 0.0);
     let (w, h) = (cells * geometry.cell_width, geometry.cell_height);
@@ -420,8 +433,7 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
     let cursor_line = cursor.point.line.0 + offset;
     // A cursor that has faded out entirely leaves the cell as it is.
     let fade = (scene.cursor_fade.clamp(0.0, 1.0) * 255.0) as u8;
-    if cursor.shape != CursorShape::Hidden && !scene.cursor_hidden && fade > 0 && (0..grid_lines).contains(&cursor_line)
-    {
+    if shows(&cursor, content.display_offset, term.screen_lines()) && !scene.cursor_hidden && fade > 0 {
         let line = cursor_line;
         let column = cursor.point.column.0 as i32;
         let shape = if scene.focused {
@@ -624,6 +636,33 @@ mod tests {
         let cursor = scheme.foreground;
         let drawn = fills(&frame(&term, &Options::default(), &scene(&scheme, &[], &[])));
         assert!(drawn.iter().all(|(_, color)| *color != cursor), "{drawn:?}");
+    }
+
+    #[test]
+    fn the_cursor_is_on_screen_only_where_a_frame_draws_it() {
+        let scheme = crate::colors::active();
+        let drawn = |term: &Term<VoidListener>| {
+            fills(&frame(term, &Options::default(), &scene(&scheme, &[], &[])))
+                .iter()
+                .any(|(_, color)| *color == scheme.foreground)
+        };
+        let mut term = term_with("1\r\n2\r\n3\r\n4\r\n5");
+        assert!(cursor_on_screen(&term) && drawn(&term));
+        // Scrolled back by one line: the cursor in the last line is below the screen.
+        term.scroll_display(alacritty_terminal::grid::Scroll::Delta(1));
+        assert!(!cursor_on_screen(&term) && !drawn(&term));
+        term.scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+        assert!(cursor_on_screen(&term));
+        // Hidden by the program (DECTCEM), as `htop` does, and shown again.
+        let mut parser: Processor<StdSyncHandler> = Processor::new();
+        parser.advance(&mut term, b"\x1b[?25l");
+        assert!(!cursor_on_screen(&term) && !drawn(&term));
+        // In vi mode, the cursor of vi mode shows even then.
+        term.toggle_vi_mode();
+        assert!(cursor_on_screen(&term) && drawn(&term));
+        term.toggle_vi_mode();
+        parser.advance(&mut term, b"\x1b[?25h");
+        assert!(cursor_on_screen(&term) && drawn(&term));
     }
 
     #[test]
