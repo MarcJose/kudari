@@ -602,6 +602,15 @@ run "clear; printf '\033]52;c;%s\a' \$(printf osc | base64)"
 run "clear; cat > $work/osc"
 hook Trigger edit_paste; sleep 0.3; end_input
 check "programs can copy to the clipboard" "osc|" "$(content "$work/osc")"
+# Two quick clicks at different places are two single clicks: the second selects no word.
+run "clear; printf '\033]52;c;%s\a' \$(printf before | base64)"
+run "clear; printf 'apple %s\n' bananabananabananabananabananabananabananabanana"
+input click2 12 8 300 8; sleep 0.3
+hook Trigger edit_copy; sleep 0.3
+run "clear; cat > $work/clicks"
+hook Trigger edit_paste; sleep 0.3; end_input
+check "two quick clicks at different places select no word" no \
+    "$(content "$work/clicks" | grep -q banana && echo yes || echo no)"
 # sh has no bracketed paste, so it would run pasted lines one by one: Kudari asks first.
 run "clear; printf '\033]52;c;%s\a' \$(printf 'one\ntwo\n' | base64)"
 run "clear; cat > $work/lines"

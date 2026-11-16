@@ -310,6 +310,9 @@ Item {
 
             property int clicks: 1
             property real lastPress: 0
+            // Only a press near the last one, with the same button, counts on from it.
+            property point lastPoint: Qt.point(0, 0)
+            property int lastButton: Qt.NoButton
             // Where a press on the selection started; moving away from it drags the text.
             property var dragStart: null
 
@@ -338,8 +341,13 @@ Item {
                     return;
                 }
                 const now = Date.now();
-                clicks = now - lastPress < Qt.styleHints.mouseDoubleClickInterval ? clicks % 3 + 1 : 1;
+                const distance = Qt.styleHints.mouseDoubleClickDistance;
+                const near = Math.abs(event.x - lastPoint.x) <= distance && Math.abs(event.y - lastPoint.y) <= distance;
+                const again = near && event.button === lastButton && now - lastPress < Qt.styleHints.mouseDoubleClickInterval;
+                clicks = again ? clicks % 3 + 1 : 1;
                 lastPress = now;
+                lastPoint = Qt.point(event.x, event.y);
+                lastButton = event.button;
                 terminal.mousePress(event.x, event.y, event.button, clicks, event.modifiers);
             }
             onPositionChanged: event => {
