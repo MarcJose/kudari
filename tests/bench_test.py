@@ -54,13 +54,12 @@ class Report(unittest.TestCase):
         self.run_of("kudari-1", [threaded(0.02 * index, 1) for index in range(12)])
         self.assertEqual(self.frames_row(self.report("kudari"), "plain")[1], "48.0")
 
-    def test_milliseconds_cut_off_by_qt_count_from_their_middle(self):
+    def test_milliseconds_cut_off_by_qt_show_as_the_range_they_stand_for(self):
         self.run_of("kudari-1", [threaded(0.01, 0), threaded(0.02, 1), threaded(0.03, 2)])
         text = self.report("kudari")
-        row = self.frames_row(text, "plain")
-        # The middles of 0, 1 and 2 are 0.5, 1.5 and 2.5.
-        self.assertEqual(row[4:], ["1.5", "<1", "2-3"])
-        self.assertIn("whole milliseconds, cut off", text)
+        # sync p50, p95 and the slowest.
+        self.assertEqual(self.frames_row(text, "plain")[3:6], ["1-2", "2-3", "2-3"])
+        self.assertIn("whole milliseconds as Qt gives them, cut off", text)
 
     def test_every_render_loop_of_qt_gives_its_frames(self):
         lines = [
@@ -71,7 +70,7 @@ class Report(unittest.TestCase):
         self.run_of("kudari-1", lines)
         text = self.report("kudari")
         self.assertIn("render loop basic, software, threaded", text)
-        self.assertEqual(self.frames_row(text, "plain")[4], "2.5")
+        self.assertEqual(self.frames_row(text, "plain")[3], "2-3")
 
     def test_kudari_without_frames_is_named(self):
         self.run_of("kudari-1", ["nothing of Qt Quick"])
@@ -82,6 +81,52 @@ class Report(unittest.TestCase):
         self.run_of("kudari-1", [threaded(0.01, 1)])
         text = self.report("kudari")
         self.assertLess(text.index("Computer  Some CPU"), text.index("runs per terminal"))
+
+    def load_row(self, text, load, terminal):
+        part = text.split(f"\n{load}: ")[1]
+        return next(line.split() for line in part.splitlines() if line.startswith(terminal + " "))
+
+    def test_the_median_counts_and_warm_up_runs_do_not(self):
+        for run, seconds in (("1", 0.20), ("2", 0.22), ("3", 0.21), ("w1", 0.90)):
+            self.run_of(f"kudari-{run}", [], (("plain", 0.0, seconds),))
+        text = self.report("kudari")
+        self.assertIn("3 runs per terminal after 1 warm-up run that does not count", text)
+        row = self.load_row(text, "plain", "kudari")
+        # median, MAD in percent, min, max, runs, outliers
+        self.assertEqual([row[2], row[3], row[5], row[6], row[8], row[9]], ["0.21", "4.8", "0.20", "0.22", "3", "-"])
+
+    def test_a_run_far_from_the_others_is_named(self):
+        for run, seconds in (("1", 0.20), ("2", 0.20), ("3", 0.202), ("4", 0.20), ("5", 0.40)):
+            self.run_of(f"kudari-{run}", [], (("plain", 0.0, seconds),))
+        self.assertEqual(self.load_row(self.report("kudari"), "plain", "kudari")[9], "5")
+
+    def test_the_rate_is_the_median_of_the_runs(self):
+        # 5, 10 and 25 frames in 0.25 s each: 20, 40 and 100 a second.
+        for run, count in (("1", 5), ("2", 10), ("3", 25)):
+            self.run_of(f"kudari-{run}", [threaded(0.008 * index, 1) for index in range(count)])
+        self.assertEqual(self.frames_row(self.report("kudari"), "plain")[1], "40.0")
+
+    def test_frames_far_apart_count_as_late(self):
+        # Gaps of 17, 17 and 40 ms: one of three is late at 60 Hz.
+        self.run_of("kudari-1", [threaded(time, 1) for time in (0.010, 0.027, 0.044, 0.084)])
+        self.assertEqual(self.frames_row(self.report("kudari"), "plain")[2], "33")
+
+    def test_the_wait_of_the_gui_thread_is_a_share_of_the_load(self):
+        # 125 ms of 0.25 s (the load and its tail).
+        lines = [threaded(0.05, 1)] + [f"{stamp(0.01 * index)} qt.scenegraph.time.renderloop [window 0x1][gui thread] Frame prepared, polish=0 ms, lock=0 ms, blockedForSync=25 ms, animations=0 ms" for index in range(1, 6)]
+        self.run_of("kudari-1", lines)
+        self.assertEqual(self.frames_row(self.report("kudari"), "plain")[6], "50")
+
+    def test_the_detail_gives_percentiles_gaps_and_budgets(self):
+        self.run_of("kudari-1", [threaded(0.017 * index, 9) for index in range(10)])
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            bench.report(self.directory, ["kudari"], detail=True)
+        text = output.getvalue()
+        self.assertIn("kudari, plain: 10 frames", text)
+        self.assertIn("gap", text)
+        # sync 9 and render 1, cut off: at least 10 ms, over the budget of 120 and 144 Hz only.
+        self.assertIn("at least 0 % / 100 % / 100 %", text)
 
     def test_no_run_at_all_is_said_plainly(self):
         self.assertIn("No run finished", self.report("kudari"))
@@ -113,6 +158,29 @@ KUDARI = {
 }
 
 
+class Statistics(unittest.TestCase):
+    def test_close_runs_are_no_outliers_for_the_clock_alone(self):
+        self.assertEqual(bench.outliers([("1", 0.180), ("2", 0.182), ("3", 0.181)]), [])
+
+    def test_equal_runs_have_no_outliers(self):
+        self.assertEqual(bench.outliers([("1", 1.0), ("2", 1.0), ("3", 1.0)]), [])
+
+    def test_the_interval_of_one_run_is_that_run(self):
+        self.assertEqual(bench.interval([0.5]), (0.5, 0.5))
+
+    def test_the_interval_holds_the_median(self):
+        low, high = bench.interval([1.0, 1.1, 1.2, 1.3, 5.0])
+        self.assertLessEqual(low, 1.2)
+        self.assertGreaterEqual(high, 1.2)
+
+    def test_the_order_is_shuffled_for_each_run_and_repeats_with_its_seed(self):
+        terminals = ["kudari", "konsole", "alacritty", "kitty"]
+        orders = [bench.order("7", str(run), terminals) for run in range(1, 21)]
+        self.assertTrue(all(sorted(found) == sorted(terminals) for found in orders))
+        self.assertGreater(len({tuple(found) for found in orders}), 1)
+        self.assertEqual(orders, [bench.order("7", str(run), terminals) for run in range(1, 21)])
+
+
 class Environment(unittest.TestCase):
     def describe(self, kudari=None, removed=(), kept=False, **machine):
         return bench.describe(kudari, {**MACHINE, **machine}, SOFTWARE, list(removed), kept)
@@ -140,6 +208,10 @@ class Environment(unittest.TestCase):
         warnings = self.warnings(load=1.5, governor="powersave", epp="balance_performance", **{"on battery": True})
         self.assertEqual(len(warnings), 3)
         self.assertIn("powerprofilesctl launch -p performance", warnings[2])
+
+    def test_the_plan_names_runs_warm_up_and_seed(self):
+        lines = bench.describe(None, MACHINE, SOFTWARE, [], False, bench.Plan(5, 1, "42"))
+        self.assertEqual(lines[0], "Runs      5 after 1 warm-up run that does not count; the terminals in an order shuffled for each run, --seed 42 repeats it")
 
     def test_the_variables_say_whether_they_were_removed(self):
         self.assertIn("QT_SCALE_FACTOR, LD_PRELOAD: removed", "\n".join(self.describe(removed=["QT_SCALE_FACTOR", "LD_PRELOAD"])))
