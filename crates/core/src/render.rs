@@ -247,7 +247,7 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             foreground = brighten(cell.fg, foreground, palette, scheme);
         }
         if flags.contains(Flags::DIM) {
-            foreground = faint(cell.fg, foreground, scheme);
+            foreground = faint(cell.fg, foreground, palette, scheme);
         }
         if flags.contains(Flags::INVERSE) {
             std::mem::swap(&mut foreground, &mut back);
@@ -626,6 +626,7 @@ mod tests {
             Some(faint(
                 alacritty_terminal::vte::ansi::Color::Named(alacritty_terminal::vte::ansi::NamedColor::Foreground),
                 scheme.foreground,
+                &alacritty_terminal::term::color::Colors::default(),
                 &scheme
             ))
         );
