@@ -5,7 +5,8 @@
 # each frame meanwhile, to compare terminals and a change to the drawing before and after:
 #
 #   tools/bench.sh [--binary PATH] [--runs N] [--warmup N] [--seed N] [--loads LOAD,...]
-#                  [--scale N] [--detail] [--keep] [--keep-env] [TERMINAL...]
+#                  [--set GROUP.KEY=VALUE] [--scale N] [--detail] [--keep] [--keep-env]
+#                  [TERMINAL...]
 #
 # The terminals are kudari, yakuake, konsole, alacritty, kitty, ghostty, contour and xterm;
 # without any, every one of them that is installed. Kudari is the installed one, or else the
@@ -14,10 +15,13 @@
 # by default, after one warm-up run that does not (--warmup). The report shows for each load
 # the median of the runs, its spread, a 95 % interval of the median, the fastest and the
 # slowest run and the runs far from the others; the CPU time of each terminal during the
-# load and its busiest threads; for Kudari, how often and how fast Qt Quick drew meanwhile,
-# and with --detail the times of its frames in detail. --loads picks some of plain, color,
-# frames and seq, --scale scales the screen as for a HiDPI display, and --keep keeps the
-# data and the logs of the terminals.
+# load and its busiest threads, and the memory after each load; for Kudari, how often and
+# how fast Qt Quick drew meanwhile, and with --detail the times of its frames in detail.
+# --loads picks some of plain, color, frames and seq, or idle: ten seconds without output,
+# for the CPU time and the wakeups of a terminal that waits. --set gives Kudari a setting
+# for the measurement, such as --set Terminal.BlinkingCursor=true, once for each. --scale
+# scales the screen as for a HiDPI display, and --keep keeps the data and the logs of the
+# terminals.
 #
 # The report starts with what was measured on what: the build of Kudari with its hash and
 # origin, the processor and its clock, the versions of Qt, KWin and Mesa. It warns about a
@@ -57,6 +61,7 @@ if [ "${KUDARI_BENCH_ROLE:-}" = workload ]; then
         case $load in
             frames) cat "$KUDARI_BENCH_WORK/frames-${rows}x$cols.txt" ;;
             seq) seq 1 2000000 ;;
+            idle) sleep 10 ;;
             *) cat "$KUDARI_BENCH_WORK/$load.txt" ;;
         esac
         end=$(stamp)
@@ -125,6 +130,7 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
                 kudari)
                     printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nWidth=100\nHeight=100\n' \
                         > "$XDG_CONFIG_HOME/kudarirc"
+                    cat "$work/kudarirc-settings" >> "$XDG_CONFIG_HOME/kudarirc"
                     # The frame times of Qt Quick, with the time of day to match them to the loads.
                     SHELL=$shell QSG_RENDER_TIMING=1 \
                         QT_MESSAGE_PATTERN='%{time yyyy-MM-ddTHH:mm:ss.zzz} %{category} %{message}' \
@@ -183,6 +189,7 @@ loads="plain color frames seq"
 keep=
 keep_env=
 warmup=1
+settings=
 seed=
 detail=
 terminals=
@@ -195,7 +202,7 @@ while [ $# -gt 0 ]; do
         --loads)
             loads=$(echo "$2" | tr ',' ' ')
             for load in $loads; do
-                case $load in plain | color | frames | seq) ;; *) die "no load $load; there are plain, color, frames and seq" ;; esac
+                case $load in plain | color | frames | seq | idle) ;; *) die "no load $load; there are plain, color, frames, seq and idle" ;; esac
             done
             shift 2
             ;;
@@ -203,7 +210,16 @@ while [ $# -gt 0 ]; do
         --warmup) warmup=$2; shift 2 ;;
         --seed) seed=$2; shift 2 ;;
         --detail) detail=1; shift ;;
-        -h | --help) sed -n '4,36s/^# \{0,1\}//p' "$0"; exit 0 ;;
+        --set)
+            case $2 in
+                [A-Za-z]*.[A-Za-z]*=*) ;;
+                *) die "--set needs GROUP.KEY=VALUE, such as Terminal.BlinkingCursor=true" ;;
+            esac
+            [ "$(printf '%s' "$2" | wc -l)" -eq 0 ] || die "--set takes one line"
+            settings="$settings$(printf '\n%s' "$2")"
+            shift 2
+            ;;
+        -h | --help) sed -n '4,41s/^# \{0,1\}//p' "$0"; exit 0 ;;
         *)
             case " $all " in
                 *" $1 "*) terminals="$terminals $1"; shift ;;
@@ -256,6 +272,12 @@ if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
         for variable in $variables; do unset_variables="$unset_variables -u $variable"; done
     fi
     case " $terminals " in *" kudari "*) measured=$binary ;; *) measured= ;; esac
+    # The settings for Kudari, one a line as given, and as lines of its kudarirc; KConfig
+    # joins groups named twice. A value may hold spaces, so the lines split only at newlines.
+    printf '%s\n' "$settings" | sed '/^$/d' > "$work/settings"
+    while IFS= read -r setting; do
+        printf '[%s]\n%s\n' "${setting%%.*}" "${setting#*.}"
+    done < "$work/settings" > "$work/kudarirc-settings"
     # shellcheck disable=SC2086 # the Kudari measured is one word or none
     python3 "$tools/bench.py" environment "$work" $measured --local "$local_build" \
         --variables "$(echo $variables | tr ' ' ',')" ${keep_env:+--keep-env} \

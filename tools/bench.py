@@ -30,12 +30,13 @@ from typing import NamedTuple
 
 WORDS = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor".split()
 CELLS = "abcdefghijklmnopqrstuvwxyz0123456789#@%&"
-LOADS = ("plain", "color", "frames", "seq")
+LOADS = ("plain", "color", "frames", "seq", "idle")
 DESCRIPTIONS = {
     "plain": "24 MB of plain text",
     "color": "28 MB of text in 256 colors",
     "frames": "300 full screens with colors of their own in every cell",
     "seq": "the numbers up to 2,000,000",
+    "idle": "10 seconds without output",
 }
 SEQ_BYTES = sum(len(f"{n}\n") for n in range(1, 2_000_001))
 # The line of a frame in the log of Qt Quick, from each of its render loops: threaded, basic
@@ -75,6 +76,10 @@ class Load(NamedTuple):
     window: float
     # Milliseconds of CPU time per group of threads during the load, or None.
     cpu: dict | None = None
+    # How often the threads of each group went to sleep or were put aside meanwhile.
+    switches: dict | None = None
+    # Kilobytes of memory after the load: resident, proportional and private; or None.
+    memory: tuple | None = None
 
 
 def cpu(path, pid, load, moment):
@@ -92,31 +97,43 @@ def cpu(path, pid, load, moment):
         switches = [re.search(rf"^{kind}_ctxt_switches:\s*(\d+)", status, re.M) for kind in ("voluntary", "nonvoluntary")]
         counts = [found[1] if found else "0" for found in switches]
         lines.append(f"{load}\t{moment}\t{task.name}\t{name}\t{schedstat.split()[0]}\t{counts[0]}\t{counts[1]}\n")
+    if moment == "end":
+        rollup = content(f"/proc/{pid}/smaps_rollup") or ""
+        sizes = {key: int(value) for key, value in re.findall(r"^(\w+):\s+(\d+) kB", rollup, re.M)}
+        private = sizes.get("Private_Clean", 0) + sizes.get("Private_Dirty", 0)
+        lines.append(f"{load}\tmemory\t{sizes.get('Rss', 0)}\t{sizes.get('Pss', 0)}\t{private}\n")
     with open(path, "a") as file:
         file.writelines(lines)
 
 
 def threads(path):
-    """Per load, the milliseconds of CPU time per group of threads between its start and its
-    end. A thread that ended meanwhile is missing; one that began counts from nothing."""
+    """Per load, the milliseconds of CPU time and the switches per group of threads between its
+    start and its end, and the memory after it. A thread that ended meanwhile is missing; one
+    that began counts from nothing."""
     if not path.exists():
-        return {}
-    taken = {}
+        return {}, {}, {}
+    taken, memory = {}, {}
     for line in path.read_text().splitlines():
-        load, moment, tid, name, nanoseconds, *_ = line.split("\t")
-        taken.setdefault((load, moment), {})[tid] = (name, int(nanoseconds))
-    used = {}
+        fields = line.split("\t")
+        if fields[1] == "memory":
+            memory[fields[0]] = tuple(int(field) for field in fields[2:5])
+            continue
+        load, moment, tid, name, nanoseconds, voluntary, other = fields
+        taken.setdefault((load, moment), {})[tid] = (name, int(nanoseconds), int(voluntary) + int(other))
+    used, woken = {}, {}
     for (load, moment), after in taken.items():
         if moment != "end":
             continue
         before = taken.get((load, "start"), {})
-        groups = {}
-        for tid, (name, nanoseconds) in after.items():
+        groups, switches = {}, {}
+        for tid, (name, nanoseconds, count) in after.items():
             # Threads of a pool differ only in a number at the end.
             group = re.sub(r"[\s#:]*\d+$", "", name) or name
-            groups[group] = groups.get(group, 0) + (nanoseconds - before.get(tid, (name, 0))[1]) / 1e6
-        used[load] = groups
-    return used
+            _, earlier, earlier_count = before.get(tid, (name, 0, 0))
+            groups[group] = groups.get(group, 0) + (nanoseconds - earlier) / 1e6
+            switches[group] = switches.get(group, 0) + count - earlier_count
+        used[load], woken[load] = groups, switches
+    return used, woken, memory
 
 
 def data(directory):
@@ -179,9 +196,10 @@ def measure(directory, name):
         "color": (directory / "color.txt").stat().st_size,
         "frames": (directory / f"frames-{rows}x{columns}.txt").stat().st_size,
         "seq": SEQ_BYTES,
+        "idle": 0,
     }
     drawn, waits, loops = [], [], set()
-    used = threads(directory / f"{name}.cpu")
+    used, woken, memory = threads(directory / f"{name}.cpu")
     log = directory / f"{name}.log"
     for line in log.read_text(errors="replace").splitlines():
         if found := frame(line):
@@ -197,7 +215,7 @@ def measure(directory, name):
         load, start, end = parts[0], when(parts[1]), when(parts[2])
         frames_meanwhile = [found for found in drawn if start <= found.time <= end + TAIL]
         blocked = [wait for moment, wait in waits if start <= moment <= end + TAIL]
-        result[load] = Load(end - start, sizes[load], frames_meanwhile, blocked, end - start + TAIL, used.get(load))
+        result[load] = Load(end - start, sizes[load], frames_meanwhile, blocked, end - start + TAIL, used.get(load), woken.get(load), memory.get(load))
     return f"{columns}x{rows}", result, loops
 
 
@@ -358,6 +376,7 @@ class Plan(NamedTuple):
     runs: int
     warmup: int
     seed: str
+    settings: tuple = ()
 
 
 def describe(kudari, machine, software, removed, kept, plan=None):
@@ -366,6 +385,8 @@ def describe(kudari, machine, software, removed, kept, plan=None):
     if plan:
         warm = (f" after {plan.warmup} warm-up runs that do not count" if plan.warmup != 1 else " after 1 warm-up run that does not count") if plan.warmup else ""
         lines.append(f"Runs      {plan.runs}{warm}; the terminals in an order shuffled for each run, --seed {plan.seed} repeats it")
+        if plan.settings:
+            lines.append(f"Settings  {', '.join(plan.settings)} for Kudari")
     if kudari:
         parts = [kudari["version"] or "no --version"]
         if kudari.get("git"):
@@ -430,7 +451,7 @@ def throughput(runs, terminals):
     for load in LOADS:
         rows = []
         for terminal in terminals:
-            done = [(number, result[load]) for number, (_, result, _) in runs[terminal] if load in result]
+            done = [(number, result[load]) for number, (_, result, _) in runs[terminal] if load in result and result[load].size]
             if not done:
                 continue
             seconds = [measured.seconds for _, measured in done]
@@ -476,20 +497,47 @@ def processor(runs, terminals):
                 continue
             totals = [sum(measured.cpu.values()) for measured in done]
             shares = [sum(measured.cpu.values()) / 10 / measured.seconds for measured in done]
-            per_mb = [sum(measured.cpu.values()) / (measured.size / 1e6) for measured in done]
-            groups = {}
+            per_mb = [sum(measured.cpu.values()) / (measured.size / 1e6) for measured in done if measured.size]
+            wakeups = [sum((measured.switches or {}).values()) / measured.seconds for measured in done]
+            # Without output, how often a thread wakes up says more than its few milliseconds.
+            idle = not per_mb
+            values = {}
             for measured in done:
-                for group in measured.cpu:
-                    groups.setdefault(group, []).append(measured.cpu[group])
+                for group, value in ((measured.switches or {}) if idle else measured.cpu).items():
+                    values.setdefault(group, []).append(value / measured.seconds if idle else value)
             # Threads that hardly ran say nothing about the load.
-            busy = [(group, used) for group, used in groups.items() if statistics.median(used) >= 1]
+            busy = [(group, found) for group, found in values.items() if statistics.median(found) >= 1]
             busiest = sorted(busy, key=lambda item: -statistics.median(item[1]))[:4]
-            named = ", ".join(f"{group} {statistics.median(used):.0f}" for group, used in busiest)
-            rows.append((statistics.median(per_mb), [terminal, f"{statistics.median(totals):.0f}", f"{statistics.median(shares):.0f}", f"{statistics.median(per_mb):.1f}", named]))
+            named = ", ".join(f"{group} {statistics.median(found):.0f}" for group, found in busiest) or "-"
+            cost = f"{statistics.median(per_mb):.1f}" if per_mb else "-"
+            rows.append((statistics.median(per_mb) if per_mb else statistics.median(totals), [terminal, f"{statistics.median(totals):.0f}", f"{statistics.median(shares):.1f}" if idle else f"{statistics.median(shares):.0f}", cost, f"{statistics.median(wakeups):.0f}", named]))
         if not rows:
             continue
         print(f"\n{load}: CPU time of the terminal, median of the runs (all its threads, also those that draw)")
-        table(["terminal", "CPU ms", "% of a core", "ms per MB", "busiest threads, ms"], [row for _, row in sorted(rows, key=lambda row: row[0])])
+        busiest = "busiest threads, wakeups/s" if load == "idle" else "busiest threads, ms"
+        table(["terminal", "CPU ms", "% of a core", "ms per MB", "wakeups/s", busiest], [row for _, row in sorted(rows, key=lambda row: row[0])])
+
+
+def memory(runs, terminals):
+    """How much memory each terminal held after each load: private, and at the end also its
+    resident and proportional share."""
+    held = {}
+    for terminal in terminals:
+        for _, (_, result, _) in runs[terminal]:
+            for load, measured in result.items():
+                if measured.memory:
+                    held.setdefault(terminal, {}).setdefault(load, []).append(measured.memory)
+    if not held:
+        return
+    loads = [load for load in LOADS if any(load in after for after in held.values())]
+    rows = []
+    for terminal, after in held.items():
+        last = after[[load for load in loads if load in after][-1]]
+        cells = [f"{statistics.median(found[2] for found in after[load]) / 1024:.0f}" if load in after else "-" for load in loads]
+        rows.append([terminal] + cells + [f"{statistics.median(found[0] for found in last) / 1024:.0f}", f"{statistics.median(found[1] for found in last) / 1024:.0f}"])
+    print("\nMemory of each terminal in MB, median of the runs: private after each load (the history")
+    print("fills from one load to the next), and resident (RSS) and proportional (PSS) after the last.")
+    table(["terminal"] + [f"after {load}" for load in loads] + ["RSS", "PSS"], rows)
 
 
 def drawing(terminal, measured, detail):
@@ -500,11 +548,13 @@ def drawing(terminal, measured, detail):
         if not done:
             continue
         rates = [len(load_run.frames) / load_run.window for load_run in done]
+        # Without output, frames come only from the cursor and are not late.
+        quiet = load == "idle"
         frames = [found for load_run in done for found in load_run.frames]
         between = [gap for load_run in done for gap in gaps(load_run.frames)]
         blocked = [wait for load_run in done for wait in load_run.blocked]
         syncs = [found.sync for found in frames]
-        late = f"{100 * sum(gap > LATE for gap in between) / len(between):.0f}" if between else "-"
+        late = f"{100 * sum(gap > LATE for gap in between) / len(between):.0f}" if between and not quiet else "-"
         costs = [sum(load_run.cpu.values()) / len(load_run.frames) for load_run in done if load_run.cpu]
         cost = f"{statistics.median(costs):.1f}" if costs else "-"
         share = f"{100 * sum(blocked) / 1000 / sum(load_run.window for load_run in done):.0f}" if blocked else "-"
@@ -572,6 +622,7 @@ def report(directory, order, detail=False):
     print("the highest throughput comes first.")
     throughput(runs, terminals)
     processor(runs, terminals)
+    memory(runs, terminals)
     # Only Qt Quick reports its frames: those of Kudari.
     for terminal in terminals:
         if terminal == "kudari" and not any(measured.frames for _, (_, result, _) in runs[terminal] for measured in result.values()):
@@ -598,7 +649,8 @@ def main():
         if len(arguments.rest) > 1:
             parser.error("environment takes at most the Kudari measured")
         removed = [name for name in arguments.variables.split(",") if name]
-        plan = Plan(arguments.runs, arguments.warmup, arguments.seed) if arguments.runs else None
+        settings = tuple((content(arguments.directory / "settings") or "").splitlines())
+        plan = Plan(arguments.runs, arguments.warmup, arguments.seed, settings) if arguments.runs else None
         environment(arguments.directory, arguments.rest[0] if arguments.rest else None, arguments.local, removed, arguments.keep_env, plan)
     elif arguments.action == "cpu":
         if len(arguments.rest) != 3 or not arguments.rest[0].isdigit() or arguments.rest[2] not in ("start", "end"):
