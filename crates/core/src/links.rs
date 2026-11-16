@@ -183,11 +183,23 @@ pub fn open(link: &str, editor: &str, schemes: &[String], desktop: &dyn Desktop)
                 .stderr(std::process::Stdio::null())
                 .spawn();
             match spawned {
-                // The child must not stay behind as a zombie.
-                Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
+                Ok(child) => reap(child),
                 Err(error) => eprintln!("kudari: could not start the editor: {error}"),
             }
         }
+    }
+}
+
+/// Waits for `child` on a thread of its own, so that it does not stay behind as a zombie.
+/// When the user has as many processes as allowed, as with a fork bomb in a terminal, no
+/// thread starts: the child then stays a zombie until Kudari ends, instead of ending Kudari
+/// with all its terminals.
+fn reap(mut child: std::process::Child) {
+    let waiting = std::thread::Builder::new()
+        .name("editor".to_string())
+        .spawn(move || child.wait());
+    if let Err(error) = waiting {
+        eprintln!("kudari: no thread to wait for the editor: {error}");
     }
 }
 
@@ -296,6 +308,36 @@ mod tests {
                 arguments: ["+1", "/nonexistent/a.rs"].map(String::from).to_vec(),
             }
         );
+    }
+
+    /// Runs in a process of its own, as the test itself again, with no processes left to the
+    /// user: starting a thread fails there. Root has no such limit.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_full_limit_of_processes_ends_nothing() {
+        const INSIDE: &str = "KUDARI_TEST_NO_THREADS";
+        if std::env::var_os(INSIDE).is_some() {
+            let child = std::process::Command::new("true").spawn().unwrap();
+            let none = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            // SAFETY: a plain system call with a valid limit, in this process of the test alone.
+            unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &raw const none) };
+            reap(child);
+            return;
+        }
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "links::tests::a_full_limit_of_processes_ends_nothing",
+                "--test-threads=1",
+            ])
+            .env(INSIDE, "1")
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "{status}");
     }
 
     #[test]

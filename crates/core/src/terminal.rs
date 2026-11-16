@@ -503,6 +503,15 @@ impl Backend {
         );
         let event_loop = EventLoop::new(term.clone(), proxy, pty, false, false).map_err(|error| error.to_string())?;
         let notifier = Notifier(event_loop.channel());
+        // `alacritty_terminal` ends the process when it cannot start the thread of the PTY, as
+        // when the user has as many processes as allowed: Kudari would end with all its
+        // terminals. A thread that just started tells that one can.
+        std::thread::Builder::new()
+            .name("probe".to_string())
+            .spawn(|| {})
+            .map_err(|error| format!("no thread for the terminal: {error}"))?
+            .join()
+            .map_err(|_| "no thread for the terminal".to_string())?;
         event_loop.spawn();
 
         let backend = Arc::new(Self {

@@ -25,12 +25,18 @@ use kudari_core::agent::{self, Request};
 
 /// Asks the user whether `agent` may use Kudari, with the name of its program.
 pub fn ask_user(agent: String) {
-    // Finding the program asks the bus, which must not happen on the Qt thread.
-    std::thread::spawn(move || {
+    // Finding the program asks the bus, which must not happen on the Qt thread. Without a
+    // thread, as when the user has as many processes as allowed, the question comes without
+    // the name of the program.
+    let unnamed = agent.clone();
+    let asked = std::thread::Builder::new().name("agent".to_string()).spawn(move || {
         let program = crate::dbus::process_id(&agent)
             .and_then(|pid| crate::process::program(pid, std::env::current_exe().ok().as_deref()));
         queue(move |c| show_question(c, &agent, program.as_deref()));
     });
+    if asked.is_err() {
+        queue(move |c| show_question(c, &unnamed, None));
+    }
 }
 
 fn show_question(c: Pin<&mut Controller>, agent: &str, program: Option<&str>) {
