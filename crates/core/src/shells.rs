@@ -83,6 +83,8 @@ impl System for Here {
     fn distributions(&self, wsl: &Path) -> Option<Vec<u8>> {
         let mut command = Command::new(wsl);
         command.args(["--list", "--quiet"]);
+        // With WSL_UTF8=1, as scripts often set it, wsl.exe writes UTF-8 instead of UTF-16.
+        command.env_remove("WSL_UTF8");
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -205,17 +207,23 @@ fn on_path(system: &dyn System, program: &str) -> Option<PathBuf> {
         .find(|candidate| system.is_file(candidate))
 }
 
-/// The names in the output of `wsl.exe --list --quiet`, which is UTF-16. The distributions of
-/// Docker Desktop are for its engine, not for people.
+/// The names in the output of `wsl.exe --list --quiet`, which is UTF-16, or UTF-8 with
+/// `WSL_UTF8=1`. The distributions of Docker Desktop are for its engine, not for people.
 fn distributions(output: &[u8]) -> Vec<String> {
-    let units: Vec<u16> = output
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|pair| u16::from_le_bytes(*pair))
-        .collect();
-    String::from_utf16_lossy(&units)
-        .lines()
+    // UTF-16 starts with its byte order mark, and the names in it have zero bytes, which
+    // UTF-8 text never has.
+    let text = if output.starts_with(&[0xff, 0xfe]) || output.contains(&0) {
+        let units: Vec<u16> = output
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
+            .collect();
+        String::from_utf16_lossy(&units)
+    } else {
+        String::from_utf8_lossy(output).into_owned()
+    };
+    text.lines()
         .map(|line| {
             line.trim_matches(|character: char| {
                 character.is_whitespace() || character == '\u{feff}' || character == '\0'
@@ -542,11 +550,20 @@ mod tests {
     }
 
     #[test]
+    fn distributions_are_read_in_utf_8_as_well() {
+        // wsl.exe with WSL_UTF8=1.
+        assert_eq!(distributions(b"Ubuntu\r\nDebian\r\n"), ["Ubuntu", "Debian"]);
+        assert_eq!(distributions(&utf16("Ubuntu\r\nDebian\r\n")), ["Ubuntu", "Debian"]);
+        assert_eq!(distributions(&utf16("\u{feff}Ubuntu\r\n")), ["Ubuntu"]);
+    }
+
+    #[test]
     fn a_broken_wsl_lists_no_distributions() {
         let mut system = windows(&["C:\\Windows\\System32\\wsl.exe"]);
         system.wsl = None;
         assert!(discover(&system).is_empty());
-        assert!(distributions(&[0x41]).is_empty());
+        // Half a unit of UTF-16.
+        assert!(distributions(&[0x00]).is_empty());
     }
 
     #[test]
