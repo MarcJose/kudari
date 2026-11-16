@@ -6,6 +6,7 @@
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::Point;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::search::Match;
@@ -104,6 +105,9 @@ const SEARCH_HIGHLIGHT: Rgb = Rgb {
     g: 0xbc,
     b: 0x4b,
 };
+/// The combining characters drawn on one cell. Accents, variation selectors and the joined
+/// emoji take a few; more only make every frame slower.
+const MAX_ZERO_WIDTH: usize = 16;
 const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
 const WHITE: Rgb = Rgb { r: 255, g: 255, b: 255 };
 
@@ -174,10 +178,12 @@ fn underline_rects(geometry: &Geometry, column: i32, line: i32, cells: f64, flag
 }
 
 /// The rectangles a cursor of this shape fills.
-fn cursor_rects(geometry: &Geometry, column: i32, line: i32, shape: CursorShape) -> Vec<Rect> {
+/// The shapes of the cursor over `cells` cells: two on a wide character, so that its glyph
+/// shows whole.
+fn cursor_rects(geometry: &Geometry, column: i32, line: i32, cells: f64, shape: CursorShape) -> Vec<Rect> {
     let x = geometry.origin_x + f64::from(column) * geometry.cell_width;
     let y = geometry.origin_y + f64::from(line) * geometry.cell_height;
-    let (w, h) = (geometry.cell_width, geometry.cell_height);
+    let (w, h) = (cells * geometry.cell_width, geometry.cell_height);
     let rect = |x, y, width, height| Rect { x, y, width, height };
     match shape {
         CursorShape::Block => vec![rect(x, y, w, h)],
@@ -215,6 +221,18 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
 
     let mut glyphs = Vec::new();
     let mut cursor_glyph = None;
+    // The matches come in the order of the cells, so one index walks along with them; a
+    // search over all matches for each cell took long with a frequent pattern.
+    let mut next_match = 0;
+    let mut in_match = |point: Point| {
+        while scene.matches.get(next_match).is_some_and(|found| *found.end() < point) {
+            next_match += 1;
+        }
+        scene
+            .matches
+            .get(next_match)
+            .is_some_and(|found| found.contains(&point))
+    };
     for cell in content.display_iter {
         let flags = cell.flags;
         if flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
@@ -236,7 +254,7 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
         }
         if selection.is_some_and(|range| range.contains(point)) {
             (foreground, back) = selection_colors(foreground, back, scheme, options.invert_selection);
-        } else if scene.matches.iter().any(|found| found.contains(&point)) {
+        } else if in_match(point) {
             back = SEARCH_HIGHLIGHT;
             foreground = BLACK;
         }
@@ -289,7 +307,8 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             // cells sit on whole pixels so that columns line up.
             let mut text = String::from(cell.c);
             if let Some(zero_width) = cell.zerowidth() {
-                text.extend(zero_width);
+                // A program can pile up any number on one cell, which every frame would shape.
+                text.extend(zero_width.iter().take(MAX_ZERO_WIDTH));
             }
             let (x, y) = geometry.baseline(column, line);
             glyphs.push(Paint::Text {
@@ -320,7 +339,11 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             scheme.background,
             fade,
         );
-        for rect in cursor_rects(geometry, column, line, shape) {
+        let cells = match cursor_glyph {
+            Some((_, flags)) if flags.contains(Flags::WIDE_CHAR) => 2.0,
+            _ => 1.0,
+        };
+        for rect in cursor_rects(geometry, column, line, cells, shape) {
             fill(rect, color, &mut paints);
         }
         if shape == CursorShape::Block
@@ -441,6 +464,84 @@ mod tests {
     }
 
     #[test]
+    fn bold_text_keeps_the_foreground_that_the_program_set() {
+        let scheme = crate::colors::active();
+        let term = term_with("\x1b]10;#00ff00\x07a\x1b[1mb");
+        let paints = frame(&term, &Options::default(), &scene(&scheme, &[], &[]));
+        let green = Rgb { r: 0, g: 255, b: 0 };
+        let colors: Vec<_> = texts(&paints)
+            .into_iter()
+            .map(|(text, color, _)| (text, color))
+            .collect();
+        assert!(
+            colors.contains(&("a", green)) && colors.contains(&("b", green)),
+            "{colors:?}"
+        );
+    }
+
+    #[test]
+    fn the_block_cursor_covers_a_wide_character_whole() {
+        // 你好 and the cursor moved back onto 好.
+        let scheme = crate::colors::active();
+        let term = term_with("\u{4f60}\u{597d}\x1b[2D");
+        let paints = frame(&term, &Options::default(), &scene(&scheme, &[], &[]));
+        let cursor = fills(&paints)
+            .into_iter()
+            .find(|(_, color)| *color == scheme.foreground)
+            .map(|(rect, _)| rect);
+        assert_eq!(cursor.map(|rect| rect.width), Some(2.0 * GEOMETRY.cell_width));
+        assert_eq!(
+            cursor_rects(&GEOMETRY, 2, 0, 2.0, CursorShape::Underline)[0].width,
+            2.0 * GEOMETRY.cell_width
+        );
+    }
+
+    #[test]
+    fn a_pile_of_combining_characters_is_cut() {
+        let scheme = crate::colors::active();
+        let accents: String = std::iter::repeat_n('\u{301}', 1000).collect();
+        let term = term_with(&format!("a{accents}"));
+        let paints = frame(&term, &Options::default(), &scene(&scheme, &[], &[]));
+        let drawn = texts(&paints)
+            .into_iter()
+            .find(|(text, _, _)| text.starts_with('a'))
+            .unwrap()
+            .0;
+        assert_eq!(drawn.chars().count(), 1 + MAX_ZERO_WIDTH);
+        // An ordinary accent stays as it is.
+        let term = term_with("e\u{301}");
+        let paints = frame(&term, &Options::default(), &scene(&scheme, &[], &[]));
+        assert!(texts(&paints).iter().any(|(text, _, _)| *text == "e\u{301}"));
+    }
+
+    #[test]
+    fn many_matches_highlight_the_cells_they_cover() {
+        // Every other cell matches, in the order a search gives them.
+        let scheme = crate::colors::active();
+        let term = term_with("ababababab\r\nbababababa");
+        let matches: Vec<Match> = (0..2_usize)
+            .flat_map(|line| (0..10_usize).map(move |column| (line, column)))
+            .filter(|(line, column)| (line + column) % 2 == 0)
+            .map(|(line, column)| {
+                let point = Point::new(Line(line as i32), Column(column));
+                point..=point
+            })
+            .collect();
+        let paints = frame(&term, &Options::default(), &scene(&scheme, &[], &matches));
+        let highlighted: Vec<String> = texts(&paints)
+            .into_iter()
+            .filter(|(_, color, _)| *color == BLACK)
+            .map(|(text, _, _)| text.to_string())
+            .collect();
+        assert_eq!(highlighted.concat(), "aaaaaaaaaa");
+        let backgrounds = fills(&paints)
+            .into_iter()
+            .filter(|(_, color)| *color == SEARCH_HIGHLIGHT)
+            .count();
+        assert_eq!(backgrounds, 10);
+    }
+
+    #[test]
     fn geometry_places_cells_on_the_grid() {
         assert_eq!(GEOMETRY.cell_rect(1, 2, 2.0), rect(14.0, 42.0, 20.0, 20.0));
         assert_eq!(GEOMETRY.baseline(1, 2), (14, 57));
@@ -484,18 +585,18 @@ mod tests {
     #[test]
     fn cursors_fill_their_shape() {
         assert_eq!(
-            cursor_rects(&GEOMETRY, 1, 0, CursorShape::Block),
+            cursor_rects(&GEOMETRY, 1, 0, 1.0, CursorShape::Block),
             vec![rect(14.0, 2.0, 10.0, 20.0)]
         );
         assert_eq!(
-            cursor_rects(&GEOMETRY, 1, 0, CursorShape::Underline),
+            cursor_rects(&GEOMETRY, 1, 0, 1.0, CursorShape::Underline),
             vec![rect(14.0, 20.0, 10.0, 2.0)]
         );
         assert_eq!(
-            cursor_rects(&GEOMETRY, 1, 0, CursorShape::Beam),
+            cursor_rects(&GEOMETRY, 1, 0, 1.0, CursorShape::Beam),
             vec![rect(14.0, 2.0, 2.0, 20.0)]
         );
-        let hollow = cursor_rects(&GEOMETRY, 1, 0, CursorShape::HollowBlock);
+        let hollow = cursor_rects(&GEOMETRY, 1, 0, 1.0, CursorShape::HollowBlock);
         assert_eq!(hollow.len(), 4);
         let thin = |length: f64| (length - 1.0).abs() < f64::EPSILON;
         assert!(hollow.iter().all(|rect| thin(rect.width) || thin(rect.height)));

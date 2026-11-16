@@ -83,11 +83,14 @@ pub fn resolve(color: Color, overrides: &Colors, scheme: &ColorScheme) -> Rgb {
     }
 }
 
-/// Bold text uses the intense variant of the eight base colors and the foreground.
+/// Bold text uses the intense variant of the eight base colors and the foreground. A
+/// foreground that the program set (OSC 10) stays, unless it set a bright one as well.
 #[must_use]
 pub fn brighten(color: Color, resolved: Rgb, overrides: &Colors, scheme: &ColorScheme) -> Rgb {
     match color {
-        Color::Named(NamedColor::Foreground) => scheme.foreground_intense,
+        Color::Named(NamedColor::Foreground) => overrides[NamedColor::BrightForeground]
+            .or(overrides[NamedColor::Foreground])
+            .unwrap_or(scheme.foreground_intense),
         Color::Named(name) if (name as usize) < 8 => resolve(Color::Indexed(name as u8 + 8), overrides, scheme),
         Color::Indexed(index) if index < 8 => resolve(Color::Indexed(index + 8), overrides, scheme),
         _ => resolved,
@@ -230,5 +233,20 @@ mod tests {
         assert_eq!(faint(Color::Spec(spec), spec, &scheme), dimmed);
         assert_eq!(faint(Color::Indexed(100), spec, &scheme), dimmed);
         assert_eq!(faint(foreground, spec, &scheme), dimmed);
+    }
+
+    #[test]
+    fn bold_keeps_a_foreground_that_the_program_set() {
+        // OSC 10 with green, as tools that set a theme of colors do: bold text stays green.
+        let scheme = active();
+        let mut overrides = Colors::default();
+        let green = Rgb { r: 0, g: 255, b: 0 };
+        overrides[NamedColor::Foreground] = Some(green);
+        let foreground = Color::Named(NamedColor::Foreground);
+        assert_eq!(brighten(foreground, green, &overrides, &scheme), green);
+        // A bright foreground of its own, if it set one.
+        let light = Rgb { r: 128, g: 255, b: 128 };
+        overrides[NamedColor::BrightForeground] = Some(light);
+        assert_eq!(brighten(foreground, green, &overrides, &scheme), light);
     }
 }

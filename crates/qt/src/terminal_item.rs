@@ -182,6 +182,10 @@ pub mod qobject {
         #[qinvokable]
         fn end_search(self: Pin<&mut Self>);
 
+        /// Forgets the matches, as for an empty search field.
+        #[qinvokable]
+        fn clear_search(self: Pin<&mut Self>);
+
         /// Scrolls during a selection that left the terminal.
         #[qinvokable]
         fn scroll_by(self: Pin<&mut Self>, lines: i32);
@@ -786,6 +790,12 @@ impl qobject::TerminalItem {
         };
         let json = lines.map(|lines| serde_json::to_string(&lines).unwrap_or_default());
         self.as_mut().set_search_lines(kde::qs(&json.unwrap_or_default()));
+    }
+
+    fn clear_search(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().view.clear_search();
+        self.as_mut().update_search_lines();
+        self.update();
     }
 
     fn end_search(mut self: Pin<&mut Self>) {

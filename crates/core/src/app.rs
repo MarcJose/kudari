@@ -76,9 +76,17 @@ pub struct Question {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Pending {
     CloseSession(SessionId),
-    CloseTerminal(SessionId),
+    /// The terminal that was active when the user asked, which may no longer be by the
+    /// time of the answer.
+    CloseTerminal {
+        session: SessionId,
+        terminal: TerminalId,
+    },
     Quit,
-    Paste { terminal: TerminalId, text: String },
+    Paste {
+        terminal: TerminalId,
+        text: String,
+    },
     Import,
 }
 
@@ -231,6 +239,10 @@ pub struct App {
     cell: (f64, f64),
     /// The tab a context menu was opened on; its actions apply to that session.
     menu_session: Option<MenuSession>,
+    /// The terminal that got the keyboard last. Only a change of the active terminal moves
+    /// the keyboard on its own, so that output, a shell ending in another tab or a call over
+    /// D-Bus do not take it from the search field or from a tab being renamed.
+    focused: std::cell::Cell<Option<TerminalId>>,
     /// Where new terminals start.
     pending_directories: Vec<(TerminalId, Option<PathBuf>)>,
     /// The shells chosen for terminals; a split starts the shell of the terminal it splits.
@@ -271,6 +283,7 @@ impl App {
             area: (0, 0),
             cell: (1.0, 1.0),
             menu_session: None,
+            focused: std::cell::Cell::new(None),
             pending_directories: Vec::new(),
             shells: BTreeMap::new(),
             running: BTreeSet::new(),
@@ -299,6 +312,15 @@ impl App {
     /// Takes new settings. Returns the old ones, to compare.
     pub fn replace_settings(&mut self, settings: Settings) -> Settings {
         std::mem::replace(&mut self.settings, settings)
+    }
+
+    /// Whether the screen of the window is chosen again after the settings changed from
+    /// `old`: only for another `Screen` setting. Chosen by the pointer, it stays where the
+    /// window opened, also while the user moves a slider of the settings on another screen;
+    /// the next time the window opens, it is chosen anew all the same.
+    #[must_use]
+    pub fn screen_changed(&self, old: &Settings) -> bool {
+        self.settings.screen != old.screen
     }
 
     #[must_use]
@@ -523,15 +545,21 @@ impl App {
         actions
     }
 
+    /// Gives the active terminal the keyboard.
     fn focus_active(&self) -> Vec<Effect> {
-        self.active_terminal().map(Effect::Focus).into_iter().collect()
+        let active = self.active_terminal();
+        self.focused.set(active);
+        active.map(Effect::Focus).into_iter().collect()
     }
 
-    /// Publishes the model and gives the active terminal the keyboard.
+    /// Publishes the model, and gives the active terminal the keyboard if another one is
+    /// active now.
     #[must_use]
     pub fn refresh(&self) -> Vec<Effect> {
         let mut effects = vec![Effect::Publish];
-        effects.extend(self.focus_active());
+        if self.active_terminal() != self.focused.get() {
+            effects.extend(self.focus_active());
+        }
         effects
     }
 
@@ -635,19 +663,23 @@ impl App {
         })]
     }
 
-    fn ask_close(&mut self, session: SessionId, terminal_only: bool) -> Vec<Effect> {
+    /// Asks before closing a protected session, or with `terminal` one of its terminals.
+    fn ask_close(&mut self, session: SessionId, terminal: Option<TerminalId>) -> Vec<Effect> {
         let intro = tr("@info", "<warning>This session is protected from closing.</warning>");
-        let (question, pending) = if terminal_only {
-            (
+        let (question, pending) = match terminal {
+            Some(terminal) => (
                 tr("@info", "Close this terminal anyway?"),
-                Pending::CloseTerminal(session),
-            )
-        } else {
-            (
+                Pending::CloseTerminal { session, terminal },
+            ),
+            None => (
                 tr("@info", "Close this session anyway?"),
                 Pending::CloseSession(session),
-            )
+            ),
         };
+        // The same question once: two answers would close two terminals.
+        if self.questions.values().any(|asked| *asked == pending) {
+            return Vec::new();
+        }
         let title = tr("@title:window", "Close Protected Session");
         self.ask(pending, title, format!("{intro}<br/><br/>{question}"), Confirm::Close)
     }
@@ -656,7 +688,7 @@ impl App {
     pub fn remove_session(&mut self, session: SessionId) -> Vec<Effect> {
         match self.stack.session(session).map(|found| found.closable) {
             Some(true) => self.finish_session_removal(session),
-            Some(false) => self.ask_close(session, false),
+            Some(false) => self.ask_close(session, None),
             None => Vec::new(),
         }
     }
@@ -669,7 +701,7 @@ impl App {
             .map(|found| (found.closable, found.active_terminal))
         {
             Some((true, terminal)) => self.close_terminal(terminal),
-            Some((false, _)) => self.ask_close(session, true),
+            Some((false, terminal)) => self.ask_close(session, Some(terminal)),
             None => Vec::new(),
         }
     }
@@ -723,7 +755,14 @@ impl App {
     }
 
     /// The answer to a question. Questions about sessions that are gone meanwhile do nothing.
+    /// The answer to a question. The terminal gets the keyboard back from the question.
     pub fn answer(&mut self, id: u32, accepted: bool) -> Vec<Effect> {
+        let mut effects = self.answered(id, accepted);
+        effects.extend(self.focus_active());
+        effects
+    }
+
+    fn answered(&mut self, id: u32, accepted: bool) -> Vec<Effect> {
         let Some(pending) = self.questions.remove(&id).filter(|_| accepted) else {
             return Vec::new();
         };
@@ -731,10 +770,12 @@ impl App {
             Pending::CloseSession(session) if self.stack.session(session).is_some() => {
                 self.finish_session_removal(session)
             }
-            Pending::CloseTerminal(session) => match self.stack.session(session).map(|found| found.active_terminal) {
-                Some(terminal) => self.close_terminal(terminal),
-                None => Vec::new(),
-            },
+            // The terminal the user was asked about, not the one active now.
+            Pending::CloseTerminal { session, terminal }
+                if self.stack.session_for_terminal(terminal) == Some(session) =>
+            {
+                self.close_terminal(terminal)
+            }
             Pending::Quit => vec![Effect::Quit],
             // The keyboard may have been locked while the user read the question.
             Pending::Paste { terminal, text } if self.accepts_input(terminal) => vec![Effect::Terminal {
@@ -742,7 +783,7 @@ impl App {
                 command: TerminalCommand::Paste(text),
             }],
             Pending::Import => vec![Effect::Import],
-            Pending::CloseSession(_) | Pending::Paste { .. } => Vec::new(),
+            Pending::CloseSession(_) | Pending::CloseTerminal { .. } | Pending::Paste { .. } => Vec::new(),
         }
     }
 
@@ -856,7 +897,9 @@ impl App {
 
     /// A terminal rang its bell. A program that rings in a loop must not flood the
     /// notifications.
-    pub fn terminal_bell(&mut self, terminal: TerminalId) -> Vec<Effect> {
+    /// A terminal rang its bell. `has_focus` tells whether Kudari has the keyboard: only then,
+    /// with the window shown and the session on it, is the bell seen and stays quiet.
+    pub fn terminal_bell(&mut self, terminal: TerminalId, has_focus: bool) -> Vec<Effect> {
         if self.last_bell.is_some_and(|last| last.elapsed() < BELL_INTERVAL) {
             return Vec::new();
         }
@@ -871,10 +914,12 @@ impl App {
             }
             _ => {}
         }
-        let visible = self
-            .stack
-            .active()
-            .is_some_and(|session| session.terminals.contains_key(&terminal));
+        let visible = self.window_visible
+            && has_focus
+            && self
+                .stack
+                .active()
+                .is_some_and(|session| session.terminals.contains_key(&terminal));
         let event = if visible { "BellVisible" } else { "BellInvisible" };
         vec![self.notify(
             event,
@@ -1044,6 +1089,8 @@ impl App {
 
     pub fn activate_terminal(&mut self, terminal: TerminalId) -> Vec<Effect> {
         self.stack.set_active_terminal(terminal);
+        // It has the keyboard already: the user clicked it.
+        self.focused.set(self.active_terminal());
         vec![Effect::Publish]
     }
 
@@ -1256,8 +1303,10 @@ impl App {
     }
 
     /// A dialog of the front end closed.
-    pub fn dialog_closed(&mut self) {
+    pub fn dialog_closed(&mut self) -> Vec<Effect> {
         self.focus_toggle_lock = true;
+        // The terminal gets the keyboard back from the dialog.
+        self.focus_active()
     }
 
     /// A tab menu opened for a session, whose actions then apply to it.
@@ -1402,6 +1451,24 @@ mod tests {
         app
     }
 
+    /// The effects without the keyboard going back to the terminal, which every answer ends
+    /// with.
+    fn unfocused(effects: Vec<Effect>) -> Vec<Effect> {
+        effects
+            .into_iter()
+            .filter(|effect| !matches!(effect, Effect::Focus(_)))
+            .collect()
+    }
+
+    #[test]
+    fn an_answered_question_gives_the_keyboard_back() {
+        let mut app = fresh();
+        let terminal = app.active_terminal().unwrap();
+        let asked = question(&app.ask_import()).unwrap();
+        assert_eq!(app.answer(asked.id, false), [Effect::Focus(terminal)]);
+        assert_eq!(app.dialog_closed(), [Effect::Focus(terminal)]);
+    }
+
     fn fresh() -> App {
         app_with(&[])
     }
@@ -1526,13 +1593,16 @@ mod tests {
         let asked = question(&effects).expect("asks");
         assert_eq!(asked.confirm, Confirm::Close);
         assert!(asked.text.contains("Close this session anyway?"));
-        assert!(app.answer(asked.id, false).is_empty());
+        assert!(unfocused(app.answer(asked.id, false)).is_empty());
         assert!(app.stack().session(second).is_some());
         let asked = question(&app.remove_session(second)).unwrap();
-        let closed = app.answer(asked.id, true);
+        let closed = unfocused(app.answer(asked.id, true));
         assert!(closed.iter().any(|effect| matches!(effect, Effect::Stop(_))));
         assert!(app.stack().session(second).is_none());
-        assert!(app.answer(asked.id, true).is_empty(), "an answer counts once");
+        assert!(
+            unfocused(app.answer(asked.id, true)).is_empty(),
+            "an answer counts once"
+        );
         assert!(app.remove_session(second).is_empty());
     }
 
@@ -1569,14 +1639,14 @@ mod tests {
         assert_eq!(asked.confirm, Confirm::Continue);
         assert!(asked.text.contains("line breaks"));
         assert_eq!(
-            app.answer(asked.id, true),
+            unfocused(app.answer(asked.id, true)),
             [Effect::Terminal {
                 terminal,
                 command: TerminalCommand::Paste("ls\nrm x\n".into())
             }]
         );
         let declined = question(&app.ask_paste(terminal, "ls\n".into())).unwrap();
-        assert!(app.answer(declined.id, false).is_empty());
+        assert!(unfocused(app.answer(declined.id, false)).is_empty());
     }
 
     #[test]
@@ -1585,9 +1655,9 @@ mod tests {
         let terminal = app.stack().active().unwrap().active_terminal;
         let asked = question(&app.ask_paste(terminal, "ls\n".into())).unwrap();
         let _ = app.terminal_toggled(Monitor::Keyboard, terminal, true);
-        assert!(app.answer(asked.id, true).is_empty());
+        assert!(unfocused(app.answer(asked.id, true)).is_empty());
         let asked = question(&app.ask_paste(99, "ls\n".into())).unwrap();
-        assert!(app.answer(asked.id, true).is_empty());
+        assert!(unfocused(app.answer(asked.id, true)).is_empty());
     }
 
     #[test]
@@ -1596,9 +1666,9 @@ mod tests {
         let asked = question(&app.ask_import()).unwrap();
         assert_eq!(asked.confirm, Confirm::Continue);
         assert!(asked.text.contains("Yakuake"));
-        assert_eq!(app.answer(asked.id, true), [Effect::Import]);
+        assert_eq!(unfocused(app.answer(asked.id, true)), [Effect::Import]);
         let asked = question(&app.ask_import()).unwrap();
-        assert!(app.answer(asked.id, false).is_empty());
+        assert!(unfocused(app.answer(asked.id, false)).is_empty());
     }
 
     #[test]
@@ -1608,7 +1678,7 @@ mod tests {
         app.stack_mut().session_mut(session).unwrap().closable = false;
         let asked = question(&app.close_active_terminal(session)).unwrap();
         assert!(asked.text.contains("Close this terminal anyway?"));
-        app.answer(asked.id, true);
+        unfocused(app.answer(asked.id, true));
         assert_eq!(app.stack().session(session).map(|found| found.terminals.len()), Some(1));
         app.stack_mut().session_mut(session).unwrap().closable = true;
         let closed = app.close_active_terminal(session);
@@ -1652,7 +1722,7 @@ mod tests {
         let asked = question(&busy.quit()).unwrap();
         assert_eq!(asked.confirm, Confirm::Quit);
         assert!(asked.text.contains("Several sessions are open.") && asked.text.ends_with("Quit Kudari?"));
-        assert_eq!(busy.answer(asked.id, true), [Effect::Quit]);
+        assert_eq!(unfocused(busy.answer(asked.id, true)), [Effect::Quit]);
         let session = busy.stack().active_id().unwrap();
         busy.stack_mut().session_mut(session).unwrap().closable = false;
         assert!(
@@ -1710,14 +1780,15 @@ mod tests {
     #[test]
     fn the_bell_rings_as_configured_but_not_in_a_burst() {
         let mut app = fresh();
+        app.toggle_window(true);
         let terminal = app.active_terminal().unwrap();
-        let rung = notified(&app.terminal_bell(terminal));
+        let rung = notified(&app.terminal_bell(terminal, true));
         assert_eq!(rung, [("BellVisible", "Bell in session \"Shell\".".to_string())]);
-        assert!(app.terminal_bell(terminal).is_empty(), "too soon");
+        assert!(app.terminal_bell(terminal, true).is_empty(), "too soon");
         let mut visual = app_with(&[("BellMode", "visual")]);
         let terminal = visual.active_terminal().unwrap();
         assert_eq!(
-            visual.terminal_bell(terminal),
+            visual.terminal_bell(terminal, true),
             [Effect::Highlight {
                 terminal,
                 persistent: false
@@ -1725,11 +1796,29 @@ mod tests {
         );
         let mut silent = app_with(&[("BellMode", "none")]);
         let terminal = silent.active_terminal().unwrap();
-        assert!(silent.terminal_bell(terminal).is_empty());
+        assert!(silent.terminal_bell(terminal, true).is_empty());
         let mut hidden = fresh();
+        hidden.toggle_window(true);
         let terminal = hidden.active_terminal().unwrap();
         hidden.add_session(SessionType::Single, &Here);
-        assert_eq!(notified(&hidden.terminal_bell(terminal))[0].0, "BellInvisible");
+        assert_eq!(notified(&hidden.terminal_bell(terminal, true))[0].0, "BellInvisible");
+    }
+
+    #[test]
+    fn the_bell_of_a_retracted_or_unfocused_window_is_heard() {
+        // The active session rings after a long command, while the window is retracted.
+        let mut retracted = fresh();
+        let terminal = retracted.active_terminal().unwrap();
+        assert!(!retracted.window_visible());
+        assert_eq!(notified(&retracted.terminal_bell(terminal, true))[0].0, "BellInvisible");
+        // Or the window stays open, and the user works in another program.
+        let mut elsewhere = fresh();
+        elsewhere.toggle_window(true);
+        let terminal = elsewhere.active_terminal().unwrap();
+        assert_eq!(
+            notified(&elsewhere.terminal_bell(terminal, false))[0].0,
+            "BellInvisible"
+        );
     }
 
     #[test]
@@ -1878,6 +1967,71 @@ mod tests {
         assert_eq!(Monitor::named("bogus"), None);
     }
 
+    fn focuses(effects: &[Effect]) -> Vec<TerminalId> {
+        effects
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::Focus(terminal) => Some(*terminal),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn events_elsewhere_leave_the_keyboard_where_the_user_types() {
+        // The user types in the search field or renames a tab of the active session.
+        let mut app = fresh();
+        app.add_session(SessionType::Single, &Here);
+        let background = app.stack().active_id().unwrap();
+        let (user, _) = app.add_session(SessionType::Single, &Here);
+        let _ = app.refresh();
+        let shell = app.stack().session(background).unwrap().active_terminal;
+        app.started(&[shell]);
+        // The shell of another tab ends, or a script renames a tab over D-Bus.
+        assert_eq!(focuses(&app.terminal_exited(shell)), [] as [TerminalId; 0]);
+        app.stack_mut().set_tab_title(user, "renamed", true);
+        assert_eq!(focuses(&app.refresh()), [] as [TerminalId; 0]);
+    }
+
+    fn question_id(effects: &[Effect]) -> Option<u32> {
+        effects.iter().find_map(|effect| match effect {
+            Effect::Ask(question) => Some(question.id),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn closing_a_protected_terminal_closes_the_one_asked_about() {
+        let mut app = fresh();
+        let (session, _) = app.add_session(SessionType::TwoHorizontal, &Here);
+        app.stack_mut().session_mut(session).unwrap().closable = false;
+        let terminals = app.stack().session(session).unwrap().terminal_ids();
+        let (asked, other) = (app.stack().session(session).unwrap().active_terminal, terminals[1]);
+        assert_ne!(asked, other);
+        let id = question_id(&app.close_active_terminal(session)).unwrap();
+        // Asked again before the answer: no second question that would close a second one.
+        assert_eq!(question_id(&app.close_active_terminal(session)), None);
+        // The user moves to the other terminal before answering.
+        app.activate_terminal(other);
+        let _ = app.answer(id, true);
+        let left = app.stack().session(session).unwrap().terminal_ids();
+        assert_eq!(left, [other], "closed the wrong terminal");
+    }
+
+    #[test]
+    fn a_change_of_the_active_terminal_moves_the_keyboard() {
+        let mut app = fresh();
+        let first = app.stack().active_id().unwrap();
+        let (second, effects) = app.add_session(SessionType::Single, &Here);
+        let second_terminal = app.stack().session(second).unwrap().active_terminal;
+        assert_eq!(focuses(&effects), [second_terminal]);
+        let first_terminal = app.stack().session(first).unwrap().active_terminal;
+        assert_eq!(focuses(&app.raise(first)), [first_terminal]);
+        // The active terminal ends: its neighbour gets the keyboard.
+        app.started(&[first_terminal]);
+        assert_eq!(focuses(&app.terminal_exited(first_terminal)), [second_terminal]);
+    }
+
     #[test]
     fn a_window_lost_with_its_screen_comes_back_with_the_next_shortcut() {
         let mut app = fresh();
@@ -1890,6 +2044,22 @@ mod tests {
         // A hidden window that loses its screen stays as it is.
         app.toggle_window(true);
         assert_eq!(app.window_lost(), []);
+    }
+
+    #[test]
+    fn only_another_screen_setting_moves_the_open_window() {
+        let table = Table::default();
+        let mut app = fresh();
+        app.toggle_window(true);
+        let before = app.settings().clone();
+        // The position slider, on a second screen while the window is open on the first.
+        table.write("Window", "Position", "30");
+        let old = app.replace_settings(Settings::load(&table));
+        assert!(!app.screen_changed(&old));
+        table.write("Window", "Screen", "2");
+        let old = app.replace_settings(Settings::load(&table));
+        assert!(app.screen_changed(&old));
+        assert_ne!(before.screen, app.settings().screen);
     }
 
     #[test]
