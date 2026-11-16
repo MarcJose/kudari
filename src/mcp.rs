@@ -86,6 +86,18 @@ fn waiting(result: &zbus::Result<impl Sized>) -> bool {
     matches!(result, Err(zbus::Error::FDO(error)) if matches!(**error, zbus::fdo::Error::InteractiveAuthorizationRequired(_)))
 }
 
+/// Reads a new terminal until its shell runs, which Kudari tells with a plain failure, or
+/// until [`START_TIMEOUT`] passed. Another answer, as when reading is switched off, says
+/// nothing about the start, and waiting for it would only cost time.
+fn wait_for_start(read: impl Fn() -> zbus::Result<String>) {
+    let start = Instant::now();
+    while matches!(read(), Err(zbus::Error::FDO(ref error)) if matches!(**error, zbus::fdo::Error::Failed(_)))
+        && start.elapsed() < START_TIMEOUT
+    {
+        sleep(Duration::from_millis(100));
+    }
+}
+
 /// Calls the interface, and while Kudari asks the user about the agent, calls again until
 /// the user answered or [`ANSWER_TIMEOUT`] passed.
 fn patiently<T>(call: impl Fn() -> zbus::Result<T>) -> Result<T, String> {
@@ -139,10 +151,7 @@ impl Instance for Dbus {
             .and_then(|value| value.get("terminal").and_then(Value::as_i64))
             .and_then(|id| i32::try_from(id).ok());
         if let Some(terminal) = terminal {
-            let start = Instant::now();
-            while block_on(agent.read_terminal(terminal, 1)).is_err() && start.elapsed() < START_TIMEOUT {
-                sleep(Duration::from_millis(100));
-            }
+            wait_for_start(|| block_on(agent.read_terminal(terminal, 1)));
         }
         Ok(opened)
     }
@@ -150,5 +159,42 @@ impl Instance for Dbus {
     fn close_session(&self, session: i32) -> Result<(), String> {
         let agent = self.agent()?;
         patiently(|| block_on(agent.close_session(session)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::*;
+
+    fn failing(error: zbus::fdo::Error) -> zbus::Result<String> {
+        Err(zbus::Error::FDO(Box::new(error)))
+    }
+
+    #[test]
+    fn only_a_starting_terminal_is_waited_for() {
+        // Reading switched off: no waiting at all.
+        let start = Instant::now();
+        let calls = Cell::new(0);
+        wait_for_start(|| {
+            calls.set(calls.get() + 1);
+            failing(zbus::fdo::Error::AccessDenied(
+                "Reading terminals is switched off".into(),
+            ))
+        });
+        assert_eq!(calls.get(), 1);
+        assert!(start.elapsed() < Duration::from_secs(1));
+        // A terminal that is still starting, then runs.
+        let calls = Cell::new(0);
+        wait_for_start(|| {
+            calls.set(calls.get() + 1);
+            if calls.get() < 3 {
+                failing(zbus::fdo::Error::Failed("The terminal is still starting.".into()))
+            } else {
+                Ok(String::new())
+            }
+        });
+        assert_eq!(calls.get(), 3);
     }
 }
