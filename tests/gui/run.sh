@@ -452,6 +452,12 @@ input drag 640 150 440 150; sleep 1
 sessions runCommandInTerminal "$left" "stty size > $work/size-after"; sleep 0.6
 check "dragging the splitter resizes the terminals" yes \
     "$([ -s "$work/size-after" ] && ! cmp -s "$work/size-before" "$work/size-after" && echo yes)"
+# A tab in the background keeps its size; it used to grow by the scroll bar and wrap again
+# on every switch of tabs.
+sessions raiseSession "$first"; sleep 0.6
+sessions runCommandInTerminal "$left" "stty size > $work/size-hidden"; sleep 0.6
+check "a hidden tab keeps its columns" "$(cat "$work/size-after")" "$(cat "$work/size-hidden" 2>/dev/null)"
+sessions raiseSession "$pair"; sleep 0.6
 input rclick 200 150; sleep 1; menu_entry 1
 check "the terminal menu splits the terminal" 3 "$(count "$pair")"
 sessions runCommandInTerminal "$left" "exit"; sleep 1

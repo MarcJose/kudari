@@ -73,8 +73,13 @@ Item {
     }
 
     function search(backwards) {
-        searchBar.failed = searchField.text.length > 0
-            && !terminal.find(searchField.text, backwards, caseButton.checked, regexButton.checked, highlightButton.checked);
+        if (searchField.text.length === 0) {
+            // An empty field finds nothing, and the matches of the text before go.
+            terminal.clearSearch();
+            searchBar.failed = false;
+            return;
+        }
+        searchBar.failed = !terminal.find(searchField.text, backwards, caseButton.checked, regexButton.checked, highlightButton.checked);
     }
 
     // F3 and Shift+F3 work with the bar closed, too.
@@ -141,8 +146,10 @@ Item {
         id: terminal
 
         anchors.fill: parent
-        anchors.leftMargin: scrollBar.visible && pane.config.ScrollBarPosition === "left" ? scrollBar.width : 0
-        anchors.rightMargin: scrollBar.visible && pane.config.ScrollBarPosition !== "left" ? scrollBar.width : 0
+        // From the setting, not from scrollBar.visible: that turns false with a hidden tab, and
+        // the terminal would get more columns there and wrap again on every switch of tabs.
+        anchors.leftMargin: pane.config.ScrollBarPosition === "left" ? scrollBar.width : 0
+        anchors.rightMargin: pane.config.ScrollBarPosition !== "left" && pane.config.ScrollBarPosition !== "hidden" ? scrollBar.width : 0
         terminalId: pane.terminalId
         termFont: metrics.font
         cellWidth: Math.round(cellMetrics.advanceWidth)

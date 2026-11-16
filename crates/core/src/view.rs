@@ -470,6 +470,8 @@ impl View {
     ) -> bool {
         let pattern = search_pattern(pattern, case_sensitive, regular_expression);
         let Ok(mut regex) = RegexSearch::new(&pattern) else {
+            // The matches of the pattern before do not belong to this one.
+            self.clear_search();
             return false;
         };
         let range = term.selection.as_ref().and_then(|selection| selection.to_range(term));
@@ -526,9 +528,14 @@ impl View {
 
     /// Closes the search and drops what it selected.
     pub fn end_search<T>(&mut self, term: &mut Term<T>) {
+        self.clear_search();
+        term.selection = None;
+    }
+
+    /// Forgets the pattern and its matches, as for an empty search field; the selection stays.
+    pub fn clear_search(&mut self) {
         self.search = None;
         self.visible_matches.clear();
-        term.selection = None;
     }
 }
 
@@ -1672,6 +1679,27 @@ mod tests {
             view.wheel(&full_screen, None, true, false, &context),
             [Effect::Scroll(3)]
         );
+    }
+
+    #[test]
+    fn an_empty_or_broken_pattern_leaves_no_old_matches() {
+        let mut term = term_with("abc one abc\r\nabc");
+        let mut view = View::default();
+        assert!(view.find(&mut term, "abc", false, false, true, true));
+        view.update_matches(&term);
+        assert_eq!(view.matches().len(), 3);
+        // A broken regular expression, as `foo(` while it is typed.
+        assert!(!view.find(&mut term, "abc(", false, false, true, true));
+        view.update_matches(&term);
+        assert!(view.matches().is_empty());
+        assert_eq!(view.search_lines(&term), None);
+        // The field emptied.
+        assert!(view.find(&mut term, "abc", false, false, true, true));
+        view.clear_search();
+        view.update_matches(&term);
+        assert!(view.matches().is_empty());
+        assert_eq!(view.search_lines(&term), None);
+        assert!(term.selection.is_some(), "the selection of the last match stays");
     }
 
     #[test]

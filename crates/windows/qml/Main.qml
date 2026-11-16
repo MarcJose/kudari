@@ -27,7 +27,7 @@ ApplicationWindow {
     readonly property int windowX: app.fullscreen ? 0 : Math.floor(workWidth * settings.position * (100 - settings.width) / 10000)
     // How far the window has slid in, from 0 to 1.
     property real shown: 0
-    property bool searchActive: false
+    readonly property bool searchActive: sessionArea.activeSearchOpen
     // True while the grip is being dragged. Terminals then only learn their new size on
     // release; every resize makes shells redraw their prompt.
     property bool gripDragged: false
@@ -356,7 +356,6 @@ ApplicationWindow {
 
             onWidthChanged: root.reportGeometry()
             onHeightChanged: root.reportGeometry()
-            onSearchOpenChanged: open => root.searchActive = open
         }
 
         TabBar {

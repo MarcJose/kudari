@@ -701,7 +701,8 @@ impl qobject::Controller {
     }
 
     pub fn terminal_bell(self: Pin<&mut Self>, terminal: TerminalId) {
-        self.update(|app| app.terminal_bell(terminal));
+        let has_focus = Terminals.has_focus();
+        self.update(|app| app.terminal_bell(terminal, has_focus));
     }
 
     fn answer_question(self: Pin<&mut Self>, id: i32, accepted: bool) {
@@ -921,7 +922,9 @@ impl qobject::Controller {
         if skin_changed {
             self.as_mut().apply_skin();
         }
-        self.as_mut().update_work_area();
+        if self.app.screen_changed(&old) {
+            self.as_mut().update_work_area();
+        }
         self.as_mut().publish_settings();
         self.as_mut().sync();
         if agents_changed {
@@ -1220,7 +1223,7 @@ impl qobject::Controller {
     pub fn dialog_active(mut self: Pin<&mut Self>, active: bool) {
         self.as_mut().set_dialog_open(active);
         if !active {
-            self.as_mut().rust_mut().app.dialog_closed();
+            self.update(App::dialog_closed);
         }
     }
 
