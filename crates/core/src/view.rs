@@ -307,12 +307,31 @@ impl View {
         text: &str,
         context: &Context,
     ) -> Vec<Effect> {
+        self.key_at(term, key, None, modifiers, text, context)
+    }
+
+    /// [`Self::key`] for a key in the row of digits, which picks the link of its number
+    /// whatever it types. With Shift held for the numbers, the key of 1 types `!`, and on
+    /// keyboards such as AZERTY it types `&` without Shift.
+    pub fn key_at<T: EventListener>(
+        &mut self,
+        term: &mut Term<T>,
+        key: Key,
+        digit: Option<u8>,
+        modifiers: Modifiers,
+        text: &str,
+        context: &Context,
+    ) -> Vec<Effect> {
         let options = context.options;
         let hints_held = !options.url_hints_modifiers.is_empty() && modifiers.held() == options.url_hints_modifiers;
         let mut effects = vec![Effect::Hints(hints_held)];
-        if let (true, Key::Character(digit @ '1'..='9')) = (hints_held, key) {
+        let digit = digit.filter(|digit| (1..=9).contains(digit)).or(match key {
+            Key::Character(character @ '1'..='9') => Some(character as u8 - b'0'),
+            _ => None,
+        });
+        if let (true, Some(digit)) = (hints_held, digit) {
             // The numbers that are shown, not a new look at the files under the lock.
-            let index = digit as usize - '1' as usize;
+            let index = usize::from(digit - 1);
             if let Some(link) = pick_hint(&self.hints, index, options.reverse_url_hints) {
                 effects.push(Effect::OpenLink(link.0.clone()));
                 effects.push(Effect::Hints(false));
@@ -1737,6 +1756,49 @@ mod tests {
         // A number without a link types as usual.
         let effects = view.key(&mut term, Key::Character('3'), held, "3", &context);
         assert_eq!(effects.first(), Some(&Effect::Hints(true)));
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::OpenLink(_))));
+    }
+
+    #[test]
+    fn numbers_with_shift_held_open_links_by_the_place_of_the_key() {
+        let mut term = term_with("a https://a.org b\r\nhttps://b.org");
+        let mut view = View::default();
+        let options = Options {
+            url_hints_modifiers: Modifiers::CONTROL | Modifiers::SHIFT,
+            ..Options::default()
+        };
+        let context = context(&options, true, &nowhere);
+        let held = Modifiers::CONTROL | Modifiers::SHIFT;
+        view.set_hints(links_on_screen(&term, None));
+        // With Shift, the key of 2 types `"`; the front end knows it as the key of 2.
+        assert_eq!(
+            view.key_at(&mut term, Key::Character('"'), Some(2), held, "\"", &context),
+            [
+                Effect::Hints(true),
+                Effect::OpenLink("https://b.org".into()),
+                Effect::Hints(false)
+            ]
+        );
+        // On AZERTY the key of 1 types `&`, also without Shift.
+        let azerty = Options {
+            url_hints_modifiers: Modifiers::CONTROL,
+            ..Options::default()
+        };
+        let context = self::context(&azerty, true, &nowhere);
+        let effects = view.key_at(
+            &mut term,
+            Key::Character('&'),
+            Some(1),
+            Modifiers::CONTROL,
+            "&",
+            &context,
+        );
+        assert!(
+            effects.contains(&Effect::OpenLink("https://a.org".into())),
+            "{effects:?}"
+        );
+        // Without the numbers held, the key types what it types.
+        let effects = view.key_at(&mut term, Key::Character('&'), Some(1), NONE, "&", &context);
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::OpenLink(_))));
     }
 

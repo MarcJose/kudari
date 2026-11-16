@@ -197,7 +197,7 @@ Item {
             if (event.key === Qt.Key_Control && mouse.containsMouse) {
                 pane.linkUnderMouse(mouse.mouseX, mouse.mouseY, Qt.ControlModifier);
             }
-            if (!keyPress(event.key, event.modifiers, event.text)) {
+            if (!keyPress(event.key, event.modifiers, event.text, event.nativeScanCode)) {
                 pane.controller.inputBlocked(pane.terminalId);
             }
             event.accepted = true;

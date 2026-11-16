@@ -229,6 +229,11 @@ hook SetSetting UrlHintsModifier ctrl+alt; sleep 0.3
 run "clear; printf 'see notes.txt:12:3 end\n'"
 input key 29 56 2; sleep 0.5
 check "a link number opens the file it shows" "$work/home/notes.txt:12|" "$(content "$work/edited")"
+# With Shift for the numbers, the key of 1 types "!"; its place still opens the first link.
+rm -f "$work/edited"
+hook SetSetting UrlHintsModifier ctrl+shift; sleep 0.3
+input key 29 42 2; sleep 0.5
+check "a link number opens with Shift held as well" "$work/home/notes.txt:12|" "$(content "$work/edited")"
 hook SetSetting UrlHintsModifier none; sleep 0.3
 hook SetSetting OpenLinksByClick false; hook SetSetting EditorCommand ""; sleep 0.3
 

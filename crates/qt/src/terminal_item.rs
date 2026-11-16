@@ -137,9 +137,10 @@ pub mod qobject {
         #[qinvokable]
         fn refresh(self: Pin<&mut Self>);
 
-        /// Handles a key. Returns false if a blocked key should be indicated.
+        /// Handles a key: `QKeyEvent::key`, `modifiers`, `text` and `nativeScanCode`. Returns
+        /// false if a blocked key should be indicated.
         #[qinvokable]
-        fn key_press(self: Pin<&mut Self>, key: i32, modifiers: i32, text: &QString) -> bool;
+        fn key_press(self: Pin<&mut Self>, key: i32, modifiers: i32, text: &QString, scan_code: i32) -> bool;
 
         #[qinvokable]
         fn mouse_press(self: Pin<&mut Self>, x: f64, y: f64, button: i32, clicks: i32, modifiers: i32);
@@ -536,13 +537,14 @@ impl qobject::TerminalItem {
         }
     }
 
-    fn key_press(self: Pin<&mut Self>, key: i32, modifiers: i32, text: &QString) -> bool {
+    fn key_press(self: Pin<&mut Self>, key: i32, modifiers: i32, text: &QString, scan_code: i32) -> bool {
         let (key, modifiers) = (qt_input::key(key), qt_input::modifiers(modifiers));
         if !*self.keyboard_enabled() {
             return modifiers.intersects(Modifiers::SHIFT | Modifiers::ALT | Modifiers::CONTROL);
         }
         let text = text.to_string();
-        self.handle(|view, term, context| view.key(term, key, modifiers, &text, context));
+        let digit = qt_input::digit_key(scan_code);
+        self.handle(|view, term, context| view.key_at(term, key, digit, modifiers, &text, context));
         true
     }
 
