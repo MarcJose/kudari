@@ -5,8 +5,6 @@
 //! a [`Listener`], which it installs with [`set_listener`].
 
 use std::collections::HashMap;
-#[cfg(unix)]
-use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
@@ -488,7 +486,7 @@ impl Backend {
             Err(error) => return Err(error.to_string()),
         };
         #[cfg(unix)]
-        let programs = Pty::new(pty.file().as_raw_fd(), pty.child().id() as i32);
+        let programs = Pty::of(pty.file(), pty.child().id() as i32).map_err(|error| error.to_string())?;
         #[cfg(windows)]
         let programs = Console::new(pty.child_watcher().pid().map_or(0, std::num::NonZeroU32::get));
 

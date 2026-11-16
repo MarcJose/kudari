@@ -4,36 +4,47 @@
 //! The programs of a terminal on Linux: the foreground process group of the PTY, and what
 //! `/proc` tells about it.
 
-use std::os::fd::RawFd;
+use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 
 use super::{Programs, Signal};
 
 /// The PTY of a terminal and the shell on it.
 pub struct Pty {
-    fd: RawFd,
+    /// A descriptor of its own of the PTY: the loop of the terminal closes its one when it
+    /// ends, and the number of that one goes to the next terminal that opens.
+    fd: Option<OwnedFd>,
     shell: i32,
     proc: PathBuf,
 }
 
 impl Pty {
-    /// The PTY with the descriptor `fd`, which must stay open as long as this lives or the
-    /// calls on it fail, and the process id of its shell.
-    #[must_use]
-    pub fn new(fd: RawFd, shell: i32) -> Self {
-        Self {
-            fd,
+    /// The PTY of `file`, and the process id of its shell.
+    ///
+    /// # Errors
+    /// When no descriptor is left for a copy of the one of `file`.
+    pub fn of(file: &impl AsFd, shell: i32) -> std::io::Result<Self> {
+        Ok(Self {
+            fd: Some(file.as_fd().try_clone_to_owned()?),
             shell,
             proc: PathBuf::from("/proc"),
-        }
+        })
+    }
+
+    fn raw(&self) -> RawFd {
+        self.fd.as_ref().map_or(-1, AsRawFd::as_raw_fd)
+    }
+
+    /// The process group in the foreground of the PTY, if it tells one.
+    fn foreground_group(&self) -> Option<i32> {
+        // SAFETY: plain system call; a descriptor of no terminal only makes it fail.
+        let group = unsafe { libc::tcgetpgrp(self.raw()) };
+        (group > 0).then_some(group)
     }
 
     /// The process group in the foreground of the PTY, or the shell.
     fn foreground(&self) -> i32 {
-        // SAFETY: plain system call; a stale descriptor only makes it fail, which falls
-        // back to the shell.
-        let group = unsafe { libc::tcgetpgrp(self.fd) };
-        if group > 0 { group } else { self.shell }
+        self.foreground_group().unwrap_or(self.shell)
     }
 
     fn file(&self, pid: i32, name: &str) -> PathBuf {
@@ -95,8 +106,12 @@ impl Programs for Pty {
             Signal::User1 => libc::SIGUSR1,
             Signal::User2 => libc::SIGUSR2,
         };
-        // SAFETY: plain system call; the process group may be gone, which only fails.
-        unsafe { libc::killpg(self.foreground(), number) };
+        // Only to a group that the PTY tells: the id of the shell can belong to another
+        // process by now, once the shell ended.
+        if let Some(group) = self.foreground_group() {
+            // SAFETY: plain system call; the process group may be gone, which only fails.
+            unsafe { libc::killpg(group, number) };
+        }
     }
 
     fn supports(&self, _signal: Signal) -> bool {
@@ -108,13 +123,13 @@ impl Programs for Pty {
         // them fail.
         unsafe {
             let mut attributes = std::mem::zeroed::<libc::termios>();
-            if libc::tcgetattr(self.fd, &raw mut attributes) == 0 {
+            if libc::tcgetattr(self.raw(), &raw mut attributes) == 0 {
                 if enabled {
                     attributes.c_iflag |= libc::IXON;
                 } else {
                     attributes.c_iflag &= !libc::IXON;
                 }
-                libc::tcsetattr(self.fd, libc::TCSANOW, &raw const attributes);
+                libc::tcsetattr(self.raw(), libc::TCSANOW, &raw const attributes);
             }
         }
     }
@@ -161,10 +176,67 @@ mod tests {
         std::fs::write(directory.join("cmdline"), b"ssh\0-p\x002222\0ada@box\0").unwrap();
         std::os::unix::fs::symlink("/work", directory.join("cwd")).unwrap();
         Pty {
-            fd: -1,
+            fd: None,
             shell: 42,
             proc: root.to_path_buf(),
         }
+    }
+
+    /// A new PTY, its master and its other end.
+    fn open_pty() -> (std::fs::File, std::fs::File) {
+        let (mut master, mut other) = (-1, -1);
+        // SAFETY: two out parameters; the names and settings may be null.
+        let opened = unsafe {
+            libc::openpty(
+                &raw mut master,
+                &raw mut other,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        assert_eq!(opened, 0);
+        // SAFETY: new descriptors that nothing else owns.
+        unsafe {
+            (
+                std::os::fd::FromRawFd::from_raw_fd(master),
+                std::os::fd::FromRawFd::from_raw_fd(other),
+            )
+        }
+    }
+
+    #[test]
+    fn the_number_of_the_pty_stays_its_own() {
+        let (master, _other) = open_pty();
+        let pty = Pty::of(&master, 1).unwrap();
+        let number = master.as_raw_fd();
+        // The loop of the terminal ends and closes its descriptor, whose number the next
+        // terminal that opens can get. The one of the PTY is another, and still open.
+        drop(master);
+        assert_ne!(pty.raw(), number);
+        // SAFETY: a plain query of a descriptor.
+        assert_ne!(unsafe { libc::fcntl(pty.raw(), libc::F_GETFD) }, -1);
+    }
+
+    #[test]
+    fn signals_go_only_to_a_group_that_the_pty_tells() {
+        use std::os::unix::process::CommandExt;
+
+        // A PTY whose group is not known, and a process with the id of its shell, which
+        // leads its group of processes, as a shell does.
+        let mut process = std::process::Command::new("sleep")
+            .arg("5")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let (reading, _writing) = std::io::pipe().unwrap();
+        let pty = Pty::of(&reading, process.id() as i32).unwrap();
+        pty.signal(Signal::Kill);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let alive = process.try_wait().unwrap().is_none();
+        let _ = process.kill();
+        let _ = process.wait();
+        assert!(alive, "the process with the id of the shell was ended");
     }
 
     #[test]
