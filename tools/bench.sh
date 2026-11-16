@@ -4,7 +4,7 @@
 # Measures how fast terminals take in output and, for Kudari, how long Qt Quick needs for
 # each frame meanwhile, to compare terminals and a change to the drawing before and after:
 #
-#   tools/bench.sh [--binary PATH] [--runs N] [--loads LOAD,...] [--scale N] [--keep] [TERMINAL...]
+#   tools/bench.sh [--binary PATH] [--runs N] [--loads LOAD,...] [--scale N] [--keep] [--keep-env] [TERMINAL...]
 #
 # The terminals are kudari, yakuake, konsole, alacritty, kitty, ghostty, contour and xterm;
 # without any, every one of them that is installed. Kudari is the installed one, or else the
@@ -13,6 +13,13 @@
 # slowest run of each load. --loads picks some of plain, color, frames and seq, --scale
 # scales the screen as for a HiDPI display, and --keep keeps the data and the logs of the
 # terminals.
+#
+# The report starts with what was measured on what: the build of Kudari with its hash and
+# origin, the processor and its clock, the versions of Qt, KWin and Mesa. It warns about a
+# busy computer, a clock that is not set for performance, and a release build that is newer
+# than the Kudari measured. Variables of Qt, Mesa, KWin and the dynamic loader (QT_*, QSG_*,
+# QML_*, MESA_*, LIBGL_*, __GL_*, KWIN_*, LD_*) would change the measurement silently; they
+# are removed, and --keep-env keeps them.
 #
 # All of them run full screen in a virtual KWin of 2560x1440, xterm through Xwayland, on a
 # D-Bus and with settings of their own, so the desktop and its settings stay out of it. The
@@ -154,6 +161,7 @@ runs=5
 scale=1
 loads="plain color frames seq"
 keep=
+keep_env=
 terminals=
 while [ $# -gt 0 ]; do
     case $1 in
@@ -168,19 +176,21 @@ while [ $# -gt 0 ]; do
             done
             shift 2
             ;;
-        -h | --help) sed -n '4,24s/^# \{0,1\}//p' "$0"; exit 0 ;;
+        --keep-env) keep_env=1; shift ;;
+        -h | --help) sed -n '4,31s/^# \{0,1\}//p' "$0"; exit 0 ;;
         *)
             case " $all " in
                 *" $1 "*) terminals="$terminals $1"; shift ;;
-                *) die "usage: tools/bench.sh [--binary PATH] [--runs N] [--loads LOAD,...] [--scale N] [--keep] [TERMINAL...]; the terminals are: $all" ;;
+                *) die "usage: tools/bench.sh [--binary PATH] [--runs N] [--loads LOAD,...] [--scale N] [--keep] [--keep-env] [TERMINAL...]; the terminals are: $all" ;;
             esac
             ;;
     esac
 done
 case $runs in '' | *[!0-9]* | 0) die "--runs needs a number of 1 or more" ;; esac
 case $scale in '' | *[!0-9.]* | *.*.* | .* | *.) die "--scale needs a number such as 2 or 1.5" ;; esac
+local_build="${CARGO_TARGET_DIR:-$tools/../target}/release/kudari"
 if [ -z "$binary" ]; then
-    binary=$(command -v kudari || echo "${CARGO_TARGET_DIR:-$tools/../target}/release/kudari")
+    binary=$(command -v kudari || echo "$local_build")
 fi
 if [ -z "$terminals" ]; then
     for terminal in $all; do
@@ -210,14 +220,24 @@ if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
     work=$(mktemp -d "${TMPDIR:-/tmp}/kudari-bench.XXXXXX")
     trap 'rm -rf "$work"; exit 1' INT TERM
     echo "Terminals:$terminals; Kudari: $binary; $runs runs; scale $scale"
+    # The variables that would change Qt, the drivers or what gets loaded, by name only.
+    variables=$(env | grep -oE '^(QT|QSG|QML|MESA|LIBGL|__GL|KWIN|LD)_[A-Za-z0-9_]*=' | tr -d = | sort -u | tr '\n' ' ')
+    unset_variables=
+    if [ -z "$keep_env" ]; then
+        for variable in $variables; do unset_variables="$unset_variables -u $variable"; done
+    fi
+    case " $terminals " in *" kudari "*) measured=$binary ;; *) measured= ;; esac
+    # shellcheck disable=SC2086 # the Kudari measured is one word or none
+    python3 "$tools/bench.py" environment "$work" $measured --local "$local_build" \
+        --variables "$(echo $variables | tr ' ' ',')" ${keep_env:+--keep-env}
     echo "Making the data ..."
     python3 "$tools/bench.py" data "$work"
     # The bus and the portals it starts complain about what the virtual session lacks; that
     # goes to a file, and the measurement itself writes to file descriptor 3.
-    # shellcheck disable=SC2086 # the terminals are words of their own
     # Qt's own render loop and backend, whatever the environment sets. A Kudari or Yakuake
     # that the bus would start finds neither the settings nor the services of the user.
-    if env -u WAYLAND_DISPLAY -u DISPLAY -u QSG_RENDER_LOOP -u QT_QUICK_BACKEND -u QSG_RHI_BACKEND \
+    # shellcheck disable=SC2086 # the terminals and the variables are words of their own
+    if env -u WAYLAND_DISPLAY -u DISPLAY -u QSG_RENDER_LOOP -u QT_QUICK_BACKEND -u QSG_RHI_BACKEND $unset_variables \
         XDG_CONFIG_HOME=/nonexistent XDG_DATA_HOME=/nonexistent KUDARI_BENCH_WORK="$work" \
         dbus-run-session -- "$0" --binary "$binary" --runs "$runs" --scale "$scale" --loads "$(echo $loads | tr " " ",")" $terminals \
         < /dev/null 3>&2 2> "$work/dbus.log"; then

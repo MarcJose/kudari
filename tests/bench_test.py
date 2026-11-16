@@ -77,8 +77,73 @@ class Report(unittest.TestCase):
         self.run_of("kudari-1", ["nothing of Qt Quick"])
         self.assertIn("kudari: no frame timings in its logs", self.report("kudari"))
 
+    def test_the_head_comes_first(self):
+        (self.directory / "environment.txt").write_text("Computer  Some CPU\n")
+        self.run_of("kudari-1", [threaded(0.01, 1)])
+        text = self.report("kudari")
+        self.assertLess(text.index("Computer  Some CPU"), text.index("runs per terminal"))
+
     def test_no_run_at_all_is_said_plainly(self):
         self.assertIn("No run finished", self.report("kudari"))
+
+
+MACHINE = {
+    "kernel": "7.0",
+    "threads": 16,
+    "load": 0.2,
+    "processor": "Some CPU",
+    "driver": "amd-pstate-epp",
+    "governor": "powersave",
+    "epp": "performance",
+    "boost": True,
+    "power profile": "performance",
+    "on battery": False,
+}
+SOFTWARE = {"Qt": "6.12.0", "KWin": "6.8.3", "Mesa": None}
+KUDARI = {
+    "path": "/usr/bin/kudari",
+    "sha256": "ab" * 32,
+    "modified": 0.0,
+    "version": "kudari 0.2.0",
+    "build id": "cd" * 20,
+    "compilers": ["rustc 1.100.0", "GCC 16.2.1"],
+    "debug info": False,
+    "package": "kudari-git 0.2.0-1",
+    "makepkg": ("-C force-frame-pointers=yes", "-O2"),
+}
+
+
+class Environment(unittest.TestCase):
+    def describe(self, kudari=None, removed=(), kept=False, **machine):
+        return bench.describe(kudari, {**MACHINE, **machine}, SOFTWARE, list(removed), kept)
+
+    def warnings(self, *arguments, **machine):
+        return [line for line in self.describe(*arguments, **machine) if line.startswith("Warning:")]
+
+    def test_a_quiet_computer_set_for_performance_gives_no_warning(self):
+        self.assertEqual(self.warnings(), [])
+
+    def test_the_build_measured_is_told_apart_by_hash_origin_and_flags(self):
+        lines = self.describe(KUDARI)
+        self.assertIn("package kudari-git 0.2.0-1", lines[0])
+        self.assertIn("sha256 abababababababab", lines[0])
+        self.assertIn("without debug info", lines[0])
+        self.assertIn("RUSTFLAGS=-C force-frame-pointers=yes CXXFLAGS=-O2", lines[1])
+        self.assertIn("Mesa unknown", "\n".join(lines))
+
+    def test_a_newer_local_build_is_named(self):
+        warnings = self.warnings({**KUDARI, "newer local build": "/src/target/release/kudari"})
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("/src/target/release/kudari is newer", warnings[0])
+
+    def test_load_battery_and_a_slow_clock_are_warned_about(self):
+        warnings = self.warnings(load=1.5, governor="powersave", epp="balance_performance", **{"on battery": True})
+        self.assertEqual(len(warnings), 3)
+        self.assertIn("powerprofilesctl launch -p performance", warnings[2])
+
+    def test_the_variables_say_whether_they_were_removed(self):
+        self.assertIn("QT_SCALE_FACTOR, LD_PRELOAD: removed", "\n".join(self.describe(removed=["QT_SCALE_FACTOR", "LD_PRELOAD"])))
+        self.assertIn("kept, with --keep-env", "\n".join(self.describe(removed=["QT_SCALE_FACTOR"], kept=True)))
 
 
 if __name__ == "__main__":
