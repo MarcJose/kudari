@@ -35,7 +35,7 @@ const MAX_SEQUENCE: usize = 4096;
 /// The most of one OSC sequence that reaches the emulator. vte keeps all of it in memory, so a
 /// program could print one without an end until it takes all memory and, with Kudari, every
 /// terminal; the rest is replaced by NUL, which vte drops inside OSC. Enough for OSC 52 to copy
-/// some MiB.
+/// some MiB; one that is longer copies nothing rather than its start.
 pub const MAX_OSC: usize = 8 << 20;
 
 /// What vte drops inside OSC: these bytes neither end it nor become part of it.
@@ -190,6 +190,11 @@ impl Scanner {
                     // vte keeps the separators apart, not in its buffer.
                     if *byte != b';' {
                         if self.length < self.limit {
+                            self.length += 1;
+                        } else if self.length == self.limit && self.sequence.starts_with(b"52;") {
+                            // The start of a text to copy is not the text: a byte that base64
+                            // does not know makes the copy fail as a whole.
+                            *byte = b'!';
                             self.length += 1;
                         } else {
                             *byte = 0;
@@ -705,6 +710,52 @@ mod tests {
                 "{start:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_text_to_copy_beyond_the_limit_is_not_copied_in_part() {
+        use alacritty_terminal::event::{Event, EventListener};
+        use alacritty_terminal::term::{Config, Term, test::TermSize};
+        use alacritty_terminal::vte::ansi::Processor;
+
+        #[derive(Clone, Default)]
+        struct Copies(Arc<Mutex<Vec<String>>>);
+        impl EventListener for Copies {
+            fn send_event(&self, event: Event) {
+                if let Event::ClipboardStore(_, text) = event {
+                    self.0.lock().unwrap_or_else(PoisonError::into_inner).push(text);
+                }
+            }
+        }
+
+        // As OSC 52 passes the scanner and then reaches the emulator: the length of each copy.
+        let copied = |selector: &str, text: &[u8]| -> Vec<usize> {
+            let copies = Copies::default();
+            let mut term = Term::new(Config::default(), &TermSize::new(80, 24), copies.clone());
+            let mut parser: Processor = Processor::default();
+            let mut scanner = Scanner::with_limit(LIMIT);
+            let mut bytes = format!("\x1b]52;{selector};").into_bytes();
+            bytes.extend(text);
+            bytes.push(0x07);
+            scanner.scan(&mut bytes, &Mutex::default(), &|| true);
+            parser.advance(&mut term, &bytes);
+            copies
+                .0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .map(String::len)
+                .collect()
+        };
+        // "ABC" in base64; a cut at the limit leaves whole groups of four for some selectors,
+        // as `pc` (four bytes counted with the 52), and none for others.
+        let long = b"QUJD".repeat((LIMIT + 4096) / 4);
+        for selector in ["pc", "c", "", "s0"] {
+            assert_eq!(copied(selector, &long), [0; 0], "{selector:?}");
+        }
+        // Within the limit, the whole text arrives.
+        let short = b"QUJD".repeat((LIMIT - 8) / 4);
+        assert_eq!(copied("pc", &short), [(LIMIT - 8) / 4 * 3]);
     }
 
     #[test]
