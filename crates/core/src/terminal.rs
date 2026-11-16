@@ -334,7 +334,11 @@ impl EventListener for Proxy {
                     });
                 }
             }
-            Event::PtyWrite(text) => self.reply(Reply::Text(text)),
+            // The flags of the kitty keyboard protocol in force, which `alacritty_terminal`
+            // reports with those that Kudari does not carry out.
+            Event::PtyWrite(text) => self.reply(Reply::Text(
+                crate::input::supported_keyboard_report(&text).unwrap_or(text),
+            )),
             Event::ColorRequest(index, format) => self.reply(Reply::Color(index, format)),
             Event::TextAreaSizeRequest(format) => self.reply(Reply::Size(format)),
             Event::ClipboardLoad(_, format) => self.reply(Reply::Paste(format)),

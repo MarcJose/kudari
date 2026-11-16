@@ -694,8 +694,8 @@ input wheel 130 8 15 3 1; input wheel 130 8 15 3; sleep 1
 check "the wheel sends an arrow key for each line to full-screen programs" yes \
     "$(tr '\033' E < "$work/arrows" | grep -qE '^(EO[AB]){3}$' && echo yes)"
 
-# The kitty keyboard protocol: a key that Shift changes has the code of its base key, as 2
-# for Ctrl+Shift+2, which types @.
+# The kitty keyboard protocol: a program learns which of its flags Kudari carries out, and a
+# key that Shift changes has the code of its base key, as 2 for Ctrl+Shift+2, which types @.
 hook SetSetting KittyKeyboard true; sleep 0.3
 cat > "$work/kitty" <<'EOF'
 import os, re, select, sys, termios, tty
@@ -716,6 +716,7 @@ with open(sys.argv[1], "wb") as out:
 EOF
 run "clear; python3 $work/kitty $work/kitty-out"
 sleep 0.5; input key 29 42 3; sleep 1
+check "a program learns the kitty flags that Kudari carries out" "E[?25u" "$(cut -d'|' -f1 "$work/kitty-out")"
 check "Ctrl+Shift+2 has the code of the 2 in the kitty protocol" "E[50;6u" "$(cut -d'|' -f2 "$work/kitty-out")"
 hook SetSetting KittyKeyboard false; sleep 0.3
 

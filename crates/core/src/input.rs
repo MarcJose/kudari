@@ -265,11 +265,39 @@ fn kitty_sequence(mode: TermMode, key: Key, base: Option<char>, modifiers: Modif
         }
         _ => return None,
     };
-    Some(if parameter > 1 {
-        format!("\x1b[{code};{parameter}u")
+    // The text that the key types, for programs that get every key as a code: the code is
+    // that of the base key, so Shift+7 tells nothing of the `/` that it types in German.
+    let typed: Vec<String> = if report_all && mode.contains(TermMode::REPORT_ASSOCIATED_TEXT) {
+        text.chars()
+            .filter(|character| !character.is_control())
+            .map(|character| u32::from(character).to_string())
+            .collect()
     } else {
-        format!("\x1b[{code}u")
+        Vec::new()
+    };
+    Some(match (parameter > 1, typed.is_empty()) {
+        (_, false) => format!(
+            "\x1b[{code};{};{}u",
+            if parameter > 1 {
+                parameter.to_string()
+            } else {
+                String::new()
+            },
+            typed.join(":")
+        ),
+        (true, true) => format!("\x1b[{code};{parameter}u"),
+        (false, true) => format!("\x1b[{code}u"),
     })
+}
+
+/// The flags of the kitty keyboard protocol that Kudari reports, of those a program set,
+/// in the answer to `CSI ? u`: not those that it does not carry out, reporting the release
+/// of keys (2) and their alternate keys (4). A program that asks then knows what it gets.
+#[must_use]
+pub fn supported_keyboard_report(answer: &str) -> Option<String> {
+    const UNSUPPORTED: u32 = 2 | 4;
+    let flags: u32 = answer.strip_prefix("\x1b[?")?.strip_suffix('u')?.parse().ok()?;
+    Some(format!("\x1b[?{}u", flags & !UNSUPPORTED))
 }
 
 /// Whether the legacy sequence of a key holds its modifiers in a parameter, as `CSI 1;3A`
@@ -574,6 +602,46 @@ mod tests {
             kitty_sequence(mode, Key::Character('/'), None, CONTROL | SHIFT, "/").as_deref(),
             Some("\x1b[47;6u")
         );
+    }
+
+    #[test]
+    fn every_key_as_a_code_carries_its_text_when_asked() {
+        let all = TermMode::REPORT_ALL_KEYS_AS_ESC;
+        let with_text = all | TermMode::REPORT_ASSOCIATED_TEXT;
+        // Shift+7 on a German keyboard types a slash.
+        assert_eq!(
+            kitty_sequence(with_text, Key::Character('/'), Some('7'), SHIFT, "/").as_deref(),
+            Some("\x1b[55;2;47u")
+        );
+        // Without modifiers, their field stays empty; several characters are joined by colons.
+        assert_eq!(
+            kitty_sequence(with_text, Key::Character('A'), Some('A'), NONE, "a").as_deref(),
+            Some("\x1b[97;;97u")
+        );
+        assert_eq!(
+            kitty_sequence(with_text, Key::Other, None, NONE, "ab"),
+            None,
+            "only keys with a code"
+        );
+        // No text for keys that type none, nor without the flag.
+        assert_eq!(
+            kitty_sequence(with_text, Key::Return, None, NONE, "\r").as_deref(),
+            Some("\x1b[13u")
+        );
+        assert_eq!(
+            kitty_sequence(all, Key::Character('/'), Some('7'), SHIFT, "/").as_deref(),
+            Some("\x1b[55;2u")
+        );
+    }
+
+    #[test]
+    fn flags_that_kudari_does_not_carry_out_are_not_reported() {
+        // All five set: the release of keys (2) and alternate keys (4) are not done.
+        assert_eq!(supported_keyboard_report("\x1b[?31u").as_deref(), Some("\x1b[?25u"));
+        assert_eq!(supported_keyboard_report("\x1b[?1u").as_deref(), Some("\x1b[?1u"));
+        // Other answers pass unchanged.
+        assert_eq!(supported_keyboard_report("\x1b[?6n"), None);
+        assert_eq!(supported_keyboard_report("\x1b[0n"), None);
     }
 
     #[test]
