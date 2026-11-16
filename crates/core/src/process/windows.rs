@@ -259,19 +259,33 @@ mod tests {
             .args([
                 "-NoProfile",
                 "-Command",
-                "$p = Start-Process charmap -PassThru; Start-Sleep 4; $p | Stop-Process",
+                "$p = Start-Process charmap -PassThru; Start-Sleep 30; $p | Stop-Process",
             ])
             .spawn()
             .unwrap();
         let console = Console::new(shell.id());
-        std::thread::sleep(std::time::Duration::from_millis(2500));
-        let (processes, foreground) = console.foreground();
-        let started = processes
-            .iter()
-            .any(|process| process.parent == shell.id() && process.name.eq_ignore_ascii_case("charmap.exe"));
+        // PowerShell can take its time to start on a machine that just booted.
+        let charmap = (0..200).find_map(|_| {
+            let (processes, _) = console.foreground();
+            let found = processes
+                .iter()
+                .find(|process| process.parent == shell.id() && process.name.eq_ignore_ascii_case("charmap.exe"))
+                .map(|process| process.id);
+            if found.is_none() {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            found
+        });
+        let (_, foreground) = console.foreground();
         let busy = console.is_busy();
+        if let Some(charmap) = charmap {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/PID", &charmap.to_string()])
+                .output();
+        }
+        let _ = shell.kill();
         let _ = shell.wait();
-        assert!(started, "charmap did not start");
+        assert!(charmap.is_some(), "charmap did not start");
         assert!(!busy, "foreground {foreground}");
     }
 
