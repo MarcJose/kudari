@@ -11,7 +11,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::ini::parse_ini;
+use crate::ini::{kconfig_list, kconfig_unescape, parse_ini};
 
 /// Settings that mean the same in `yakuakerc` and `kudarirc`.
 const SHARED_SETTINGS: [(&str, &str); 18] = [
@@ -73,8 +73,13 @@ pub struct Migration {
     pub key_table: Option<PathBuf>,
 }
 
+/// A file of `KConfig`, with its values as `KConfig` reads them.
 fn read_ini(path: &Path) -> Option<Ini> {
-    fs::read_to_string(path).ok().map(|text| parse_ini(&text))
+    let mut ini = parse_ini(&fs::read_to_string(path).ok()?);
+    for value in ini.values_mut().flat_map(|group| group.values_mut()) {
+        *value = kconfig_unescape(value);
+    }
+    Some(ini)
 }
 
 /// A file or directory name from a configuration file must stay inside its directory.
@@ -269,8 +274,8 @@ fn read_profile(profile: &Ini, paths: &Paths, migration: &mut Migration) {
     }
     if let Some(environment) = value("General", "Environment") {
         // A comma-separated list, of which `TERM` and `COLORTERM` are Kudari's own business.
-        let custom: Vec<&str> = environment
-            .split(',')
+        let custom: Vec<String> = kconfig_list(environment)
+            .into_iter()
             .filter(|entry| !entry.starts_with("TERM=") && !entry.starts_with("COLORTERM="))
             .collect();
         set("Environment", custom.join("\n"));
@@ -482,14 +487,14 @@ mod tests {
         home.write("config/konsolerc", "[Desktop Entry]\nDefaultProfile=Mine.profile\n");
         home.write(
             "data/konsole/Mine.profile",
-            "[General]\nEnvironment=TERM=xterm-256color,COLORTERM=truecolor,EDITOR=vim\nTerminalMargin=5\n\
+            "[General]\nEnvironment=TERM=xterm-256color,COLORTERM=truecolor,EDITOR=vim,GREP=a\\\\,b\nTerminalMargin=5\n\
              TerminalCenter=true\n[Terminal Features]\nVerticalLine=true\nVerticalLineAtChar=100\nLineNumbers=2\n\
              AutoSaveInterval=30000\n[Interaction Options]\nTripleClickMode=1\nRightClickPasteMode=2\n\
              CopyTextAsHTML=false\n",
         );
         let migration = read_with_defaults(&home).unwrap();
         let value = |key: &str| setting(&migration, key);
-        assert_eq!(value("Environment"), Some("EDITOR=vim"));
+        assert_eq!(value("Environment"), Some("EDITOR=vim\nGREP=a,b"));
         assert_eq!(value("Margin"), Some("4"));
         assert_eq!(value("CenterContent"), Some("true"));
         assert_eq!(value("VerticalLine"), Some("100"));
@@ -506,10 +511,12 @@ mod tests {
         home.write("config/konsolerc", "[Desktop Entry]\nDefaultProfile=Mine.profile\n");
         home.write(
             "data/konsole/Mine.profile",
-            "[General]\nLocalTabTitleFormat=%n\nSilenceSeconds=30\n[Scrolling]\nScrollBarPosition=0\n[Cursor Options]\nBlinkingCursorEnabled=true\n",
+            "[General]\nLocalTabTitleFormat=%n\\s\nCommand=zsh -c 'echo a\\\\\\\\b'\nSilenceSeconds=30\n[Scrolling]\nScrollBarPosition=0\n[Cursor Options]\nBlinkingCursorEnabled=true\n",
         );
         let migration = read_with_defaults(&home).unwrap();
-        assert_eq!(setting(&migration, "TitleFormat"), Some("%n"));
+        // KConfig wrote the space at the end and the backslash escaped.
+        assert_eq!(setting(&migration, "TitleFormat"), Some("%n "));
+        assert_eq!(setting(&migration, "Command"), Some("zsh -c 'echo a\\\\b'"));
         assert_eq!(setting(&migration, "SilenceSeconds"), Some("30"));
         assert_eq!(setting(&migration, "ScrollBarPosition"), Some("left"));
         assert_eq!(setting(&migration, "BlinkingCursor"), Some("true"));
