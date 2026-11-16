@@ -374,6 +374,15 @@ hook SetSetting Width 70; sleep 0.5
 check "a new size shows the columns and lines" yes "$(shown)"
 hook SetSetting Width 90; sleep 1.2
 sessions removeSession "$(active)"; sleep 0.6
+# The search bar is as wide as the terminal, beside the scrollbar wherever that is.
+for position in left hidden right; do
+    hook SetSetting ScrollBarPosition "$position"; sleep 0.5
+    hook Trigger edit_find; sleep 0.5
+    check "the search bar lines up with the terminal, scrollbar $position" \
+        "$(hook Property terminal x) $(hook Property terminal width)" \
+        "$(hook Property searchBar x) $(hook Property searchBar width)"
+    input key 1; sleep 0.3
+done
 hook Trigger new-session-two-horizontal; sleep 1; left_right=$(active)
 hook Trigger new-session-two-vertical; sleep 1; top_bottom=$(active)
 hook Trigger new-session-quad; sleep 1.2; quad=$(active)

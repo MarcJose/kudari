@@ -150,6 +150,7 @@ Item {
         // Whether the terminal got its first size: that one is no change to show.
         property bool sized: false
 
+        objectName: "terminal"
         anchors.fill: parent
         // From the setting, not from scrollBar.visible: that turns false with a hidden tab, and
         // the terminal would get more columns there and wrap again on every switch of tabs.
@@ -476,11 +477,14 @@ Item {
 
         property bool failed: false
 
+        objectName: "searchBar"
         visible: false
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.rightMargin: scrollBar.width
+        // As wide as the terminal, beside the scrollbar wherever that is.
+        anchors.leftMargin: terminal.anchors.leftMargin
+        anchors.rightMargin: terminal.anchors.rightMargin
         height: searchRow.implicitHeight + pane.theme.smallSpacing * 2
         color: pane.theme.backgroundColor
 
