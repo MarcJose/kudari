@@ -29,6 +29,10 @@
 namespace
 {
 QSystemTrayIcon *s_tray = nullptr;
+// Whether the user wants the icon in the tray; without it, it shows for a message alone.
+bool s_trayWanted = true;
+// Hides the icon again once a message that needed it has shown.
+QTimer *s_trayHide = nullptr;
 
 #ifdef Q_OS_WIN
 constexpr int HOTKEY_ID = 1;
@@ -332,14 +336,33 @@ void rk_win_setup_tray(const QString &toggleText, const QString &quitText)
 
 void rk_win_set_tray_visible(bool visible)
 {
-    if (s_tray) {
+    s_trayWanted = visible;
+    // An icon that shows for a message stays until the message has shown.
+    if (s_tray && (visible || !s_trayHide || !s_trayHide->isActive())) {
         s_tray->setVisible(visible);
     }
 }
 
 void rk_win_notify(const QString &title, const QString &text)
 {
-    if (s_tray && s_tray->isVisible()) {
-        s_tray->showMessage(title, text, s_tray->icon());
+    if (!s_tray) {
+        return;
     }
+    // Windows shows the messages of a program through its icon in the tray. Without the
+    // icon, it shows for the message, as long as a message stays on screen, and goes again.
+    if (!s_trayWanted) {
+        if (!s_trayHide) {
+            s_trayHide = new QTimer(s_tray);
+            s_trayHide->setSingleShot(true);
+            s_trayHide->setInterval(10000);
+            QObject::connect(s_trayHide, &QTimer::timeout, s_tray, [] {
+                if (!s_trayWanted) {
+                    s_tray->setVisible(false);
+                }
+            });
+        }
+        s_tray->setVisible(true);
+        s_trayHide->start();
+    }
+    s_tray->showMessage(title, text, s_tray->icon());
 }
