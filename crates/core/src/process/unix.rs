@@ -159,6 +159,24 @@ impl Programs for Pty {
         true
     }
 
+    /// A stopped process gets its hangup only when it runs again, which the kernel sees to
+    /// when a terminal goes; `alacritty_terminal` sends the hangup alone and then waits for
+    /// the shell, forever if it is stopped. The shell is not waited for yet, so its id is
+    /// still its own.
+    fn hang_up(&self) {
+        let groups = [
+            Some(self.shell),
+            self.foreground_group().filter(|group| *group != self.shell),
+        ];
+        for group in groups.into_iter().flatten() {
+            // SAFETY: plain system calls; a group that is gone only makes them fail.
+            unsafe {
+                libc::killpg(group, libc::SIGHUP);
+                libc::killpg(group, libc::SIGCONT);
+            }
+        }
+    }
+
     fn set_flow_control(&self, enabled: bool) {
         // SAFETY: `attributes` is valid for both calls, and a stale descriptor only makes
         // them fail.

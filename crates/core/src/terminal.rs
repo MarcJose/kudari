@@ -913,6 +913,7 @@ pub fn auto_save(id: TerminalId) {
 pub fn stop(id: TerminalId) {
     let removed = backends().remove(&id);
     if let Some(backend) = removed {
+        backend.programs.hang_up();
         let _ = backend.notifier.0.send(alacritty_terminal::event_loop::Msg::Shutdown);
     }
 }
