@@ -142,10 +142,19 @@ fn parse_environment(text: &str) -> impl Iterator<Item = (String, String)> + '_ 
 }
 
 pub fn apply_options(options: Options) {
-    *OPTIONS.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(options);
+    let flow_control = options.flow_control;
+    let before = OPTIONS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .replace(options);
+    // Programs such as `nano` and `emacs` switch flow control off for themselves; setting it
+    // again on every change of the settings or the theme would take Ctrl+S from them.
+    let changed = before.is_none_or(|before| before.flow_control != flow_control);
     for backend in backends().values() {
         backend.apply_config();
-        backend.apply_flow_control();
+        if changed {
+            backend.apply_flow_control();
+        }
     }
 }
 

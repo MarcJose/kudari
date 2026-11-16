@@ -276,6 +276,14 @@ cp /usr/share/color-schemes/BreezeDark.colors "$XDG_CONFIG_HOME/kdeglobals"
 kwriteconfig6 --notify --file kdeglobals --group General --key KudariTest 1; sleep 1.5
 check "the terminal follows a theme change while running" yes "$([ "$(background)" != "$light" ] && echo yes || echo no)"
 
+# A program that switched flow control off keeps it off while the settings change: nano and
+# emacs save with Ctrl+S.
+run "sh -c 'stty -ixon; sleep 2; stty -a; stty ixon' > $work/ixon"
+hook SetSetting SilenceSeconds 2; sleep 2.5
+hook SetSetting SilenceSeconds 1; sleep 0.2
+check "a change of the settings leaves flow control to the program" -ixon \
+    "$(tr -s ' ;' '\n' < "$work/ixon" | grep -x -- '-\{0,1\}ixon')"
+
 setting() { sed -n "s/^$1=//p" "$work/config/kudarirc"; }
 
 # The bar at the bottom: two tabs titled "~ : sh", the close button of the second at 221.
