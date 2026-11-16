@@ -513,6 +513,13 @@ impl App {
                         "Agents may close only the sessions they opened themselves.".to_string(),
                     ));
                 }
+                // A session the user protected would only ask the user, while the agent took
+                // the answer for done; the protection is the user's decision.
+                if self.stack().session(session).is_some_and(|found| !found.closable) {
+                    return Err(Error::Denied(
+                        "The user protected this session from closing; ask the user to close it.".to_string(),
+                    ));
+                }
                 effects.extend(self.remove_session(session));
                 Ok(String::new())
             }
@@ -1168,6 +1175,15 @@ mod tests {
             let (other, _) = app.agent_request(Some("b"), Request::Close { session }, &host);
             assert!(matches!(other, Err(Error::Denied(_))), "another agent: {other:?}");
             assert!(app.stack().session(session).is_some());
+            // A session the user protected stays, and the agent learns why.
+            app.stack_mut().session_mut(session).unwrap().closable = false;
+            let (protected, effects) = app.agent_request(Some("a"), Request::Close { session }, &host);
+            assert!(matches!(protected, Err(Error::Denied(_))), "{protected:?}");
+            assert!(
+                !effects.iter().any(|effect| matches!(effect, Effect::Ask { .. })),
+                "{effects:?}"
+            );
+            app.stack_mut().session_mut(session).unwrap().closable = true;
             assert_eq!(ask(&mut app, Request::Close { session }, &host), Ok(String::new()));
             assert!(app.stack().session(session).is_none());
         }
