@@ -344,7 +344,12 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             });
         }
         if point == cursor.point {
-            cursor_glyph = Some((cell.c, flags));
+            // The whole cell, with its accents, which the block cursor covers.
+            let mut text = String::from(cell.c);
+            if let Some(zero_width) = cell.zerowidth() {
+                text.extend(zero_width.iter().take(MAX_ZERO_WIDTH));
+            }
+            cursor_glyph = Some((text, cell.c, flags, is_picture(flags, cell.zerowidth())));
         }
     }
     paints.append(&mut glyphs);
@@ -364,22 +369,22 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             fade,
         );
         let cells = match cursor_glyph {
-            Some((_, flags)) if flags.contains(Flags::WIDE_CHAR) => 2.0,
+            Some((_, _, flags, _)) if flags.contains(Flags::WIDE_CHAR) => 2.0,
             _ => 1.0,
         };
         for rect in cursor_rects(geometry, column, line, cells, shape) {
             fill(rect, color, &mut paints);
         }
         if shape == CursorShape::Block
-            && let Some((glyph, flags)) = cursor_glyph.filter(|(glyph, _)| !glyph.is_whitespace())
+            && let Some((text, glyph, flags, picture)) = cursor_glyph.filter(|(_, glyph, ..)| !glyph.is_whitespace())
         {
             let (x, y) = geometry.baseline(column, line);
             paints.push(Paint::Text {
                 x,
                 y,
-                text: glyph.to_string(),
+                text,
                 color: options.cursor_text_color.unwrap_or(scheme.background),
-                font: font_style(flags, glyph, is_picture(flags, None)),
+                font: font_style(flags, glyph, picture),
             });
         }
     }
@@ -485,6 +490,26 @@ mod tests {
                 Paint::Text { .. } => None,
             })
             .collect()
+    }
+
+    /// The text that the block cursor draws again over its cell.
+    fn cursor_text(output: &str, options: &Options) -> Option<String> {
+        let scheme = crate::colors::active();
+        let color = options.cursor_text_color.unwrap_or(scheme.background);
+        let paints = frame(&term_with(output), options, &scene(&scheme, &[], &[]));
+        paints.iter().rev().find_map(|paint| match paint {
+            Paint::Text { text, color: drawn, .. } if *drawn == color => Some(text.clone()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn the_block_cursor_draws_the_accents_of_its_cell() {
+        // An e with a combining acute accent, the cursor on it.
+        assert_eq!(
+            cursor_text("e\u{301}x\x08\x08", &Options::default()).as_deref(),
+            Some("e\u{301}")
+        );
     }
 
     #[test]
