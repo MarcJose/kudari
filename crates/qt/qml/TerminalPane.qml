@@ -240,14 +240,22 @@ Item {
             onTriggered: terminal.cursorHidden = !terminal.cursorHidden
         }
 
-        // The fading variant of the blinking cursor.
-        SequentialAnimation on cursorFade {
-            running: terminal.cursorBlinks && terminal.focused && (pane.config.AnimatedCursor ?? false)
-            loops: Animation.Infinite
-            onRunningChanged: terminal.cursorFade = 1
+        // The fading variant of the blinking cursor, in a second. Its brightness comes from the
+        // time that passed: an animation of Qt Quick moves with the frames of the primary
+        // screen, too fast or in steps when Kudari is on a screen with another rate.
+        Timer {
+            property real start: 0
 
-            NumberAnimation { from: 1; to: 0; duration: 500; easing.type: Easing.InOutSine }
-            NumberAnimation { from: 0; to: 1; duration: 500; easing.type: Easing.InOutSine }
+            function reset() {
+                start = Date.now();
+                terminal.cursorFade = 1;
+            }
+
+            interval: 33
+            repeat: true
+            running: terminal.cursorBlinks && terminal.focused && (pane.config.AnimatedCursor ?? false)
+            onRunningChanged: Qt.callLater(reset)
+            onTriggered: terminal.cursorFade = 0.5 + 0.5 * Math.cos(2 * Math.PI * (Date.now() - start) / 1000)
         }
 
         // Carries selected text to other programs and terminals.
