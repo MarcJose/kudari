@@ -19,7 +19,7 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::color::{COUNT, Colors};
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::{Config, MIN_COLUMNS, Term, TermMode};
+use alacritty_terminal::term::{ClipboardType, Config, MIN_COLUMNS, Term, TermMode};
 use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::{CursorStyle, Handler, Processor, Rgb, StdSyncHandler};
 
@@ -238,7 +238,19 @@ struct Mailbox {
     title: Mutex<String>,
     /// The text the program copied last, until the user interface takes it.
     copied: Mutex<Option<String>>,
+    /// The same for the primary selection, which a middle click pastes.
+    selected: Mutex<Option<String>>,
     replies: Mutex<Vec<Reply>>,
+}
+
+impl Mailbox {
+    /// Where the text copied for `target` waits.
+    fn slot(&self, target: Selection) -> &Mutex<Option<String>> {
+        match target {
+            Selection::Clipboard => &self.copied,
+            Selection::Primary => &self.selected,
+        }
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -287,12 +299,17 @@ impl EventListener for Proxy {
             // The titles are read with the output, so they need no work of their own.
             Event::Title(title) => *lock(&mailbox.title) = title,
             Event::ResetTitle => lock(&mailbox.title).clear(),
-            Event::ClipboardStore(_, text) => {
-                if lock(&mailbox.copied).replace(text).is_none() {
+            // OSC 52 with `p` or `s`, as `tmux` and `neovim` send it, names the primary selection.
+            Event::ClipboardStore(kind, text) => {
+                let target = match kind {
+                    ClipboardType::Clipboard => Selection::Clipboard,
+                    ClipboardType::Selection => Selection::Primary,
+                };
+                if lock(mailbox.slot(target)).replace(text).is_none() {
                     let mailbox = Arc::clone(mailbox);
                     run(move || {
-                        if let Some(text) = lock(&mailbox.copied).take() {
-                            listener.clipboard().copy(&text, Selection::Clipboard);
+                        if let Some(text) = lock(mailbox.slot(target)).take() {
+                            listener.clipboard().copy(&text, target);
                         }
                     });
                 }
@@ -895,6 +912,7 @@ mod tests {
         static WORK: std::cell::RefCell<Vec<Box<dyn FnOnce() + Send>>> = std::cell::RefCell::default();
         static REPORTS: std::cell::RefCell<Vec<Report>> = std::cell::RefCell::default();
         static COPIED: std::cell::RefCell<Vec<String>> = std::cell::RefCell::default();
+        static SELECTED: std::cell::RefCell<Vec<String>> = std::cell::RefCell::default();
     }
 
     /// A front end that keeps what it hears, for the test that runs on its thread.
@@ -915,8 +933,13 @@ mod tests {
     }
 
     impl Clipboard for Kept {
-        fn copy(&self, text: &str, _target: Selection) {
-            COPIED.with_borrow_mut(|kept| kept.push(text.to_string()));
+        fn copy(&self, text: &str, target: Selection) {
+            let kept = if target == Selection::Clipboard {
+                &COPIED
+            } else {
+                &SELECTED
+            };
+            kept.with_borrow_mut(|kept| kept.push(text.to_string()));
         }
 
         fn copy_rich(&self, _text: &str, _html: &str) {}
@@ -992,6 +1015,17 @@ mod tests {
         ));
         assert_eq!(run_work(), 1);
         assert_eq!(COPIED.take(), ["later"]);
+    }
+
+    #[test]
+    fn copies_for_the_primary_selection_leave_the_clipboard() {
+        let proxy = kept_proxy();
+        // `printf '\e]52;p;aGk=\a'`, as tmux sends it for the primary selection.
+        proxy.send_event(Event::ClipboardStore(ClipboardType::Selection, "hi".to_string()));
+        proxy.send_event(Event::ClipboardStore(ClipboardType::Clipboard, "ho".to_string()));
+        assert_eq!(run_work(), 2);
+        assert_eq!(SELECTED.take(), ["hi"]);
+        assert_eq!(COPIED.take(), ["ho"]);
     }
 
     /// What the terminal answers to `output`, with the default scheme, cells of 8 by 16
