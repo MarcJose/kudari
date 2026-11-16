@@ -127,12 +127,20 @@ fn is_emoji(character: char) -> bool {
     matches!(u32::from(character), 0x2600..=0x27bf | 0x1f000..=0x1faff)
 }
 
-fn font_style(flags: Flags, character: char) -> FontStyle {
+/// The font of a character. Emoji take the emoji font where they show as pictures: wide ones,
+/// and narrow ones with the variation selector for emoji. Narrow ones such as ✔ or ❤ are text
+/// by default, and a picture would reach into the next cell.
+fn font_style(flags: Flags, character: char, picture: bool) -> FontStyle {
     FontStyle {
         bold: flags.contains(Flags::BOLD),
         italic: flags.contains(Flags::ITALIC),
-        emoji: is_emoji(character),
+        emoji: picture && is_emoji(character),
     }
+}
+
+/// Whether a cell shows its character as a picture; see [`font_style`].
+fn is_picture(flags: Flags, zero_width: Option<&[char]>) -> bool {
+    flags.contains(Flags::WIDE_CHAR) || zero_width.is_some_and(|zero_width| zero_width.contains(&'\u{fe0f}'))
 }
 
 /// Selected text in the theme's colors for selections, as everywhere else on the desktop;
@@ -316,7 +324,7 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
                 y,
                 text,
                 color: foreground,
-                font: font_style(flags, cell.c),
+                font: font_style(flags, cell.c, is_picture(flags, cell.zerowidth())),
             });
         }
         if point == cursor.point {
@@ -355,7 +363,7 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
                 y,
                 text: glyph.to_string(),
                 color: options.cursor_text_color.unwrap_or(scheme.background),
-                font: font_style(flags, glyph),
+                font: font_style(flags, glyph, is_picture(flags, None)),
             });
         }
     }
@@ -461,6 +469,28 @@ mod tests {
                 Paint::Text { .. } => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn only_emoji_that_show_as_pictures_take_the_emoji_font() {
+        let scheme = crate::colors::active();
+        // A check mark and a heart are text; the heart with the selector for emoji and the
+        // wide face are pictures.
+        let term = term_with("\u{2714}\u{2764} \u{2764}\u{fe0f}\u{1f600}");
+        let paints = frame(&term, &Options::default(), &scene(&scheme, &[], &[]));
+        let emoji: Vec<(&str, bool)> = texts(&paints)
+            .iter()
+            .map(|(text, _, font)| (*text, font.emoji))
+            .collect();
+        assert_eq!(
+            emoji,
+            [
+                ("\u{2714}", false),
+                ("\u{2764}", false),
+                ("\u{2764}\u{fe0f}", true),
+                ("\u{1f600}", true)
+            ]
+        );
     }
 
     #[test]
