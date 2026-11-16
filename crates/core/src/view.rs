@@ -339,7 +339,12 @@ impl View {
             }
         }
 
-        if modifiers.contains(Modifiers::SHIFT) && matches!(key, Key::PageUp | Key::PageDown) {
+        // The alternate screen has no history: there, as in Konsole, programs such as `nano` get
+        // the keys to select by pages.
+        if modifiers.contains(Modifiers::SHIFT)
+            && matches!(key, Key::PageUp | Key::PageDown)
+            && !term.mode().contains(TermMode::ALT_SCREEN)
+        {
             let page = scroll_page(term.screen_lines(), options);
             effects.push(Effect::Scroll(if key == Key::PageUp { page } else { -page }));
             return effects;
@@ -1727,6 +1732,23 @@ mod tests {
         assert_eq!(press('F'), Some(Effect::Scroll(-1)));
         assert_eq!(press('G'), Some(Effect::Scroll(i32::MAX / 2)));
         assert_eq!(press('H'), Some(Effect::Scroll(i32::MIN / 2)));
+    }
+
+    #[test]
+    fn shift_and_page_keys_go_to_programs_on_the_alternate_screen() {
+        let options = Options::default();
+        let context = context(&options, true, &nowhere);
+        let mut view = View::default();
+        let mut shell = term_with("$ ");
+        let scrolled = view.key(&mut shell, Key::PageUp, Modifiers::SHIFT, "", &context);
+        assert!(
+            matches!(scrolled.as_slice(), [Effect::Hints(false), Effect::Scroll(_)]),
+            "{scrolled:?}"
+        );
+        // `nano` or `micro`, which select by pages with Shift.
+        let mut editor = term_with("\x1b[?1049h");
+        let typed = view.key(&mut editor, Key::PageDown, Modifiers::SHIFT, "", &context);
+        assert!(typed.contains(&Effect::Type(b"\x1b[6;2~".to_vec())), "{typed:?}");
     }
 
     #[test]
