@@ -356,7 +356,6 @@ static WAITING: Mutex<Waiting> = Mutex::new(Waiting {
 });
 
 thread_local! {
-    static INSTANCE: Cell<*mut qobject::Controller> = const { Cell::new(std::ptr::null_mut()) };
     /// The dialogs of Kudari that are open. Several can be at once, such as the settings and a
     /// question about an agent: the window stays below them until the last one closed.
     static DIALOGS: Cell<u32> = const { Cell::new(0) };
@@ -364,6 +363,20 @@ thread_local! {
 
 fn dialogs_open() -> bool {
     DIALOGS.with(Cell::get) > 0
+}
+
+/// A dialog of C++ opened. It counts at once, before the window loses the focus to it,
+/// without the controller: the dialog can open from within a method of the controller, which
+/// another reference to it must not cross. The window follows from the queue.
+pub fn dialog_opened() {
+    DIALOGS.with(|count| count.set(count.get().saturating_add(1)));
+    queue(qobject::Controller::show_dialogs);
+}
+
+/// A dialog of C++ closed. It stops counting only from the queue, with what the app does when
+/// a dialog closes, so that the focus that moves away meanwhile still finds it open.
+pub fn dialog_finished() {
+    queue(qobject::Controller::dialog_closed);
 }
 
 /// Runs `action` on the Qt thread with the controller, once it has started.
@@ -382,17 +395,6 @@ pub fn queue(action: impl FnOnce(Pin<&mut qobject::Controller>) + Send + 'static
 /// its window.
 pub fn started() -> bool {
     WAITING.lock().unwrap_or_else(PoisonError::into_inner).started
-}
-
-/// Runs `action` right away. Must be called on the Qt thread.
-pub fn with_controller(action: impl FnOnce(Pin<&mut qobject::Controller>)) {
-    let pointer = INSTANCE.with(Cell::get);
-    // SAFETY: the pointer is set once to the QML-owned controller, which lives until
-    // the application exits, and it is only used on the Qt thread.
-    if let Some(controller) = unsafe { pointer.as_mut() } {
-        // SAFETY: Qt keeps a QObject in place, so the controller is never moved.
-        action(unsafe { Pin::new_unchecked(controller) });
-    }
 }
 
 pub struct ControllerRust {
@@ -466,9 +468,6 @@ impl cxx_qt::Initialize for qobject::Controller {
     fn initialize(mut self: Pin<&mut Self>) {
         let _ = THREAD.set(self.qt_thread());
         terminal::listen();
-        // SAFETY: only the address is stored, the object is not moved by QML.
-        let pointer = unsafe { std::ptr::from_mut::<qobject::Controller>(self.as_mut().get_unchecked_mut()) };
-        INSTANCE.with(|instance| instance.set(pointer));
         let skin = skin_to_json(&self.skin).to_string();
         self.as_mut().set_skin_json(qs(&skin));
         self.as_mut().apply_terminal_settings();

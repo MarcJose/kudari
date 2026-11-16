@@ -115,9 +115,12 @@ pub fn qs(text: &str) -> QString {
     QString::from(text)
 }
 
-/// Runs directly: a dialog opens right after this call.
 fn qt_dialog_active(active: bool) {
-    crate::controller::with_controller(|controller| controller.dialog_active(active));
+    if active {
+        crate::controller::dialog_opened();
+    } else {
+        crate::controller::dialog_finished();
+    }
 }
 
 /// Queued: the dialog closes from within the event loop of Qt.

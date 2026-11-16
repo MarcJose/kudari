@@ -156,9 +156,12 @@ fn kde_menu_closed() {
     crate::controller::queue(super::controller::qobject::Controller::menu_closed);
 }
 
-/// Runs directly: the dialog blocks the Qt thread right after this call.
 fn kde_dialog_active(active: bool) {
-    crate::controller::with_controller(|controller| controller.dialog_active(active));
+    if active {
+        crate::controller::dialog_opened();
+    } else {
+        crate::controller::dialog_finished();
+    }
 }
 
 fn kde_shortcuts_changed() {
