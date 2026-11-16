@@ -197,7 +197,7 @@ Item {
             if (event.key === Qt.Key_Control && mouse.containsMouse) {
                 pane.linkUnderMouse(mouse.mouseX, mouse.mouseY, Qt.ControlModifier);
             }
-            if (!keyPress(event.key, event.modifiers, event.text)) {
+            if (!keyPress(event.key, event.modifiers, event.text, event.nativeScanCode)) {
                 pane.controller.inputBlocked(pane.terminalId);
             }
             event.accepted = true;
@@ -365,9 +365,11 @@ Item {
             }
             onWheel: event => {
                 if ((event.modifiers & Qt.ControlModifier) && (pane.config.WheelZoom ?? true)) {
-                    pane.controller.zoomTerminal(pane.terminalId, event.angleDelta.y > 0 ? 1 : -1);
+                    const steps = terminal.wheelZoom(event.angleDelta.y, event.pixelDelta.y);
+                    if (steps !== 0)
+                        pane.controller.zoomTerminal(pane.terminalId, steps);
                 } else {
-                    terminal.wheel(event.angleDelta.y, event.x, event.y);
+                    terminal.wheel(event.angleDelta.y, event.pixelDelta.y, event.x, event.y);
                 }
             }
         }
@@ -621,7 +623,7 @@ Item {
             }
             onPressed: mouse => jump(mouse.y)
             onPositionChanged: mouse => jump(mouse.y)
-            onWheel: wheel => terminal.wheel(wheel.angleDelta.y, 0, 0)
+            onWheel: wheel => terminal.wheel(wheel.angleDelta.y, wheel.pixelDelta.y, 0, 0)
         }
     }
 }
