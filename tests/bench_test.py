@@ -55,5 +55,14 @@ class Report(unittest.TestCase):
         self.assertEqual(self.frames_row(self.report("kudari"), "plain")[1], "48.0")
 
 
+    def test_milliseconds_cut_off_by_qt_count_from_their_middle(self):
+        self.run_of("kudari-1", [threaded(0.01, 0), threaded(0.02, 1), threaded(0.03, 2)])
+        text = self.report("kudari")
+        row = self.frames_row(text, "plain")
+        # The middles of 0, 1 and 2 are 0.5, 1.5 and 2.5.
+        self.assertEqual(row[4:], ["1.5", "<1", "2-3"])
+        self.assertIn("whole milliseconds, cut off", text)
+
+
 if __name__ == "__main__":
     sys.exit(unittest.main())

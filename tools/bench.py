@@ -95,6 +95,11 @@ def measure(directory, name):
     return f"{columns}x{rows}", result
 
 
+def milliseconds(whole):
+    """A time that Qt cut off to whole milliseconds, as the range it stands for."""
+    return "<1" if whole == 0 else f"{whole}-{whole + 1}"
+
+
 def table(header, rows):
     """Columns as wide as their widest cell, the first one to the left, the others right."""
     widths = [max(len(cell) for cell in column) for column in zip(header, *rows, strict=True)]
@@ -147,8 +152,12 @@ def report(directory, order):
             # Over the same seconds in which the frames were counted.
             rates = [len(syncs) / window for _, _, syncs, window in done]
             syncs = [sync for _, _, run, _ in done for sync in run]
-            rows.append([load, f"{statistics.mean(rates):.1f}", f"{min(rates):.1f}", f"{max(rates):.1f}", f"{statistics.mean(syncs):.1f}", f"{min(syncs)}", f"{max(syncs)}"])
+            # The middle of each millisecond that Qt cut off, which is right on average when
+            # the rest is spread evenly.
+            middle = statistics.mean(syncs) + 0.5
+            rows.append([load, f"{statistics.mean(rates):.1f}", f"{min(rates):.1f}", f"{max(rates):.1f}", f"{middle:.1f}", milliseconds(min(syncs)), milliseconds(max(syncs))])
         print(f"\n{terminal}: frames that Qt Quick drew during each load, and the milliseconds it took to prepare one")
+        print("(Qt gives whole milliseconds, cut off: the average is that of their middles)")
         table(["load", "avg fps", "min fps", "max fps", "avg ms", "min ms", "max ms"], rows)
 
 
