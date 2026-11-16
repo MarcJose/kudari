@@ -19,7 +19,7 @@ use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vi_mode::ViMotion;
 use alacritty_terminal::vte::ansi::Rgb;
 
-use crate::colors::{self, resolve};
+use crate::colors;
 use crate::input::{self, Key, Modifiers, MouseButton, MouseEvent};
 use crate::keytab;
 use crate::options::Options;
@@ -1122,7 +1122,7 @@ fn html_escape(character: char, html: &mut String) {
 
 /// The selection with its colors and styles, for pasting into rich text editors.
 #[must_use]
-pub fn selection_html<T>(term: &Term<T>) -> String {
+pub fn selection_html<T>(term: &Term<T>, bold_intense: bool) -> String {
     let Some(range) = term.selection.as_ref().and_then(|selection| selection.to_range(term)) else {
         return String::new();
     };
@@ -1148,10 +1148,18 @@ pub fn selection_html<T>(term: &Term<T>) -> String {
             columns - 1
         };
         let row = &grid[Line(line)];
-        let end = (first..=last)
-            .rev()
-            .find(|column| row[Column(*column)].c != ' ')
-            .map_or(first, |column| column + 1);
+        // A line that wraps into the next goes on there, as in the copied text: no break, and
+        // its spaces at the end stay.
+        let wrapped =
+            !range.is_block && last == columns - 1 && row[Column(columns - 1)].flags.contains(Flags::WRAPLINE);
+        let end = if wrapped {
+            last + 1
+        } else {
+            (first..=last)
+                .rev()
+                .find(|column| row[Column(*column)].c != ' ')
+                .map_or(first, |column| column + 1)
+        };
         let mut style = String::new();
         for column in first..end.min(columns) {
             let cell = &row[Column(column)];
@@ -1161,8 +1169,12 @@ pub fn selection_html<T>(term: &Term<T>) -> String {
             {
                 continue;
             }
-            let mut wanted = format!("color:{}", hex(resolve(cell.fg, palette, &scheme)));
-            let back = resolve(cell.bg, palette, &scheme);
+            // The colors as the terminal shows them: bold, faint, inverse and hidden.
+            let (mut foreground, back) = crate::render::cell_colors(cell, palette, &scheme, bold_intense);
+            if cell.flags.contains(Flags::HIDDEN) {
+                foreground = back;
+            }
+            let mut wanted = format!("color:{}", hex(foreground));
             if back != scheme.background {
                 wanted.push_str(";background-color:");
                 wanted.push_str(&hex(back));
@@ -1186,11 +1198,14 @@ pub fn selection_html<T>(term: &Term<T>) -> String {
                 style = wanted;
             }
             html_escape(cell.c, &mut html);
+            for character in cell.zerowidth().into_iter().flatten() {
+                html_escape(*character, &mut html);
+            }
         }
         if !style.is_empty() {
             html.push_str("</span>");
         }
-        if line != range.end.line.0 {
+        if line != range.end.line.0 && !wrapped {
             html.push('\n');
         }
     }
@@ -1574,9 +1589,9 @@ mod tests {
     #[test]
     fn copied_html_keeps_colors_and_styles() {
         let mut term = term_with("\x1b[1;31m<b>\x1b[0m & \x1b[3;4;44mx\x1b[0m");
-        assert_eq!(selection_html(&term), "");
+        assert_eq!(selection_html(&term, true), "");
         select_row(&mut term, 0);
-        let html = selection_html(&term);
+        let html = selection_html(&term, true);
         assert!(
             html.starts_with("<pre style=\"color:#") && html.ends_with("</pre>"),
             "{html}"
@@ -1596,9 +1611,36 @@ mod tests {
         let mut selection = Selection::new(SelectionType::Simple, Point::new(Line(0), Column(1)), Side::Left);
         selection.update(Point::new(Line(1), Column(1)), Side::Right);
         term.selection = Some(selection);
-        let html = selection_html(&term);
+        let html = selection_html(&term, true);
         assert!(html.contains(">ne</span>\n<span"), "{html}");
         assert!(html.contains(">tw</span></pre>"), "{html}");
+    }
+
+    #[test]
+    fn copied_html_matches_the_copied_text() {
+        // An address that wraps at a space, a combining accent, and inverse text.
+        let mut term = term_with("0123456789 abcdefgh ijk e\u{301}\x1b[7mz\x1b[0m");
+        let options = Options::default();
+        let mut selection = Selection::new(SelectionType::Simple, Point::new(Line(0), Column(0)), Side::Left);
+        selection.update(Point::new(Line(1), Column(19)), Side::Right);
+        term.selection = Some(selection);
+        let html = selection_html(&term, true);
+        let text: String = html
+            .split('<')
+            .filter_map(|part| part.split_once('>').map(|(_, text)| text))
+            .collect();
+        assert_eq!(
+            text.replace("&amp;", "&"),
+            selected_text(&term, &options).unwrap().trim_end()
+        );
+        assert!(html.contains("e\u{301}"), "{html}");
+        // Inverse text takes the background as its color.
+        let scheme = colors::active();
+        let inverse = format!(
+            "color:#{:02x}{:02x}{:02x};background-color:",
+            scheme.background.r, scheme.background.g, scheme.background.b
+        );
+        assert!(html.contains(&inverse), "{html}");
     }
 
     #[test]
