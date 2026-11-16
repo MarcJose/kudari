@@ -9,13 +9,13 @@
 use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
-use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, QueryFullProcessImageNameW,
-    TerminateProcess,
+    GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    QueryFullProcessImageNameW, TerminateProcess,
 };
 
 use super::tree::{self, Process};
@@ -24,19 +24,63 @@ use super::{Programs, Signal};
 /// The shell of a `ConPTY` and what it runs.
 pub struct Console {
     shell: u32,
+    /// When the shell started; `None` once it ended.
+    shell_start: Option<u64>,
 }
 
 impl Console {
     /// The console whose shell has the process id `shell`.
     #[must_use]
     pub fn new(shell: u32) -> Self {
-        Self { shell }
+        Self {
+            shell,
+            shell_start: start_time(shell),
+        }
     }
 
     fn foreground(&self) -> (Vec<Process>, u32) {
         let processes = processes();
-        let foreground = tree::foreground(&processes, self.shell);
+        let started = |id: u32| {
+            if id == self.shell {
+                self.shell_start
+            } else {
+                start_time(id)
+            }
+        };
+        // A process counts as a child only if it started after its parent; one that cannot
+        // be opened does not count, so that nothing unchecked is ever ended.
+        let counts = |parent: u32, child: &Process| {
+            started(parent)
+                .zip(start_time(child.id))
+                .is_some_and(|(parent, child)| child >= parent)
+        };
+        let foreground = tree::foreground(&processes, self.shell, counts);
         (processes, foreground)
+    }
+}
+
+/// When the process of `handle` started, in the ticks of Windows.
+fn creation_time(handle: HANDLE) -> Option<u64> {
+    // SAFETY: the times are valid for the call, and a stale handle only makes it fail.
+    unsafe {
+        let mut times = [std::mem::zeroed::<FILETIME>(); 4];
+        let [created, exited, kernel, user] = &mut times;
+        (GetProcessTimes(handle, created, exited, kernel, user) != 0)
+            .then(|| u64::from(times[0].dwHighDateTime) << 32 | u64::from(times[0].dwLowDateTime))
+    }
+}
+
+/// When process `id` started; `None` if it cannot be opened.
+fn start_time(id: u32) -> Option<u64> {
+    // SAFETY: plain system calls on a handle that is checked and closed again.
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, id);
+        if process.is_null() {
+            return None;
+        }
+        let started = creation_time(process);
+        CloseHandle(process);
+        started
     }
 }
 
@@ -134,9 +178,16 @@ impl Programs for Console {
         let (_, foreground) = self.foreground();
         // SAFETY: plain system calls on a handle that is checked and closed again.
         unsafe {
-            let process = OpenProcess(PROCESS_TERMINATE, 0, foreground);
+            let process = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, 0, foreground);
             if !process.is_null() {
-                TerminateProcess(process, 1);
+                // Its id can have gone to another process since the list: only one that
+                // started with the shell or after it ends.
+                let ours = creation_time(process)
+                    .zip(self.shell_start)
+                    .is_some_and(|(started, shell)| started >= shell);
+                if ours {
+                    TerminateProcess(process, 1);
+                }
                 CloseHandle(process);
             }
         }
@@ -148,4 +199,37 @@ impl Programs for Console {
 
     /// The console has no flow control to switch.
     fn set_flow_control(&self, _enabled: bool) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_program_that_the_shell_started_is_in_the_foreground() {
+        let mut shell = std::process::Command::new("cmd.exe")
+            .args(["/c", "ping -n 6 127.0.0.1 > nul"])
+            .spawn()
+            .unwrap();
+        let console = Console::new(shell.id());
+        let mut busy = false;
+        for _ in 0..50 {
+            busy = console.is_busy();
+            if busy {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let name = console.name();
+        let _ = shell.kill();
+        let _ = shell.wait();
+        assert!(busy, "{name:?}");
+        assert!(name.is_some_and(|name| name.eq_ignore_ascii_case("ping")));
+    }
+
+    #[test]
+    fn a_process_that_is_gone_has_no_start() {
+        assert!(start_time(std::process::id()).is_some());
+        assert_eq!(start_time(u32::MAX - 2), None);
+    }
 }

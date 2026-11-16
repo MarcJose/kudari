@@ -22,16 +22,20 @@ fn is_console(process: &Process) -> bool {
 }
 
 /// The program in the foreground: from the shell down, always to the newest child, which
-/// comes last in the list. The shell itself when it runs nothing.
+/// comes last in the list, among those that `counts(parent, child)` takes for a child of
+/// the terminal. The shell itself when it runs nothing.
+///
+/// Windows keeps the parent of a process after the parent ended, and gives its id to new
+/// processes soon: an old process can name the shell as its parent. `counts` checks the
+/// times they started.
 #[must_use]
-pub fn foreground(processes: &[Process], shell: u32) -> u32 {
+pub fn foreground(processes: &[Process], shell: u32, counts: impl Fn(u32, &Process) -> bool) -> u32 {
     let mut current = shell;
     // A list with reused process ids could form a loop; no chain is longer than the list.
     for _ in 0..processes.len() {
-        let child = processes
-            .iter()
-            .rev()
-            .find(|process| process.parent == current && process.id != current && !is_console(process));
+        let child = processes.iter().rev().find(|process| {
+            process.parent == current && process.id != current && !is_console(process) && counts(current, process)
+        });
         match child {
             Some(child) => current = child.id,
             None => break,
@@ -104,22 +108,43 @@ mod tests {
 
     #[test]
     fn the_newest_descendant_is_in_the_foreground() {
-        assert_eq!(foreground(&list(), 11), 16);
-        assert_eq!(foreground(&list(), 14), 14);
-        assert_eq!(foreground(&[], 11), 11);
+        assert_eq!(foreground(&list(), 11, |_, _| true), 16);
+        assert_eq!(foreground(&list(), 14, |_, _| true), 14);
+        assert_eq!(foreground(&[], 11, |_, _| true), 11);
     }
 
     #[test]
     fn processes_of_the_console_do_not_count() {
         let list = vec![process(11, 10, "cmd.exe"), process(13, 11, "conhost.exe")];
-        assert_eq!(foreground(&list, 11), 11);
+        assert_eq!(foreground(&list, 11, |_, _| true), 11);
+    }
+
+    #[test]
+    fn a_process_older_than_its_parent_is_no_child_of_it() {
+        // An updater started by a process that ended, whose id the shell 11 has now; the
+        // updater runs since before the shell.
+        let list = vec![process(20, 11, "updater.exe"), process(11, 10, "pwsh.exe")];
+        let started = |id: u32| match id {
+            20 => 100,
+            11 => 500,
+            _ => 900,
+        };
+        let counts = |parent: u32, child: &Process| started(child.id) >= started(parent);
+        assert_eq!(foreground(&list, 11, counts), 11);
+        // A program the shell started is its child.
+        let list = vec![
+            process(20, 11, "updater.exe"),
+            process(11, 10, "pwsh.exe"),
+            process(30, 11, "git.exe"),
+        ];
+        assert_eq!(foreground(&list, 11, counts), 30);
     }
 
     #[test]
     fn a_loop_of_reused_ids_ends() {
         let list = vec![process(1, 2, "a.exe"), process(2, 1, "b.exe"), process(3, 3, "c.exe")];
-        assert!([1, 2].contains(&foreground(&list, 1)));
-        assert_eq!(foreground(&list, 3), 3);
+        assert!([1, 2].contains(&foreground(&list, 1, |_, _| true)));
+        assert_eq!(foreground(&list, 3, |_, _| true), 3);
     }
 
     #[test]
