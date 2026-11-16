@@ -64,5 +64,22 @@ class Report(unittest.TestCase):
         self.assertIn("whole milliseconds, cut off", text)
 
 
+    def test_every_render_loop_of_qt_gives_its_frames(self):
+        lines = [
+            f"{stamp(0.01)} qt.scenegraph.time.renderloop [gui thread 0x1] renderWindow: frame rendered in 5ms, polish=0, sync=1, render=2, swap=2",
+            f"{stamp(0.02)} qt.scenegraph.time.renderloop Frame rendered with 'software' renderloop in 4ms, sync=2, render=1, swap=1",
+            threaded(0.03, 3),
+        ]
+        self.run_of("kudari-1", lines)
+        text = self.report("kudari")
+        self.assertIn("render loop basic, software, threaded", text)
+        self.assertEqual(self.frames_row(text, "plain")[4], "2.5")
+
+
+    def test_kudari_without_frames_is_named(self):
+        self.run_of("kudari-1", ["nothing of Qt Quick"])
+        self.assertIn("kudari: no frame timings in its logs", self.report("kudari"))
+
+
 if __name__ == "__main__":
     sys.exit(unittest.main())

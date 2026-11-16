@@ -205,7 +205,9 @@ if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
     # The bus and the portals it starts complain about what the virtual session lacks; that
     # goes to a file, and the measurement itself writes to file descriptor 3.
     # shellcheck disable=SC2086 # the terminals are words of their own
-    if env -u WAYLAND_DISPLAY -u DISPLAY KUDARI_BENCH_WORK="$work" \
+    # Qt's own render loop and backend, whatever the environment sets.
+    if env -u WAYLAND_DISPLAY -u DISPLAY -u QSG_RENDER_LOOP -u QT_QUICK_BACKEND -u QSG_RHI_BACKEND \
+        KUDARI_BENCH_WORK="$work" \
         dbus-run-session -- "$0" --binary "$binary" --runs "$runs" --scale "$scale" --loads "$(echo $loads | tr " " ",")" $terminals \
         < /dev/null 3>&2 2> "$work/dbus.log"; then
         python3 "$tools/bench.py" report "$work" $terminals

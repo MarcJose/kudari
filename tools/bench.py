@@ -29,7 +29,12 @@ DESCRIPTIONS = {
     "seq": "the numbers up to 2,000,000",
 }
 SEQ_BYTES = sum(len(f"{n}\n") for n in range(1, 2_000_001))
-FRAME = re.compile(r"^(\S+) .*render thread.*frame rendered in \d+ms, sync=(\d+), render=\d+, swap=\d+")
+# The line of a frame in the log of Qt Quick, from each of its render loops: threaded, basic
+# and software. Qt gives whole milliseconds there, cut off.
+FRAME = re.compile(
+    r"^(\S+) (?:.*\[(render|gui) thread[^\]]*\].*[Ff]rame rendered|.*Frame rendered with '(\w+)' renderloop) "
+    r"in \d+ms, (?:polish=\d+, )?sync=(\d+), render=\d+, swap=\d+"
+)
 # A frame shows the output a moment after it arrived: frames this long after a load count.
 TAIL = 0.05
 
@@ -67,9 +72,18 @@ def when(stamp):
     return datetime.datetime.fromisoformat(stamp).timestamp()
 
 
+def frame(line):
+    """The time, the sync in whole milliseconds and the render loop of a frame in the log."""
+    match = FRAME.match(line)
+    if not match:
+        return None
+    loop = match[3] or ("threaded" if match[2] == "render" else "basic")
+    return when(match[1]), int(match[4]), loop
+
+
 def measure(directory, name):
     """Per load of one run: seconds, bytes, the sync times of the frames meanwhile, and the
-    seconds in which they were counted."""
+    seconds in which they were counted; with the render loops seen."""
     lines = (directory / f"{name}.txt").read_text().splitlines()
     rows, columns = lines[0].split()[1:]
     sizes = {
@@ -79,11 +93,13 @@ def measure(directory, name):
         "seq": SEQ_BYTES,
     }
     drawn = []
+    loops = set()
     log = directory / f"{name}.log"
     for line in log.read_text(errors="replace").splitlines():
-        match = FRAME.match(line)
-        if match:
-            drawn.append((when(match[1]), int(match[2])))
+        found = frame(line)
+        if found:
+            drawn.append(found[:2])
+            loops.add(found[2])
     result = {}
     for line in lines[1:]:
         parts = line.split()
@@ -92,7 +108,7 @@ def measure(directory, name):
         load, start, end = parts[0], when(parts[1]), when(parts[2])
         syncs = [sync for moment, sync in drawn if start <= moment <= end + TAIL]
         result[load] = (end - start, sizes[load], syncs, end - start + TAIL)
-    return f"{columns}x{rows}", result
+    return f"{columns}x{rows}", result, loops
 
 
 def milliseconds(whole):
@@ -129,7 +145,7 @@ def report(directory, order):
     for load in LOADS:
         rows = []
         for terminal in terminals:
-            done = [result[load] for _, result in runs[terminal] if load in result]
+            done = [result[load] for _, result, _ in runs[terminal] if load in result]
             if not done:
                 continue
             seconds = [took for took, _, _, _ in done]
@@ -142,11 +158,14 @@ def report(directory, order):
         print(f"\n{load}: {DESCRIPTIONS[load]}")
         table(["terminal", "cells", "avg s", "min s", "max s", "MB/s", "runs"], [row for _, row in sorted(rows, key=lambda r: r[0])])
     # Only Qt Quick reports its frames: those of Kudari.
-    framed = {t: m for t, m in runs.items() if any(syncs for _, result in m for _, _, syncs, _ in result.values())}
+    for terminal in terminals:
+        if terminal == "kudari" and not any(syncs for _, result, _ in runs[terminal] for _, _, syncs, _ in result.values()):
+            print("\nkudari: no frame timings in its logs; did Qt honour QSG_RENDER_TIMING, and in which render loop?")
+    framed = {t: m for t, m in runs.items() if any(syncs for _, result, _ in m for _, _, syncs, _ in result.values())}
     for terminal, measured in framed.items():
         rows = []
         for load in LOADS:
-            done = [result[load] for _, result in measured if load in result and result[load][2]]
+            done = [result[load] for _, result, _ in measured if load in result and result[load][2]]
             if not done:
                 continue
             # Over the same seconds in which the frames were counted.
@@ -156,8 +175,9 @@ def report(directory, order):
             # the rest is spread evenly.
             middle = statistics.mean(syncs) + 0.5
             rows.append([load, f"{statistics.mean(rates):.1f}", f"{min(rates):.1f}", f"{max(rates):.1f}", f"{middle:.1f}", milliseconds(min(syncs)), milliseconds(max(syncs))])
+        loops = sorted({loop for _, _, seen in measured for loop in seen})
         print(f"\n{terminal}: frames that Qt Quick drew during each load, and the milliseconds it took to prepare one")
-        print("(Qt gives whole milliseconds, cut off: the average is that of their middles)")
+        print(f"(render loop {', '.join(loops)}; Qt gives whole milliseconds, cut off: the average is that of their middles)")
         table(["load", "avg fps", "min fps", "max fps", "avg ms", "min ms", "max ms"], rows)
 
 
