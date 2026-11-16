@@ -105,11 +105,15 @@ fn color_name(value: &str) -> Option<String> {
 }
 
 /// The family and size of a serialized `QFont` such as `Hack,11,-1,5,400,0,0,0,0,0`.
-fn font_parts(value: &str) -> Option<(String, i32)> {
+/// The family and the size in points of a font that Qt wrote: `family,points,pixels,…`, with
+/// points `-1` for a font that has its size in pixels, taken at 96 dots per inch.
+fn font_parts(value: &str) -> Option<(String, Option<i32>)> {
     let mut parts = value.split(',');
     let family = parts.next().filter(|family| !family.is_empty())?;
-    let size = parts.next()?.parse::<f64>().ok().filter(|size| *size > 0.0)?;
-    Some((family.to_string(), size.round() as i32))
+    let mut number = || parts.next()?.parse::<f64>().ok().filter(|size| *size > 0.0);
+    let points = number();
+    let size = points.or_else(|| number().map(|pixels| pixels * 0.75));
+    Some((family.to_string(), size.map(|size| size.round() as i32)))
 }
 
 /// History length from Konsole's `HistoryMode`: none, fixed or unlimited.
@@ -198,7 +202,9 @@ fn read_profile(profile: &Ini, paths: &Paths, migration: &mut Migration) {
 
     if let Some((family, size)) = value("Appearance", "Font").and_then(|font| font_parts(font)) {
         set("FontFamily", family);
-        set("FontSize", size.to_string());
+        if let Some(size) = size {
+            set("FontSize", size.to_string());
+        }
     }
     if let Some(lines) = history_lines(value("Scrolling", "HistoryMode"), value("Scrolling", "HistorySize")) {
         set("HistoryLines", lines);
@@ -459,6 +465,18 @@ mod tests {
     }
 
     #[test]
+    fn fonts_with_a_size_in_pixels_or_none_keep_their_family() {
+        for (font, size) in [("Hack,-1,14,5,400,0,0,0,0,0", Some("11")), ("Hack,-1,-1,5,400", None)] {
+            let home = Home::new();
+            home.write("config/konsolerc", "[Desktop Entry]\nDefaultProfile=Mine.profile\n");
+            home.write("data/konsole/Mine.profile", &format!("[Appearance]\nFont={font}\n"));
+            let migration = read_with_defaults(&home).unwrap();
+            assert_eq!(setting(&migration, "FontFamily"), Some("Hack"), "{font}");
+            assert_eq!(setting(&migration, "FontSize"), size, "{font}");
+        }
+    }
+
+    #[test]
     fn display_and_interaction_options_are_taken_over() {
         let home = Home::new();
         home.write("config/konsolerc", "[Desktop Entry]\nDefaultProfile=Mine.profile\n");
@@ -518,7 +536,16 @@ mod tests {
     fn colors_and_fonts_parse_or_fail_cleanly() {
         assert_eq!(color_name("#123456").as_deref(), Some("#123456"));
         assert_eq!(color_name("nonsense"), None);
-        assert_eq!(font_parts("Hack"), None);
-        assert_eq!(font_parts("Hack,-1"), None);
+        assert_eq!(font_parts(""), None);
+        assert_eq!(font_parts("Hack,10.5,-1,5,400"), Some(("Hack".to_string(), Some(11))));
+        // A size in pixels: 14 pixels are 10.5 points.
+        assert_eq!(
+            font_parts("Hack,-1,14,5,400,0,0,0,0,0"),
+            Some(("Hack".to_string(), Some(11)))
+        );
+        assert_eq!(font_parts("Hack,-1,16,5"), Some(("Hack".to_string(), Some(12))));
+        // Without a size, the family still counts.
+        assert_eq!(font_parts("Hack"), Some(("Hack".to_string(), None)));
+        assert_eq!(font_parts("Hack,-1,-1"), Some(("Hack".to_string(), None)));
     }
 }
