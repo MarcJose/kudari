@@ -193,6 +193,25 @@ try {
         $settings.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
     }
 
+    # Starting Kudari again hides the window of the first one, and the next start shows it in
+    # front. Whether it may take the front from a program the user just typed in, Windows
+    # decides by the input of the user, which a test without one cannot show.
+    Add-Type -Namespace Kudari -Name Foreground -MemberDefinition @'
+[DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr window, out uint process);
+'@
+    function Get-ForegroundProcess {
+        $owner = [uint32] 0
+        [void] [Kudari.Foreground]::GetWindowThreadProcessId([Kudari.Foreground]::GetForegroundWindow(), [ref] $owner)
+        $owner
+    }
+    Start-Process $Program -Wait -WorkingDirectory $work
+    $gone = Wait-For { if (-not (Get-Windows | Where-Object { -not $_.Current.BoundingRectangle.IsEmpty })) { $true } }
+    Start-Process $Program -Wait -WorkingDirectory $work
+    $front = Wait-For { if ((Get-ForegroundProcess) -eq $process.Id) { $true } }
+    Test-Check 'starting Kudari again hides and shows its window' ($gone -and $front)
+    if (-not ($gone -and $front)) { Write-Host "      hidden: $([bool] $gone), in front: process $(Get-ForegroundProcess), Kudari $($process.Id)" }
+
     [void] (Invoke-Element 'Quit')
     Test-Check 'the quit button ends Kudari' ($process.WaitForExit(10000))
 

@@ -96,11 +96,24 @@ bool rk_win_claim_instance(const QString &name)
 {
     const std::wstring className = name.toStdWString();
     HANDLE mutex = CreateMutexW(nullptr, FALSE, (L"Local\\" + className).c_str());
-    if (mutex && GetLastError() == ERROR_ALREADY_EXISTS) {
+    const DWORD error = GetLastError();
+    if (mutex && error == ERROR_ALREADY_EXISTS) {
         CloseHandle(mutex);
         if (HWND other = FindWindowExW(HWND_MESSAGE, nullptr, className.c_str(), nullptr)) {
+            // The user started this one, so it may bring a window to the front; the other
+            // instance runs in the background and needs that right to take the keyboard.
+            DWORD process = 0;
+            GetWindowThreadProcessId(other, &process);
+            if (process) {
+                AllowSetForegroundWindow(process);
+            }
             PostMessageW(other, TOGGLE_MESSAGE, 0, 0);
         }
+        return false;
+    }
+    if (!mutex && error == ERROR_ACCESS_DENIED) {
+        // An instance with more rights runs, such as one run as administrator. Windows
+        // keeps its window from messages of this one, and a second instance must not start.
         return false;
     }
     // The mutex stays open for as long as this instance runs.
