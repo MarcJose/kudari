@@ -19,7 +19,7 @@ use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vi_mode::ViMotion;
 use alacritty_terminal::vte::ansi::Rgb;
 
-use crate::colors::{self, resolve};
+use crate::colors;
 use crate::input::{self, Key, Modifiers, MouseButton, MouseEvent};
 use crate::keytab;
 use crate::options::Options;
@@ -175,11 +175,21 @@ pub fn link_at<T>(term: &Term<T>, point: Point, files: bool, context: &Context) 
             .take_while(|column| same(*column))
             .last()
             .unwrap_or(point.column.0);
-        return is_safe_link(link.uri(), &context.options.link_schemes).then(|| Link {
-            target: link.uri().to_string(),
+        let found = |target: String| Link {
+            target,
             start: Point::new(point.line, Column(start)),
             cells: end - start + 1,
-        });
+        };
+        if is_safe_link(link.uri(), &context.options.link_schemes) {
+            return Some(found(link.uri().to_string()));
+        }
+        // A file of this computer, as `ls --hyperlink` names it with the name of the host:
+        // it opens after the checks of a file in the text. Else the visible text counts.
+        let local = crate::marks::local_directory(link.uri())
+            .and_then(|path| crate::links::openable(&path.to_string_lossy(), &context.options.link_schemes));
+        if let Some(path) = local.filter(|_| files) {
+            return Some(found(path));
+        }
     }
     // An address can wrap onto the next lines, as the long ones for logging in often do.
     let (first, line) = wrapped_text(term, point.line);
@@ -339,7 +349,12 @@ impl View {
             }
         }
 
-        if modifiers.contains(Modifiers::SHIFT) && matches!(key, Key::PageUp | Key::PageDown) {
+        // The alternate screen has no history: there, as in Konsole, programs such as `nano` get
+        // the keys to select by pages.
+        if modifiers.contains(Modifiers::SHIFT)
+            && matches!(key, Key::PageUp | Key::PageDown)
+            && !term.mode().contains(TermMode::ALT_SCREEN)
+        {
             let page = scroll_page(term.screen_lines(), options);
             effects.push(Effect::Scroll(if key == Key::PageUp { page } else { -page }));
             return effects;
@@ -594,9 +609,11 @@ impl View {
             return false;
         };
         let range = term.selection.as_ref().and_then(|selection| selection.to_range(term));
+        // From the cell after the match, around the end of the grid as the search goes: a
+        // match in the last cell would else be found again and again.
         let origin = match (range, backwards) {
-            (Some(range), false) => range.end.add(term, Boundary::Grid, 1),
-            (Some(range), true) => range.start.sub(term, Boundary::Grid, 1),
+            (Some(range), false) => range.end.add(term, Boundary::None, 1),
+            (Some(range), true) => range.start.sub(term, Boundary::None, 1),
             (None, _) => term.grid().cursor.point,
         };
         let (direction, side) = if backwards {
@@ -699,7 +716,8 @@ fn selection_step<T: EventListener>(
     } else if matches!(key, Key::PageUp | Key::PageDown) {
         let page = scroll_page(term.screen_lines(), options);
         term.scroll_display(Scroll::Delta(if key == Key::PageUp { page } else { -page }));
-    } else if text == "v" {
+    } else if text == "v" || (key == Key::Character('V') && modifiers.contains(Modifiers::CONTROL)) {
+        // Qt gives Ctrl+V the text of the control character, so the key tells the block.
         let point = term.vi_mode_cursor.point;
         let kind = if modifiers.contains(Modifiers::CONTROL) {
             SelectionType::Block
@@ -1104,7 +1122,7 @@ fn html_escape(character: char, html: &mut String) {
 
 /// The selection with its colors and styles, for pasting into rich text editors.
 #[must_use]
-pub fn selection_html<T>(term: &Term<T>) -> String {
+pub fn selection_html<T>(term: &Term<T>, bold_intense: bool) -> String {
     let Some(range) = term.selection.as_ref().and_then(|selection| selection.to_range(term)) else {
         return String::new();
     };
@@ -1130,10 +1148,18 @@ pub fn selection_html<T>(term: &Term<T>) -> String {
             columns - 1
         };
         let row = &grid[Line(line)];
-        let end = (first..=last)
-            .rev()
-            .find(|column| row[Column(*column)].c != ' ')
-            .map_or(first, |column| column + 1);
+        // A line that wraps into the next goes on there, as in the copied text: no break, and
+        // its spaces at the end stay.
+        let wrapped =
+            !range.is_block && last == columns - 1 && row[Column(columns - 1)].flags.contains(Flags::WRAPLINE);
+        let end = if wrapped {
+            last + 1
+        } else {
+            (first..=last)
+                .rev()
+                .find(|column| row[Column(*column)].c != ' ')
+                .map_or(first, |column| column + 1)
+        };
         let mut style = String::new();
         for column in first..end.min(columns) {
             let cell = &row[Column(column)];
@@ -1143,8 +1169,12 @@ pub fn selection_html<T>(term: &Term<T>) -> String {
             {
                 continue;
             }
-            let mut wanted = format!("color:{}", hex(resolve(cell.fg, palette, &scheme)));
-            let back = resolve(cell.bg, palette, &scheme);
+            // The colors as the terminal shows them: bold, faint, inverse and hidden.
+            let (mut foreground, back) = crate::render::cell_colors(cell, palette, &scheme, bold_intense);
+            if cell.flags.contains(Flags::HIDDEN) {
+                foreground = back;
+            }
+            let mut wanted = format!("color:{}", hex(foreground));
             if back != scheme.background {
                 wanted.push_str(";background-color:");
                 wanted.push_str(&hex(back));
@@ -1168,11 +1198,14 @@ pub fn selection_html<T>(term: &Term<T>) -> String {
                 style = wanted;
             }
             html_escape(cell.c, &mut html);
+            for character in cell.zerowidth().into_iter().flatten() {
+                html_escape(*character, &mut html);
+            }
         }
         if !style.is_empty() {
             html.push_str("</span>");
         }
-        if line != range.end.line.0 {
+        if line != range.end.line.0 && !wrapped {
             html.push('\n');
         }
     }
@@ -1510,7 +1543,8 @@ mod tests {
 
         term.selection = None;
         selection_step(&mut term, Key::Other, NONE, "0", &OPTIONS);
-        selection_step(&mut term, Key::Other, Modifiers::CONTROL, "v", &OPTIONS);
+        // Ctrl+V as Qt gives it: the key of V and the control character U+0016.
+        selection_step(&mut term, Key::Character('V'), Modifiers::CONTROL, "\u{16}", &OPTIONS);
         for key in ["w", "j"] {
             selection_step(&mut term, Key::Other, NONE, key, &OPTIONS);
         }
@@ -1555,9 +1589,9 @@ mod tests {
     #[test]
     fn copied_html_keeps_colors_and_styles() {
         let mut term = term_with("\x1b[1;31m<b>\x1b[0m & \x1b[3;4;44mx\x1b[0m");
-        assert_eq!(selection_html(&term), "");
+        assert_eq!(selection_html(&term, true), "");
         select_row(&mut term, 0);
-        let html = selection_html(&term);
+        let html = selection_html(&term, true);
         assert!(
             html.starts_with("<pre style=\"color:#") && html.ends_with("</pre>"),
             "{html}"
@@ -1577,9 +1611,36 @@ mod tests {
         let mut selection = Selection::new(SelectionType::Simple, Point::new(Line(0), Column(1)), Side::Left);
         selection.update(Point::new(Line(1), Column(1)), Side::Right);
         term.selection = Some(selection);
-        let html = selection_html(&term);
+        let html = selection_html(&term, true);
         assert!(html.contains(">ne</span>\n<span"), "{html}");
         assert!(html.contains(">tw</span></pre>"), "{html}");
+    }
+
+    #[test]
+    fn copied_html_matches_the_copied_text() {
+        // An address that wraps at a space, a combining accent, and inverse text.
+        let mut term = term_with("0123456789 abcdefgh ijk e\u{301}\x1b[7mz\x1b[0m");
+        let options = Options::default();
+        let mut selection = Selection::new(SelectionType::Simple, Point::new(Line(0), Column(0)), Side::Left);
+        selection.update(Point::new(Line(1), Column(19)), Side::Right);
+        term.selection = Some(selection);
+        let html = selection_html(&term, true);
+        let text: String = html
+            .split('<')
+            .filter_map(|part| part.split_once('>').map(|(_, text)| text))
+            .collect();
+        assert_eq!(
+            text.replace("&amp;", "&"),
+            selected_text(&term, &options).unwrap().trim_end()
+        );
+        assert!(html.contains("e\u{301}"), "{html}");
+        // Inverse text takes the background as its color.
+        let scheme = colors::active();
+        let inverse = format!(
+            "color:#{:02x}{:02x}{:02x};background-color:",
+            scheme.background.r, scheme.background.g, scheme.background.b
+        );
+        assert!(html.contains(&inverse), "{html}");
     }
 
     #[test]
@@ -1727,6 +1788,44 @@ mod tests {
         assert_eq!(press('F'), Some(Effect::Scroll(-1)));
         assert_eq!(press('G'), Some(Effect::Scroll(i32::MAX / 2)));
         assert_eq!(press('H'), Some(Effect::Scroll(i32::MIN / 2)));
+    }
+
+    #[test]
+    fn the_next_match_comes_after_one_in_a_corner_of_the_grid() {
+        // A 6 in the first and the last cell, as the clock of tmux in its status line.
+        let mut term = term_with("\x1b[?1049h\x1b[1;1H6\x1b[5;20H6\x1b[3;3H");
+        let mut view = View::default();
+        let selected = |term: &Term<VoidListener>| {
+            term.selection
+                .as_ref()
+                .and_then(|selection| selection.to_range(term))
+                .map(|range| range.start)
+        };
+        let first = Point::new(Line(0), Column(0));
+        let last = Point::new(Line(4), Column(19));
+        assert!(view.find(&mut term, "6", false, false, false, false));
+        assert_eq!(selected(&term), Some(last));
+        assert!(view.find(&mut term, "6", false, false, false, false));
+        assert_eq!(selected(&term), Some(first), "on from the last cell");
+        assert!(view.find(&mut term, "6", true, false, false, false));
+        assert_eq!(selected(&term), Some(last), "back from the first cell");
+    }
+
+    #[test]
+    fn shift_and_page_keys_go_to_programs_on_the_alternate_screen() {
+        let options = Options::default();
+        let context = context(&options, true, &nowhere);
+        let mut view = View::default();
+        let mut shell = term_with("$ ");
+        let scrolled = view.key(&mut shell, Key::PageUp, Modifiers::SHIFT, "", &context);
+        assert!(
+            matches!(scrolled.as_slice(), [Effect::Hints(false), Effect::Scroll(_)]),
+            "{scrolled:?}"
+        );
+        // `nano` or `micro`, which select by pages with Shift.
+        let mut editor = term_with("\x1b[?1049h");
+        let typed = view.key(&mut editor, Key::PageDown, Modifiers::SHIFT, "", &context);
+        assert!(typed.contains(&Effect::Type(b"\x1b[6;2~".to_vec())), "{typed:?}");
     }
 
     #[test]
@@ -2302,7 +2401,11 @@ mod tests {
             (kde.target.as_str(), kde.start.column.0, kde.cells),
             ("https://kde.org", 28, 3)
         );
-        assert_eq!(at(33, true), None, "unsafe schemes do not count");
+        // A local file through `file://` opens after the checks of a file in the text; on
+        // Windows, /etc is no path of this computer.
+        let etc = at(33, true).map(|link| link.target);
+        assert_eq!(etc.as_deref(), cfg!(unix).then_some("/etc"));
+        assert_eq!(at(33, false), None, "files only when asked for");
         let hidden = Options {
             escaped_links: false,
             ..Options::default()
@@ -2314,6 +2417,35 @@ mod tests {
             &self::context(&hidden, true, &found),
         );
         assert_eq!(plain, None);
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    /// The address of the file is built from a path of Unix.
+    #[test]
+    #[cfg(unix)]
+    fn a_hyperlink_of_another_kind_leaves_the_visible_text() {
+        let directory = std::env::temp_dir().join(format!("kudari-hyperlinks-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("notes.txt"), "").unwrap();
+        let notes = directory.join("notes.txt").to_string_lossy().into_owned();
+        let host = crate::process::host();
+        // As `ls --hyperlink=auto` writes it, with the name of this computer; a link of a scheme
+        // that is not allowed around an address; one of another computer around a file name.
+        let term = term_of(
+            60,
+            &format!(
+                "\x1b]8;;file://{host}{notes}\x1b\\notes.txt\x1b]8;;\x1b\\ \x1b]8;;custom:x\x1b\\https://kde.org\x1b]8;;\x1b\\ \x1b]8;;file://elsewhere/x\x1b\\notes.txt\x1b]8;;\x1b\\"
+            ),
+        );
+        let options = Options::default();
+        let found = || Some(directory.clone());
+        let context = context(&options, true, &found);
+        let at =
+            |column: usize| link_at(&term, Point::new(Line(0), Column(column)), true, &context).map(|link| link.target);
+        let real = std::fs::canonicalize(&notes).unwrap().to_string_lossy().into_owned();
+        assert_eq!(at(2).as_deref(), Some(real.as_str()));
+        assert_eq!(at(14).as_deref(), Some("https://kde.org"));
+        assert_eq!(at(28).as_deref(), Some(notes.as_str()));
         std::fs::remove_dir_all(&directory).unwrap();
     }
 

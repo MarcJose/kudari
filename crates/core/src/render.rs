@@ -8,7 +8,8 @@ use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::Point;
 use alacritty_terminal::term::Term;
-use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::search::Match;
 use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 
@@ -147,6 +148,25 @@ fn is_picture(flags: Flags, zero_width: Option<&[char]>) -> bool {
     flags.contains(Flags::WIDE_CHAR) || zero_width.is_some_and(|zero_width| zero_width.contains(&'\u{fe0f}'))
 }
 
+/// The text and background colors of a cell as the terminal shows it, before the selection
+/// and the search: bold in the intense colors with `bold_intense`, faint, and swapped when
+/// inverse. Hidden text takes its background afterwards.
+#[must_use]
+pub fn cell_colors(cell: &Cell, palette: &Colors, scheme: &ColorScheme, bold_intense: bool) -> (Rgb, Rgb) {
+    let mut foreground = resolve(cell.fg, palette, scheme);
+    let mut back = resolve(cell.bg, palette, scheme);
+    if cell.flags.contains(Flags::BOLD) && bold_intense {
+        foreground = brighten(cell.fg, foreground, palette, scheme);
+    }
+    if cell.flags.contains(Flags::DIM) {
+        foreground = faint(cell.fg, foreground, palette, scheme);
+    }
+    if cell.flags.contains(Flags::INVERSE) {
+        std::mem::swap(&mut foreground, &mut back);
+    }
+    (foreground, back)
+}
+
 /// Selected text in the theme's colors for selections, as everywhere else on the desktop;
 /// with `swapped`, text and background trade places instead.
 fn selection_colors(foreground: Rgb, back: Rgb, scheme: &ColorScheme, swapped: bool) -> (Rgb, Rgb) {
@@ -269,17 +289,7 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
         let point = cell.point;
         let line = point.line.0 + offset;
         let column = point.column.0 as i32;
-        let mut foreground = resolve(cell.fg, palette, scheme);
-        let mut back = resolve(cell.bg, palette, scheme);
-        if flags.contains(Flags::BOLD) && scene.bold_intense {
-            foreground = brighten(cell.fg, foreground, palette, scheme);
-        }
-        if flags.contains(Flags::DIM) {
-            foreground = faint(cell.fg, foreground, palette, scheme);
-        }
-        if flags.contains(Flags::INVERSE) {
-            std::mem::swap(&mut foreground, &mut back);
-        }
+        let (mut foreground, mut back) = cell_colors(cell.cell, palette, scheme, scene.bold_intense);
         if selection.is_some_and(|range| range.contains(point)) {
             (foreground, back) = selection_colors(foreground, back, scheme, options.invert_selection);
         } else if in_match(point) {
