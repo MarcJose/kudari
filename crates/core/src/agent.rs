@@ -303,23 +303,30 @@ impl Access {
 #[must_use]
 pub fn question_text(reading: bool, control: bool, program: Option<&str>) -> String {
     let program = program.map_or_else(|| tr("@info", "an unknown program"), str::to_string);
-    let wants = match (reading, control) {
+    let ask = |program: &str| match (reading, control) {
         (true, true) => tr_arg(
             "@info",
             "An AI agent wants to read and control your terminals. The request comes from %1.",
-            &program,
+            program,
         ),
         (false, true) => tr_arg(
             "@info",
             "An AI agent wants to control your terminals. The request comes from %1.",
-            &program,
+            program,
         ),
         _ => tr_arg(
             "@info",
             "An AI agent wants to read your terminals. The request comes from %1.",
-            &program,
+            program,
         ),
     };
+    // The question is rich text. KDE gives a translation with an argument as rich text, in
+    // <html>, with the argument escaped; a text without markup on Windows comes as it is,
+    // and its argument is escaped here.
+    let mut wants = ask(&program);
+    if !wants.starts_with("<html>") {
+        wants = ask(&crate::gettext::escape(&program));
+    }
     let advice = tr(
         "@info",
         "Allow this only if you started the agent yourself. Its access lasts until the agent ends, or until you end it with the eye button in the bar.",
@@ -649,6 +656,14 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_name_of_the_program_is_text_in_the_question() {
+        // As on Windows: the translation comes without <html>, the name is escaped here.
+        let question = question_text(true, false, Some("a<p>&b"));
+        assert!(question.contains("from a&lt;p&gt;&amp;b."), "{question}");
+        assert_eq!(question.matches("<p>").count(), 2, "{question}");
+    }
 
     #[test]
     fn a_long_reading_keeps_the_newest_lines() {
