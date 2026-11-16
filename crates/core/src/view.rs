@@ -85,6 +85,39 @@ pub struct View {
     last_motion: Option<Point>,
     /// The links that the link numbers show, as [`hint_links`] found them.
     hints: Vec<(String, i32, i32)>,
+    /// How far the wheel turned beyond the last whole step, in [`WHEEL_NOTCH`] units.
+    wheel_rest: f64,
+    /// The same for zooming with the wheel.
+    zoom_rest: f64,
+}
+
+/// What one notch of a mouse wheel turns, in the eighths of a degree that Qt counts. A notch
+/// scrolls three lines; wheels with a finer grid and touchpads send less, more often.
+pub const WHEEL_NOTCH: f64 = 120.0;
+/// Lines that one notch scrolls.
+const NOTCH_LINES: f64 = 3.0;
+
+/// How far the wheel turned, in [`WHEEL_NOTCH`] units: from the pixels a touchpad moved,
+/// one line to a cell, or else from the angle of the wheel.
+#[must_use]
+pub fn wheel_turn(angle: i32, pixels: i32, cell_height: f64) -> f64 {
+    if pixels != 0 && cell_height > 0.0 {
+        f64::from(pixels) / cell_height * WHEEL_NOTCH / NOTCH_LINES
+    } else {
+        f64::from(angle)
+    }
+}
+
+/// Adds `turn` to `rest` and takes the whole steps of `step` out of it, up as positive. A
+/// turn the other way starts again from nothing.
+fn whole_steps(rest: &mut f64, turn: f64, step: f64) -> i32 {
+    if *rest * turn < 0.0 {
+        *rest = 0.0;
+    }
+    *rest += turn;
+    let steps = (*rest / step).trunc();
+    *rest -= steps * step;
+    steps as i32
 }
 
 /// Whether the selection mode is on: it uses alacritty's vi mode.
@@ -274,12 +307,31 @@ impl View {
         text: &str,
         context: &Context,
     ) -> Vec<Effect> {
+        self.key_at(term, key, None, modifiers, text, context)
+    }
+
+    /// [`Self::key`] for a key in the row of digits, which picks the link of its number
+    /// whatever it types. With Shift held for the numbers, the key of 1 types `!`, and on
+    /// keyboards such as AZERTY it types `&` without Shift.
+    pub fn key_at<T: EventListener>(
+        &mut self,
+        term: &mut Term<T>,
+        key: Key,
+        digit: Option<u8>,
+        modifiers: Modifiers,
+        text: &str,
+        context: &Context,
+    ) -> Vec<Effect> {
         let options = context.options;
         let hints_held = !options.url_hints_modifiers.is_empty() && modifiers.held() == options.url_hints_modifiers;
         let mut effects = vec![Effect::Hints(hints_held)];
-        if let (true, Key::Character(digit @ '1'..='9')) = (hints_held, key) {
+        let digit = digit.filter(|digit| (1..=9).contains(digit)).or(match key {
+            Key::Character(character @ '1'..='9') => Some(character as u8 - b'0'),
+            _ => None,
+        });
+        if let (true, Some(digit)) = (hints_held, digit) {
             // The numbers that are shown, not a new look at the files under the lock.
-            let index = digit as usize - '1' as usize;
+            let index = usize::from(digit - 1);
             if let Some(link) = pick_hint(&self.hints, index, options.reverse_url_hints) {
                 effects.push(Effect::OpenLink(link.0.clone()));
                 effects.push(Effect::Hints(false));
@@ -351,6 +403,8 @@ impl View {
         let opens_link = button == Some(MouseButton::Left) && modifiers.contains(Modifiers::CONTROL) && !block;
         if let Some(pressed) = button.filter(|_| reports_mouse(term, modifiers, context) && !opens_link) {
             self.pressed_button = Some(pressed);
+            // A selection whose release got lost, when the window hid during a drag, ends.
+            self.selecting = false;
             return mouse_report(term, MouseEvent::Press(pressed), modifiers, point)
                 .into_iter()
                 .collect();
@@ -430,12 +484,17 @@ impl View {
         auto_copy: bool,
         context: &Context,
     ) -> Vec<Effect> {
-        if reports_mouse(term, modifiers, context) {
-            let report = point
-                .zip(button)
-                .and_then(|(point, button)| mouse_report(term, MouseEvent::Release(button), modifiers, point));
-            self.pressed_button = None;
-            return report.into_iter().collect();
+        // The press decides who gets the release, not the keys held now: Shift can go up or
+        // down while the button is held, and the program must not see a release without a
+        // press, nor miss the release of a press.
+        if let Some(pressed) = self.pressed_button.take() {
+            let tracking = context.tracks_mouse && term.mode().intersects(TermMode::MOUSE_MODE);
+            let release = MouseEvent::Release(button.unwrap_or(pressed));
+            return point
+                .filter(|_| tracking)
+                .and_then(|point| mouse_report(term, release, modifiers, point))
+                .into_iter()
+                .collect();
         }
         if !self.selecting {
             return Vec::new();
@@ -457,34 +516,62 @@ impl View {
             .collect()
     }
 
-    /// The wheel turned over `point`: the program learns about it, full-screen programs get
-    /// arrow keys, or the view scrolls.
+    /// The wheel turned by `turn` over `point`, up as positive; see [`wheel_turn`]. The
+    /// program learns about each whole notch, full-screen programs get an arrow key for each
+    /// line, or the view scrolls by the lines. A turn of nothing, as a sideways wheel or the
+    /// start of a gesture on a touchpad sends, does nothing.
     pub fn wheel<T>(
-        &self,
+        &mut self,
         term: &Term<T>,
         point: Option<Point>,
-        up: bool,
+        turn: f64,
         alternate_scrolling: bool,
         context: &Context,
     ) -> Vec<Effect> {
         let mode = *term.mode();
+        if turn == 0.0 {
+            return Vec::new();
+        }
         if reports_mouse(term, Modifiers::NONE, context) {
-            let event = if up { MouseEvent::WheelUp } else { MouseEvent::WheelDown };
-            let mut effects: Vec<Effect> = point
-                .and_then(|point| mouse_report(term, event, Modifiers::NONE, point))
-                .into_iter()
-                .collect();
-            effects.push(Effect::Refresh);
-            effects
+            let notches = whole_steps(&mut self.wheel_rest, turn, WHEEL_NOTCH);
+            let event = if notches > 0 {
+                MouseEvent::WheelUp
+            } else {
+                MouseEvent::WheelDown
+            };
+            let report = point
+                .filter(|_| notches != 0)
+                .and_then(|point| mouse_report(term, event, Modifiers::NONE, point));
+            let Some(Effect::Write(report)) = report else {
+                return Vec::new();
+            };
+            return vec![
+                Effect::Write(report.repeat(notches.unsigned_abs() as usize)),
+                Effect::Refresh,
+            ];
+        }
+        let lines = whole_steps(&mut self.wheel_rest, turn, WHEEL_NOTCH / NOTCH_LINES);
+        if lines == 0 {
+            Vec::new()
         } else if mode.contains(TermMode::ALT_SCREEN)
             && mode.contains(TermMode::ALTERNATE_SCROLL)
             && alternate_scrolling
         {
-            let arrow = if up { "\x1bOA" } else { "\x1bOB" };
-            vec![Effect::Write(arrow.repeat(3).into_bytes()), Effect::Refresh]
+            let arrow = if lines > 0 { "\x1bOA" } else { "\x1bOB" };
+            let count = (lines.unsigned_abs() as usize).min(term.screen_lines());
+            vec![Effect::Write(arrow.repeat(count).into_bytes()), Effect::Refresh]
         } else {
-            vec![Effect::Scroll(if up { 3 } else { -3 })]
+            vec![Effect::Scroll(lines)]
         }
+    }
+
+    /// The steps to zoom by after the wheel turned by `turn` with Ctrl held: one for each
+    /// notch, up as larger.
+    pub fn wheel_zoom(&mut self, turn: f64) -> i32 {
+        if turn == 0.0 {
+            return 0;
+        }
+        whole_steps(&mut self.zoom_rest, turn, WHEEL_NOTCH)
     }
 
     /// Searches from the selection, or from the cursor, and selects what it finds. With
@@ -1673,6 +1760,49 @@ mod tests {
     }
 
     #[test]
+    fn numbers_with_shift_held_open_links_by_the_place_of_the_key() {
+        let mut term = term_with("a https://a.org b\r\nhttps://b.org");
+        let mut view = View::default();
+        let options = Options {
+            url_hints_modifiers: Modifiers::CONTROL | Modifiers::SHIFT,
+            ..Options::default()
+        };
+        let context = context(&options, true, &nowhere);
+        let held = Modifiers::CONTROL | Modifiers::SHIFT;
+        view.set_hints(links_on_screen(&term, None));
+        // With Shift, the key of 2 types `"`; the front end knows it as the key of 2.
+        assert_eq!(
+            view.key_at(&mut term, Key::Character('"'), Some(2), held, "\"", &context),
+            [
+                Effect::Hints(true),
+                Effect::OpenLink("https://b.org".into()),
+                Effect::Hints(false)
+            ]
+        );
+        // On AZERTY the key of 1 types `&`, also without Shift.
+        let azerty = Options {
+            url_hints_modifiers: Modifiers::CONTROL,
+            ..Options::default()
+        };
+        let context = self::context(&azerty, true, &nowhere);
+        let effects = view.key_at(
+            &mut term,
+            Key::Character('&'),
+            Some(1),
+            Modifiers::CONTROL,
+            "&",
+            &context,
+        );
+        assert!(
+            effects.contains(&Effect::OpenLink("https://a.org".into())),
+            "{effects:?}"
+        );
+        // Without the numbers held, the key types what it types.
+        let effects = view.key_at(&mut term, Key::Character('&'), Some(1), NONE, "&", &context);
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::OpenLink(_))));
+    }
+
+    #[test]
     fn a_number_opens_the_link_it_shows_without_looking_at_files() {
         let mut term = term_with("notes.txt here");
         let mut view = View::default();
@@ -1782,6 +1912,61 @@ mod tests {
             ]
         );
         assert!(!selection_mode(&term) && term.selection.is_none());
+    }
+
+    /// A terminal where a program such as tmux or vim gets every motion of the mouse.
+    fn tracking_term() -> Term<VoidListener> {
+        term_with("hello world\x1b[?1003h\x1b[?1006h")
+    }
+
+    fn writes(effects: &[Effect]) -> Vec<String> {
+        effects
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::Write(bytes) => Some(String::from_utf8_lossy(bytes).into_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_selection_with_shift_ends_when_shift_goes_up_first() {
+        let mut term = tracking_term();
+        let mut view = View::default();
+        let options = Options::default();
+        let context = context(&options, true, &nowhere);
+        let start = (Point::new(Line(0), Column(0)), Side::Left);
+        let end = (Point::new(Line(0), Column(4)), Side::Right);
+        view.press(&mut term, start, LEFT, 1, Modifiers::SHIFT, None, &context);
+        view.motion(&mut term, end, Modifiers::SHIFT, &context);
+        // Shift goes up before the button.
+        let released = view.release(&mut term, Some(end.0), LEFT, NONE, false, true, &context);
+        assert_eq!(released, [Effect::CopyPrimary("hello".into())]);
+        assert!(!view.selecting());
+        // The program gets the mouse again, and the selection stays where it was.
+        let moved = view.motion(&mut term, (Point::new(Line(0), Column(8)), Side::Left), NONE, &context);
+        assert_eq!(writes(&moved), ["\x1b[<35;9;1M"]);
+        assert_eq!(selected_text(&term, &options).as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn a_press_for_the_program_gets_its_release_when_shift_goes_down() {
+        let mut term = tracking_term();
+        let mut view = View::default();
+        let options = Options::default();
+        let context = context(&options, true, &nowhere);
+        let at = (Point::new(Line(0), Column(2)), Side::Left);
+        let pressed = view.press(&mut term, at, LEFT, 1, NONE, None, &context);
+        assert_eq!(writes(&pressed), ["\x1b[<0;3;1M"]);
+        // Shift goes down before the button goes up.
+        let released = view.release(&mut term, Some(at.0), LEFT, Modifiers::SHIFT, true, true, &context);
+        assert_eq!(writes(&released), ["\x1b[<4;3;1m"]);
+        // Moving afterwards is no drag with the left button.
+        let moved = view.motion(&mut term, (Point::new(Line(0), Column(5)), Side::Left), NONE, &context);
+        assert_eq!(writes(&moved), ["\x1b[<35;6;1M"]);
+        // A release that no press reported goes nowhere.
+        let orphan = view.release(&mut term, Some(at.0), LEFT, NONE, true, true, &context);
+        assert!(writes(&orphan).is_empty(), "{orphan:?}");
     }
 
     #[test]
@@ -1945,7 +2130,7 @@ mod tests {
             [Effect::Write(b"\x1b[<0;4;2m".to_vec())]
         );
         assert_eq!(
-            view.wheel(&term, Some(cell.0), true, true, &context),
+            view.wheel(&term, Some(cell.0), WHEEL_NOTCH, true, &context),
             [Effect::Write(b"\x1b[<64;3;2M".to_vec()), Effect::Refresh]
         );
         // Shift keeps the mouse for selecting, and so does a terminal that may not track it.
@@ -1970,19 +2155,67 @@ mod tests {
     fn the_wheel_scrolls_or_sends_arrows() {
         let options = Options::default();
         let context = context(&options, true, &nowhere);
-        let view = View::default();
+        let mut view = View::default();
         let term = term_with("");
-        assert_eq!(view.wheel(&term, None, true, true, &context), [Effect::Scroll(3)]);
-        assert_eq!(view.wheel(&term, None, false, true, &context), [Effect::Scroll(-3)]);
+        assert_eq!(view.wheel(&term, None, 120.0, true, &context), [Effect::Scroll(3)]);
+        assert_eq!(view.wheel(&term, None, -120.0, true, &context), [Effect::Scroll(-3)]);
         let full_screen = term_with("\x1b[?1049h\x1b[?1007h");
         assert_eq!(
-            view.wheel(&full_screen, None, false, true, &context),
+            view.wheel(&full_screen, None, -120.0, true, &context),
             [Effect::Write(b"\x1bOB\x1bOB\x1bOB".to_vec()), Effect::Refresh]
         );
         assert_eq!(
-            view.wheel(&full_screen, None, true, false, &context),
+            view.wheel(&full_screen, None, 120.0, false, &context),
             [Effect::Scroll(3)]
         );
+    }
+
+    #[test]
+    fn the_wheel_scrolls_by_how_far_it_turned() {
+        let options = Options::default();
+        let context = context(&options, true, &nowhere);
+        let mut view = View::default();
+        let term = term_with("");
+        // A sideways wheel, or the start of a gesture on a touchpad.
+        assert!(view.wheel(&term, None, 0.0, true, &context).is_empty());
+        // A wheel with eight steps to a notch: three lines for the notch, not twenty-four.
+        let lines: i32 = (0..8)
+            .flat_map(|_| view.wheel(&term, None, 15.0, true, &context))
+            .map(|effect| match effect {
+                Effect::Scroll(lines) => lines,
+                other => panic!("{other:?}"),
+            })
+            .sum();
+        assert_eq!(lines, 3);
+        // What is left of a turn does not count the other way.
+        assert!(view.wheel(&term, None, 30.0, true, &context).is_empty());
+        assert_eq!(view.wheel(&term, None, -40.0, true, &context), [Effect::Scroll(-1)]);
+        // A touchpad moves pixels, a line for the height of a cell.
+        assert_eq!(wheel_turn(0, 36, 18.0), 80.0);
+        assert_eq!(wheel_turn(120, 0, 18.0), 120.0);
+        assert_eq!(
+            view.wheel(&term, None, wheel_turn(0, -36, 18.0), true, &context),
+            [Effect::Scroll(-2)]
+        );
+    }
+
+    #[test]
+    fn programs_get_the_wheel_once_for_each_notch() {
+        let options = Options::default();
+        let context = context(&options, true, &nowhere);
+        let mut view = View::default();
+        let term = tracking_term();
+        let at = Some(Point::new(Line(0), Column(2)));
+        let reports: Vec<Effect> = (0..8)
+            .flat_map(|_| view.wheel(&term, at, -15.0, true, &context))
+            .collect();
+        assert_eq!(reports, [Effect::Write(b"\x1b[<65;3;1M".to_vec()), Effect::Refresh]);
+        assert!(view.wheel(&term, at, 0.0, true, &context).is_empty());
+        // Zooming with Ctrl takes a step for each notch as well, and none for nothing.
+        assert_eq!(view.wheel_zoom(0.0), 0);
+        assert_eq!((0..7).map(|_| view.wheel_zoom(15.0)).sum::<i32>(), 0);
+        assert_eq!(view.wheel_zoom(15.0), 1);
+        assert_eq!(view.wheel_zoom(-240.0), -2);
     }
 
     #[test]
