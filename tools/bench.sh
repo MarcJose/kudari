@@ -4,15 +4,19 @@
 # Measures how fast terminals take in output and, for Kudari, how long Qt Quick needs for
 # each frame meanwhile, to compare terminals and a change to the drawing before and after:
 #
-#   tools/bench.sh [--binary PATH] [--runs N] [--loads LOAD,...] [--scale N] [--keep] [--keep-env] [TERMINAL...]
+#   tools/bench.sh [--binary PATH] [--runs N] [--warmup N] [--seed N] [--loads LOAD,...]
+#                  [--scale N] [--detail] [--keep] [--keep-env] [TERMINAL...]
 #
 # The terminals are kudari, yakuake, konsole, alacritty, kitty, ghostty, contour and xterm;
 # without any, every one of them that is installed. Kudari is the installed one, or else the
 # release build (cargo build --release); --binary names another. Each run measures every
-# terminal once, five runs by default, and the report shows the average, the fastest and the
-# slowest run of each load. --loads picks some of plain, color, frames and seq, --scale
-# scales the screen as for a HiDPI display, and --keep keeps the data and the logs of the
-# terminals.
+# terminal once, in an order shuffled for each run; --seed repeats an order. Five runs count
+# by default, after one warm-up run that does not (--warmup). The report shows for each load
+# the median of the runs, its spread, a 95 % interval of the median, the fastest and the
+# slowest run and the runs far from the others; for Kudari, how often and how fast Qt Quick
+# drew meanwhile, and with --detail the times of its frames in detail. --loads picks some
+# of plain, color, frames and seq, --scale scales the screen as for a HiDPI display, and
+# --keep keeps the data and the logs of the terminals.
 #
 # The report starts with what was measured on what: the build of Kudari with its hash and
 # origin, the processor and its clock, the versions of Qt, KWin and Mesa. It warns about a
@@ -92,10 +96,19 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
         kscreen-doctor "output.$output.scale.$KUDARI_BENCH_SCALE" > /dev/null 2>&1 || fail "could not scale the screen to $KUDARI_BENCH_SCALE"
         sleep 1
     fi
-    run=1
-    while [ "$run" -le "$KUDARI_BENCH_RUNS" ]; do
-        for terminal in $KUDARI_BENCH_TERMINALS; do
-            say "Run $run of $KUDARI_BENCH_RUNS: $terminal"
+    # The warm-up runs come first, as w1, w2 and so on; the report leaves them out.
+    round=1
+    while [ "$round" -le $((KUDARI_BENCH_WARMUP + KUDARI_BENCH_RUNS)) ]; do
+        if [ "$round" -le "$KUDARI_BENCH_WARMUP" ]; then
+            run=w$round title="Warm-up run $round of $KUDARI_BENCH_WARMUP"
+        else
+            run=$((round - KUDARI_BENCH_WARMUP)) title="Run $((round - KUDARI_BENCH_WARMUP)) of $KUDARI_BENCH_RUNS"
+        fi
+        # A terminal that always comes first or after the same one would carry what the order
+        # does to it, as a cold cache or the heat of the one before, into every run.
+        # shellcheck disable=SC2086 # the terminals are words of their own
+        for terminal in $(python3 "$tools/bench.py" order "$run" --seed "$KUDARI_BENCH_SEED" $KUDARI_BENCH_TERMINALS); do
+            say "$title: $terminal"
             rm -f "$work/go"
             log="$work/$terminal-$run.log"
             export XDG_CONFIG_HOME="$work/config-$terminal-$run" KUDARI_BENCH_OUT="$work/$terminal-$run.txt"
@@ -150,7 +163,7 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
             wait "$pid" 2> /dev/null || true
             sleep 1
         done
-        run=$((run + 1))
+        round=$((round + 1))
     done
     : > "$work/complete"
     exit 0
@@ -162,6 +175,9 @@ scale=1
 loads="plain color frames seq"
 keep=
 keep_env=
+warmup=1
+seed=
+detail=
 terminals=
 while [ $# -gt 0 ]; do
     case $1 in
@@ -177,16 +193,22 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         --keep-env) keep_env=1; shift ;;
-        -h | --help) sed -n '4,31s/^# \{0,1\}//p' "$0"; exit 0 ;;
+        --warmup) warmup=$2; shift 2 ;;
+        --seed) seed=$2; shift 2 ;;
+        --detail) detail=1; shift ;;
+        -h | --help) sed -n '4,35s/^# \{0,1\}//p' "$0"; exit 0 ;;
         *)
             case " $all " in
                 *" $1 "*) terminals="$terminals $1"; shift ;;
-                *) die "usage: tools/bench.sh [--binary PATH] [--runs N] [--loads LOAD,...] [--scale N] [--keep] [--keep-env] [TERMINAL...]; the terminals are: $all" ;;
+                *) die "usage: tools/bench.sh [--binary PATH] [--runs N] [--warmup N] [--seed N] [--loads LOAD,...] [--scale N] [--detail] [--keep] [--keep-env] [TERMINAL...]; the terminals are: $all" ;;
             esac
             ;;
     esac
 done
 case $runs in '' | *[!0-9]* | 0) die "--runs needs a number of 1 or more" ;; esac
+case $warmup in '' | *[!0-9]*) die "--warmup needs a number of 0 or more" ;; esac
+[ -n "$seed" ] || seed=$(od -An -N2 -tu2 /dev/urandom | tr -d ' ')
+case $seed in *[!0-9]*) die "--seed needs a number" ;; esac
 case $scale in '' | *[!0-9.]* | *.*.* | .* | *.) die "--scale needs a number such as 2 or 1.5" ;; esac
 local_build="${CARGO_TARGET_DIR:-$tools/../target}/release/kudari"
 if [ -z "$binary" ]; then
@@ -229,7 +251,8 @@ if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
     case " $terminals " in *" kudari "*) measured=$binary ;; *) measured= ;; esac
     # shellcheck disable=SC2086 # the Kudari measured is one word or none
     python3 "$tools/bench.py" environment "$work" $measured --local "$local_build" \
-        --variables "$(echo $variables | tr ' ' ',')" ${keep_env:+--keep-env}
+        --variables "$(echo $variables | tr ' ' ',')" ${keep_env:+--keep-env} \
+        --runs "$runs" --warmup "$warmup" --seed "$seed"
     echo "Making the data ..."
     python3 "$tools/bench.py" data "$work"
     # The bus and the portals it starts complain about what the virtual session lacks; that
@@ -239,9 +262,10 @@ if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
     # shellcheck disable=SC2086 # the terminals and the variables are words of their own
     if env -u WAYLAND_DISPLAY -u DISPLAY -u QSG_RENDER_LOOP -u QT_QUICK_BACKEND -u QSG_RHI_BACKEND $unset_variables \
         XDG_CONFIG_HOME=/nonexistent XDG_DATA_HOME=/nonexistent KUDARI_BENCH_WORK="$work" \
-        dbus-run-session -- "$0" --binary "$binary" --runs "$runs" --scale "$scale" --loads "$(echo $loads | tr " " ",")" $terminals \
+        dbus-run-session -- "$0" --binary "$binary" --runs "$runs" --warmup "$warmup" --seed "$seed" --scale "$scale" \
+        --loads "$(echo $loads | tr " " ",")" $terminals \
         < /dev/null 3>&2 2> "$work/dbus.log"; then
-        python3 "$tools/bench.py" report "$work" $terminals
+        python3 "$tools/bench.py" report "$work" $terminals ${detail:+--detail}
         if [ -n "$keep" ]; then echo "The data and the logs are in $work"; else rm -rf "$work"; fi
     else
         die "the measurement failed; its files are in $work"
@@ -265,7 +289,7 @@ printf '[General]\ncount=1\nrules=1\n\n[1]\nDescription=full screen\nfullscreen=
     > "$XDG_CONFIG_HOME/kwinrulesrc"
 export QT_QPA_PLATFORM=wayland QT_FORCE_STDERR_LOGGING=1
 export KUDARI_BENCH_RUNS="$runs" KUDARI_BENCH_TERMINALS="$terminals" KUDARI_BENCH_BINARY="$binary"
-export KUDARI_BENCH_LOADS="$loads" KUDARI_BENCH_SCALE="$scale"
+export KUDARI_BENCH_LOADS="$loads" KUDARI_BENCH_SCALE="$scale" KUDARI_BENCH_WARMUP="$warmup" KUDARI_BENCH_SEED="$seed"
 : > "$work/progress.log"
 tail -f "$work/progress.log" &
 progress=$!

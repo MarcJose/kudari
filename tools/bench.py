@@ -6,7 +6,9 @@
     tools/bench.py data DIR                 the text and the colored text
     tools/bench.py frames DIR ROWS COLUMNS  300 full screens of a terminal of that size
     tools/bench.py environment DIR [BINARY] what was measured, on what, and how
-    tools/bench.py report DIR [TERMINAL...]  the runs in DIR, in the order of the terminals
+    tools/bench.py order RUN TERMINAL...    the terminals in the order of a run, with --seed
+    tools/bench.py report DIR [TERMINAL...]  the runs in DIR, in the order of the terminals;
+                                            --detail adds the times of the frames in detail
 
 The data comes from a fixed seed, so every run gets the same. For Kudari, the report also
 counts the frames that Qt Quick drew during each load and how long it took to prepare them
@@ -23,6 +25,7 @@ import re
 import statistics
 import subprocess
 from pathlib import Path
+from typing import NamedTuple
 
 WORDS = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor".split()
 CELLS = "abcdefghijklmnopqrstuvwxyz0123456789#@%&"
@@ -38,10 +41,37 @@ SEQ_BYTES = sum(len(f"{n}\n") for n in range(1, 2_000_001))
 # and software. Qt gives whole milliseconds there, cut off.
 FRAME = re.compile(
     r"^(\S+) (?:.*\[(render|gui) thread[^\]]*\].*[Ff]rame rendered|.*Frame rendered with '(\w+)' renderloop) "
-    r"in \d+ms, (?:polish=\d+, )?sync=(\d+), render=\d+, swap=\d+"
+    r"in (\d+)ms, (?:polish=\d+, )?sync=(\d+), render=(\d+), swap=(\d+)"
 )
+# What the GUI thread did for a frame of the threaded render loop, also in whole milliseconds.
+PREPARED = re.compile(r"^(\S+) .*\[gui thread\] Frame prepared, .*blockedForSync=(\d+) ms")
 # A frame shows the output a moment after it arrived: frames this long after a load count.
 TAIL = 0.05
+# A gap between two frames this long, in milliseconds, left out one at 60 Hz.
+LATE = 1.5 * 1000 / 60
+# The time a frame has at a refresh rate, in milliseconds.
+BUDGETS = (("60 Hz", 1000 / 60), ("120 Hz", 1000 / 120), ("144 Hz", 1000 / 144))
+# The seed of the bootstrap intervals, so that a report comes out the same again.
+SEED = 1
+# How far from the median a run must be at least to count as an outlier, as a share of it.
+OUTLIER = 0.03
+
+
+class Frame(NamedTuple):
+    time: float
+    total: int
+    sync: int
+    render: int
+    swap: int
+    loop: str
+
+
+class Load(NamedTuple):
+    seconds: float
+    size: int
+    frames: list
+    blocked: list
+    window: float
 
 
 def data(directory):
@@ -78,17 +108,25 @@ def when(stamp):
 
 
 def frame(line):
-    """The time, the sync in whole milliseconds and the render loop of a frame in the log."""
+    """A frame in the log: its time, the milliseconds of the whole frame and of sync, render
+    and swap, and the render loop; or None."""
     match = FRAME.match(line)
     if not match:
         return None
     loop = match[3] or ("threaded" if match[2] == "render" else "basic")
-    return when(match[1]), int(match[4]), loop
+    return Frame(when(match[1]), *(int(match[group]) for group in range(4, 8)), loop)
+
+
+def prepared(line):
+    """How long the GUI thread waited for the render thread in a frame of the threaded loop:
+    its time and blockedForSync in milliseconds; or None."""
+    match = PREPARED.match(line)
+    return (when(match[1]), int(match[2])) if match else None
 
 
 def measure(directory, name):
-    """Per load of one run: seconds, bytes, the sync times of the frames meanwhile, and the
-    seconds in which they were counted; with the render loops seen."""
+    """Per load of one run: its seconds, its bytes, the frames and the waits of the GUI thread
+    meanwhile, and the seconds in which they were counted; with the render loops seen."""
     lines = (directory / f"{name}.txt").read_text().splitlines()
     rows, columns = lines[0].split()[1:]
     sizes = {
@@ -97,28 +135,63 @@ def measure(directory, name):
         "frames": (directory / f"frames-{rows}x{columns}.txt").stat().st_size,
         "seq": SEQ_BYTES,
     }
-    drawn = []
-    loops = set()
+    drawn, waits, loops = [], [], set()
     log = directory / f"{name}.log"
     for line in log.read_text(errors="replace").splitlines():
-        found = frame(line)
-        if found:
-            drawn.append(found[:2])
-            loops.add(found[2])
+        if found := frame(line):
+            drawn.append(found)
+            loops.add(found.loop)
+        elif found := prepared(line):
+            waits.append(found)
     result = {}
     for line in lines[1:]:
         parts = line.split()
         if len(parts) != 3:
             continue
         load, start, end = parts[0], when(parts[1]), when(parts[2])
-        syncs = [sync for moment, sync in drawn if start <= moment <= end + TAIL]
-        result[load] = (end - start, sizes[load], syncs, end - start + TAIL)
+        frames_meanwhile = [found for found in drawn if start <= found.time <= end + TAIL]
+        blocked = [wait for moment, wait in waits if start <= moment <= end + TAIL]
+        result[load] = Load(end - start, sizes[load], frames_meanwhile, blocked, end - start + TAIL)
     return f"{columns}x{rows}", result, loops
 
 
 def milliseconds(whole):
     """A time that Qt cut off to whole milliseconds, as the range it stands for."""
     return "<1" if whole == 0 else f"{whole}-{whole + 1}"
+
+
+def percentile(values, share):
+    """The value below which `share` of the values lie, as the nearest of them."""
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, max(0, round(share * len(ordered) + 0.5) - 1))]
+
+
+def spread(values):
+    """The median and the median absolute deviation."""
+    middle = statistics.median(values)
+    return middle, statistics.median(abs(value - middle) for value in values)
+
+
+def interval(values, seed=SEED, rounds=2000):
+    """A 95 % bootstrap interval of the median: medians of samples drawn with replacement."""
+    rng = random.Random(seed)
+    medians = sorted(statistics.median(rng.choices(values, k=len(values))) for _ in range(rounds))
+    return medians[int(0.025 * rounds)], medians[int(0.975 * rounds) - 1]
+
+
+def outliers(numbered):
+    """The runs further than three median absolute deviations from the median, and at least
+    OUTLIER of it: with a few runs close together, the deviation is so small that the clock
+    alone would make outliers."""
+    middle, deviation = spread([value for _, value in numbered])
+    return [run for run, value in numbered if abs(value - middle) > max(3 * deviation, OUTLIER * middle)]
+
+
+def order(seed, run, terminals):
+    """The terminals in the order of one run: shuffled, the same again for the same seed."""
+    shuffled = list(terminals)
+    random.Random(f"{seed}-{run}").shuffle(shuffled)
+    return shuffled
 
 
 def table(header, rows):
@@ -235,9 +308,18 @@ def versions():
     return found
 
 
-def describe(kudari, machine, software, removed, kept):
+class Plan(NamedTuple):
+    runs: int
+    warmup: int
+    seed: str
+
+
+def describe(kudari, machine, software, removed, kept, plan=None):
     """The lines of the head of the report, and the warnings about the measurement."""
     lines, warnings = [], []
+    if plan:
+        warm = (f" after {plan.warmup} warm-up runs that do not count" if plan.warmup != 1 else " after 1 warm-up run that does not count") if plan.warmup else ""
+        lines.append(f"Runs      {plan.runs}{warm}; the terminals in an order shuffled for each run, --seed {plan.seed} repeats it")
     if kudari:
         parts = [kudari["version"] or "no --version"]
         if kudari.get("git"):
@@ -283,86 +365,167 @@ def describe(kudari, machine, software, removed, kept):
     return lines + [f"Warning: {warning}" for warning in warnings]
 
 
-def environment(directory, binary, local, removed, kept):
+def environment(directory, binary, local, removed, kept, plan=None):
     """Writes the head of the report to DIR/environment.txt and shows it."""
     kudari = build(binary, local) if binary else None
-    text = "\n".join(describe(kudari, computer(), versions(), removed, kept)) + "\n"
+    text = "\n".join(describe(kudari, computer(), versions(), removed, kept, plan)) + "\n"
     (directory / "environment.txt").write_text(text)
     print(text, end="")
 
 
-def report(directory, order):
+def gaps(frames):
+    """The milliseconds from each frame to the next."""
+    times = [found.time for found in frames]
+    return [(later - earlier) * 1000 for earlier, later in zip(times, times[1:])]
+
+
+def throughput(runs, terminals):
+    """Per load, the seconds of each terminal over its runs."""
+    for load in LOADS:
+        rows = []
+        for terminal in terminals:
+            done = [(number, result[load]) for number, (_, result, _) in runs[terminal] if load in result]
+            if not done:
+                continue
+            seconds = [measured.seconds for _, measured in done]
+            middle, deviation = spread(seconds)
+            low, high = interval(seconds)
+            size = statistics.mean(measured.size for _, measured in done)
+            late = outliers([(number, measured.seconds) for number, measured in done])
+            cells = runs[terminal][0][1][0]
+            rows.append(
+                (
+                    -size / middle,
+                    [
+                        terminal,
+                        cells,
+                        f"{middle:.2f}",
+                        f"{100 * deviation / middle:.1f}",
+                        f"{low:.2f}-{high:.2f}",
+                        f"{min(seconds):.2f}",
+                        f"{max(seconds):.2f}",
+                        f"{size / middle / 1e6:.1f}",
+                        str(len(done)),
+                        ", ".join(late) or "-",
+                    ],
+                )
+            )
+        if not rows:
+            continue
+        print(f"\n{load}: {DESCRIPTIONS[load]}")
+        table(
+            ["terminal", "cells", "median s", "MAD %", "95% median s", "min s", "max s", "MB/s", "runs", "outliers"],
+            [row for _, row in sorted(rows, key=lambda row: row[0])],
+        )
+
+
+def drawing(terminal, measured, detail):
+    """For a terminal that reports its frames: how often and how fast it drew during each load."""
+    rows, details = [], []
+    for load in LOADS:
+        done = [result[load] for _, (_, result, _) in measured if load in result and result[load].frames]
+        if not done:
+            continue
+        rates = [len(load_run.frames) / load_run.window for load_run in done]
+        frames = [found for load_run in done for found in load_run.frames]
+        between = [gap for load_run in done for gap in gaps(load_run.frames)]
+        blocked = [wait for load_run in done for wait in load_run.blocked]
+        syncs = [found.sync for found in frames]
+        late = f"{100 * sum(gap > LATE for gap in between) / len(between):.0f}" if between else "-"
+        share = f"{100 * sum(blocked) / 1000 / sum(load_run.window for load_run in done):.0f}" if blocked else "-"
+        rows.append([load, f"{statistics.median(rates):.1f}", late, milliseconds(percentile(syncs, 0.5)), milliseconds(percentile(syncs, 0.95)), milliseconds(max(syncs)), share])
+        details.append((load, frames, between, blocked))
+    loops = sorted({loop for _, (_, _, seen) in measured for loop in seen})
+    print(f"\n{terminal}: frames that Qt Quick drew during each load (render loop {', '.join(loops)})")
+    print(f"fps is the median over the runs; late are the gaps between frames of more than {LATE:.0f} ms, one at")
+    print("60 Hz left out; sync is where Kudari paints, in whole milliseconds as Qt gives them, cut off;")
+    print("GUI blocked is the share of the time the GUI thread waited for the render thread, at least.")
+    table(["load", "fps", "late %", "sync p50", "sync p95", "sync max", "GUI blocked %"], rows)
+    if not detail:
+        return
+    print("\nIn detail, over all runs. Qt cuts off to whole milliseconds; swap includes the wait for the")
+    print("next VSync, so it shows the upload of the image only together with that wait.")
+    for load, frames, between, blocked in details:
+        print(f"\n{terminal}, {load}: {len(frames)} frames")
+        quantities = [
+            ("sync", [found.sync for found in frames], 1),
+            ("render", [found.render for found in frames], 1),
+            ("swap", [found.swap for found in frames], 1),
+            ("sync+render", [found.sync + found.render for found in frames], 2),
+            ("whole frame", [found.total for found in frames], 1),
+            ("GUI blocked", blocked, 1),
+        ]
+        rows = [[name] + [ranged(percentile(values, share), width) for share in (0.5, 0.95, 0.99)] + [ranged(max(values), width)] for name, values, width in quantities if values]
+        if between:
+            rows.append(["gap"] + [f"{percentile(between, share):.0f}" for share in (0.5, 0.95, 0.99)] + [f"{max(between):.0f}"])
+        table(["ms", "p50", "p95", "p99", "max"], rows)
+        busy = [found.sync + found.render for found in frames]
+        over = " / ".join(f"{100 * sum(value >= budget for value in busy) / len(busy):.0f} %" for _, budget in BUDGETS)
+        print(f"sync+render over the budget of {' / '.join(name for name, _ in BUDGETS)}: at least {over}")
+
+
+def ranged(whole, width):
+    """Whole milliseconds cut off, `width` of them added up, as the range they stand for."""
+    return milliseconds(whole) if width == 1 else f"{whole}-{whole + width}"
+
+
+def report(directory, order, detail=False):
     head = directory / "environment.txt"
     if head.exists():
         print()
         print(head.read_text(), end="")
-    runs = {}
+    runs, warmups = {}, 0
     for path in sorted(directory.glob("*-*.txt")):
         terminal, run = path.stem.rsplit("-", 1)
-        # The results of a run, not the screens of the frames load.
+        # The results of a run, not the screens of the frames load; warm-up runs do not count.
         if run.isdigit():
-            runs.setdefault(terminal, []).append(measure(directory, path.stem))
+            runs.setdefault(terminal, []).append((run, measure(directory, path.stem)))
+        elif re.fullmatch(r"w\d+", run):
+            warmups = max(warmups, int(run[1:]))
     if not runs:
         print("\nNo run finished; the logs of the terminals tell why.")
         return
     terminals = [t for t in order if t in runs] + sorted(t for t in runs if t not in order)
     count = max(len(measured) for measured in runs.values())
-    print(f"\n{count} runs per terminal; seconds per load (average, fastest and slowest run),")
-    print("and the throughput of the average. The terminals differ in their fonts and so in their")
-    print("cells, and the frames load in its size: the highest throughput comes first.")
-    for load in LOADS:
-        rows = []
-        for terminal in terminals:
-            done = [result[load] for _, result, _ in runs[terminal] if load in result]
-            if not done:
-                continue
-            seconds = [took for took, _, _, _ in done]
-            average = statistics.mean(seconds)
-            size = statistics.mean(size for _, size, _, _ in done)
-            cells = runs[terminal][0][0]
-            rows.append((-size / average, [terminal, cells, f"{average:.2f}", f"{min(seconds):.2f}", f"{max(seconds):.2f}", f"{size / average / 1e6:.1f}", str(len(done))]))
-        if not rows:
-            continue
-        print(f"\n{load}: {DESCRIPTIONS[load]}")
-        table(["terminal", "cells", "avg s", "min s", "max s", "MB/s", "runs"], [row for _, row in sorted(rows, key=lambda r: r[0])])
+    after = (f" after {warmups} warm-up runs that do not count" if warmups != 1 else " after 1 warm-up run that does not count") if warmups else ""
+    print(f"\n{count} runs per terminal{after}.")
+    print("Seconds per load: the median, its median absolute deviation in percent of it, a 95 %")
+    print("bootstrap interval of the median (seed 1), the fastest and the slowest run, and the runs")
+    print("further than three deviations and 3 % from the median. The throughput is that of the median.")
+    print("The terminals differ in their fonts and so in their cells, and the frames load in its size:")
+    print("the highest throughput comes first.")
+    throughput(runs, terminals)
     # Only Qt Quick reports its frames: those of Kudari.
     for terminal in terminals:
-        if terminal == "kudari" and not any(syncs for _, result, _ in runs[terminal] for _, _, syncs, _ in result.values()):
+        if terminal == "kudari" and not any(measured.frames for _, (_, result, _) in runs[terminal] for measured in result.values()):
             print("\nkudari: no frame timings in its logs; did Qt honour QSG_RENDER_TIMING, and in which render loop?")
-    framed = {t: m for t, m in runs.items() if any(syncs for _, result, _ in m for _, _, syncs, _ in result.values())}
-    for terminal, measured in framed.items():
-        rows = []
-        for load in LOADS:
-            done = [result[load] for _, result, _ in measured if load in result and result[load][2]]
-            if not done:
-                continue
-            # Over the same seconds in which the frames were counted.
-            rates = [len(syncs) / window for _, _, syncs, window in done]
-            syncs = [sync for _, _, run, _ in done for sync in run]
-            # The middle of each millisecond that Qt cut off, which is right on average when
-            # the rest is spread evenly.
-            middle = statistics.mean(syncs) + 0.5
-            rows.append([load, f"{statistics.mean(rates):.1f}", f"{min(rates):.1f}", f"{max(rates):.1f}", f"{middle:.1f}", milliseconds(min(syncs)), milliseconds(max(syncs))])
-        loops = sorted({loop for _, _, seen in measured for loop in seen})
-        print(f"\n{terminal}: frames that Qt Quick drew during each load, and the milliseconds it took to prepare one")
-        print(f"(render loop {', '.join(loops)}; Qt gives whole milliseconds, cut off: the average is that of their middles)")
-        table(["load", "avg fps", "min fps", "max fps", "avg ms", "min ms", "max ms"], rows)
+    for terminal in terminals:
+        if any(measured.frames for _, (_, result, _) in runs[terminal] for measured in result.values()):
+            drawing(terminal, runs[terminal], detail)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("action", choices=("data", "frames", "environment", "report"))
+    parser.add_argument("action", choices=("data", "frames", "environment", "order", "report"))
     parser.add_argument("directory", type=Path)
     parser.add_argument("rest", nargs="*", help="rows and columns for frames, the Kudari measured for environment, terminals for report")
     parser.add_argument("--local", help="for environment: the release build of the checkout, to warn when it is newer")
     parser.add_argument("--variables", default="", help="for environment: the variables of Qt, Mesa and the like that were set, with commas")
     parser.add_argument("--keep-env", action="store_true", help="for environment: those variables were kept")
+    parser.add_argument("--runs", type=int, default=0, help="for environment: the runs that count")
+    parser.add_argument("--warmup", type=int, default=0, help="for environment: the warm-up runs before them")
+    parser.add_argument("--seed", default="", help="for environment and order: the seed of the order of the terminals")
+    parser.add_argument("--detail", action="store_true", help="for report: the times of the frames in detail")
     arguments = parser.parse_args()
     if arguments.action == "environment":
         if len(arguments.rest) > 1:
             parser.error("environment takes at most the Kudari measured")
         removed = [name for name in arguments.variables.split(",") if name]
-        environment(arguments.directory, arguments.rest[0] if arguments.rest else None, arguments.local, removed, arguments.keep_env)
+        plan = Plan(arguments.runs, arguments.warmup, arguments.seed) if arguments.runs else None
+        environment(arguments.directory, arguments.rest[0] if arguments.rest else None, arguments.local, removed, arguments.keep_env, plan)
+    elif arguments.action == "order":
+        # The directory stands for the run here, to keep the arguments in one place.
+        print(" ".join(order(arguments.seed, str(arguments.directory), arguments.rest)))
     elif arguments.action == "data":
         data(arguments.directory)
     elif arguments.action == "frames":
@@ -370,7 +533,7 @@ def main():
             parser.error("frames needs the rows and the columns")
         frames(arguments.directory, *map(int, arguments.rest))
     else:
-        report(arguments.directory, arguments.rest)
+        report(arguments.directory, arguments.rest, arguments.detail)
 
 
 if __name__ == "__main__":
