@@ -3,6 +3,36 @@
 
 use cxx_qt_build::{CxxQtBuilder, QmlModule};
 
+/// The private headers of `QtGui`, for `QKeyMapper`, and of `QtCore`, which they include,
+/// under the headers of the qmake that cxx-qt builds with: `QtGui/<version>/QtGui` and the
+/// like.
+fn private_gui_headers() -> Vec<std::path::PathBuf> {
+    println!("cargo:rerun-if-env-changed=QMAKE");
+    let qmakes =
+        std::env::var("QMAKE").map_or_else(|_| vec!["qmake6".to_string(), "qmake".to_string()], |qmake| vec![qmake]);
+    let query = |qmake: &str, name: &str| {
+        std::process::Command::new(qmake)
+            .args(["-query", name])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    qmakes
+        .iter()
+        .find_map(|qmake| Some((query(qmake, "QT_INSTALL_HEADERS")?, query(qmake, "QT_VERSION")?)))
+        .map_or_default(|(headers, version)| {
+            ["QtCore", "QtGui"]
+                .iter()
+                .flat_map(|module| {
+                    let private = std::path::Path::new(&headers).join(module).join(&version);
+                    [private.clone(), private.join(module)]
+                })
+                .collect()
+        })
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=cpp/qtbridge.cpp");
     println!("cargo:rerun-if-changed=cpp/qtbridge.h");
@@ -33,6 +63,9 @@ fn main() {
     let builder = unsafe {
         builder.cc_builder(|cc| {
             cc.include("cpp");
+            for include in private_gui_headers() {
+                cc.include(include);
+            }
             cc.file("cpp/qtbridge.cpp");
         })
     };

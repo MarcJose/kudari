@@ -694,6 +694,31 @@ input wheel 130 8 15 3 1; input wheel 130 8 15 3; sleep 1
 check "the wheel sends an arrow key for each line to full-screen programs" yes \
     "$(tr '\033' E < "$work/arrows" | grep -qE '^(EO[AB]){3}$' && echo yes)"
 
+# The kitty keyboard protocol: a key that Shift changes has the code of its base key, as 2
+# for Ctrl+Shift+2, which types @.
+hook SetSetting KittyKeyboard true; sleep 0.3
+cat > "$work/kitty" <<'EOF'
+import os, re, select, sys, termios, tty
+saved = termios.tcgetattr(0)
+tty.setraw(0)
+os.write(1, b"\033[>31u\033[?u")
+reply = b""
+while not re.search(rb"\033\[\?\d+u", reply) and select.select([0], [], [], 2)[0]:
+    reply += os.read(0, 256)
+os.write(1, b"\033[<u\033[>1u")
+key = b""
+while not re.search(rb"\033\[[0-9;:]+u", key) and select.select([0], [], [], 5)[0]:
+    key += os.read(0, 256)
+os.write(1, b"\033[<u")
+termios.tcsetattr(0, termios.TCSAFLUSH, saved)
+with open(sys.argv[1], "wb") as out:
+    out.write((reply + b"|" + key).replace(b"\033", b"E"))
+EOF
+run "clear; python3 $work/kitty $work/kitty-out"
+sleep 0.5; input key 29 42 3; sleep 1
+check "Ctrl+Shift+2 has the code of the 2 in the kitty protocol" "E[50;6u" "$(cut -d'|' -f2 "$work/kitty-out")"
+hook SetSetting KittyKeyboard false; sleep 0.3
+
 hook Toggle toggle-session-monitor-once true; sleep 0.2
 sessions setSessionMonitorActivityEnabled "$first" true; sleep 0.3
 watched=$(sessions activeTerminalId)

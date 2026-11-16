@@ -63,6 +63,11 @@ generated=$(dirname "$(dirname "$(dirname "$header")")")
 # Where build.rs takes them from as well: the qmake of cxx-qt and the frameworks of CMake.
 qt_headers=$("${QMAKE:-qmake6}" -query QT_INSTALL_HEADERS 2>/dev/null || echo /usr/include/qt6)
 includes="-isystem $qt_headers"
+# The private headers of QtCore and QtGui, for the key mapper of qtbridge.cpp.
+qt_version=$("${QMAKE:-qmake6}" -query QT_VERSION 2>/dev/null || true)
+for module in QtCore QtGui; do
+    includes="$includes -isystem $qt_headers/$module/$qt_version -isystem $qt_headers/$module/$qt_version/$module"
+done
 for module in "$qt_headers"/Qt* "${KUDARI_KF6_PREFIX:-/usr}"/include/KF6/*; do
     [ -d "$module" ] && includes="$includes -isystem $module"
 done

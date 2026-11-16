@@ -62,6 +62,18 @@ pub struct Context<'a> {
     pub directory: &'a dyn Fn() -> Option<PathBuf>,
 }
 
+/// What a front end knows of a pressed key beyond what it types.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Physical {
+    /// For a key in the row of digits, its number, which picks the link of that number
+    /// whatever the key types: with Shift held for the numbers, the key of 1 types `!`, and
+    /// on keyboards such as AZERTY it types `&` without Shift.
+    pub digit: Option<u8>,
+    /// The character of the key without the modifiers that change it, as `7` for
+    /// Ctrl+Shift+7 on a German keyboard, which types `/`: its code in the kitty protocol.
+    pub base: Option<char>,
+}
+
 /// A link under the pointer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Link {
@@ -317,21 +329,21 @@ impl View {
         text: &str,
         context: &Context,
     ) -> Vec<Effect> {
-        self.key_at(term, key, None, modifiers, text, context)
+        self.key_at(term, key, Physical::default(), modifiers, text, context)
     }
 
-    /// [`Self::key`] for a key in the row of digits, which picks the link of its number
-    /// whatever it types. With Shift held for the numbers, the key of 1 types `!`, and on
-    /// keyboards such as AZERTY it types `&` without Shift.
+    /// [`Self::key`] with what the front end knows of the key on the keyboard; see
+    /// [`Physical`].
     pub fn key_at<T: EventListener>(
         &mut self,
         term: &mut Term<T>,
         key: Key,
-        digit: Option<u8>,
+        physical: Physical,
         modifiers: Modifiers,
         text: &str,
         context: &Context,
     ) -> Vec<Effect> {
+        let Physical { digit, base } = physical;
         let options = context.options;
         let hints_held = !options.url_hints_modifiers.is_empty() && modifiers.held() == options.url_hints_modifiers;
         let mut effects = vec![Effect::Hints(hints_held)];
@@ -391,7 +403,7 @@ impl View {
                 keytab::Command::Bottom => Effect::Scroll(i32::MIN / 2),
             }),
             None => {
-                if let Some(bytes) = input::key_bytes(mode, key, modifiers, text) {
+                if let Some(bytes) = input::key_bytes_with_base(mode, key, base, modifiers, text) {
                     term.selection = None;
                     effects.push(Effect::Type(bytes));
                     effects.push(Effect::Refresh);
@@ -1871,7 +1883,17 @@ mod tests {
         view.set_hints(links_on_screen(&term, None));
         // With Shift, the key of 2 types `"`; the front end knows it as the key of 2.
         assert_eq!(
-            view.key_at(&mut term, Key::Character('"'), Some(2), held, "\"", &context),
+            view.key_at(
+                &mut term,
+                Key::Character('"'),
+                Physical {
+                    digit: Some(2),
+                    base: None
+                },
+                held,
+                "\"",
+                &context
+            ),
             [
                 Effect::Hints(true),
                 Effect::OpenLink("https://b.org".into()),
@@ -1887,7 +1909,10 @@ mod tests {
         let effects = view.key_at(
             &mut term,
             Key::Character('&'),
-            Some(1),
+            Physical {
+                digit: Some(1),
+                base: None,
+            },
             Modifiers::CONTROL,
             "&",
             &context,
@@ -1897,7 +1922,17 @@ mod tests {
             "{effects:?}"
         );
         // Without the numbers held, the key types what it types.
-        let effects = view.key_at(&mut term, Key::Character('&'), Some(1), NONE, "&", &context);
+        let effects = view.key_at(
+            &mut term,
+            Key::Character('&'),
+            Physical {
+                digit: Some(1),
+                base: None,
+            },
+            NONE,
+            "&",
+            &context,
+        );
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::OpenLink(_))));
     }
 

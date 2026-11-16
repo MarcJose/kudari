@@ -589,13 +589,21 @@ impl qobject::TerminalItem {
     }
 
     fn key_press(self: Pin<&mut Self>, key: i32, modifiers: i32, text: &QString, scan_code: i32) -> bool {
+        let (qt_key, qt_modifiers) = (key, modifiers);
         let (key, modifiers) = (qt_input::key(key), qt_input::modifiers(modifiers));
         if !*self.keyboard_enabled() {
             return modifiers.intersects(Modifiers::SHIFT | Modifiers::ALT | Modifiers::CONTROL);
         }
+        let base = match qt_input::key(kde::rk_base_key(qt_key, qt_modifiers, scan_code, text)) {
+            crate::input::Key::Character(base) => Some(base),
+            _ => None,
+        };
         let text = text.to_string();
-        let digit = qt_input::digit_key(scan_code);
-        self.handle(|view, term, context| view.key_at(term, key, digit, modifiers, &text, context));
+        let physical = view::Physical {
+            digit: qt_input::digit_key(scan_code),
+            base,
+        };
+        self.handle(|view, term, context| view.key_at(term, key, physical, modifiers, &text, context));
         true
     }
 

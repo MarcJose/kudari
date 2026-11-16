@@ -78,4 +78,5 @@ QString rk_palette_colors();
 void rk_open_url_with_qt(const QString &url);
 QString rk_ui_languages();
 QString rk_key_sequence_text(int key, int modifiers);
+int rk_base_key(int key, int modifiers, int scanCode, const QString &text);
 QString rk_native_key_sequence(const QString &portable);

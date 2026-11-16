@@ -96,6 +96,10 @@ pub mod ffi {
         fn rk_ui_languages() -> QString;
         /// A key with modifiers, as from a key event of QML, in the portable text of Qt.
         fn rk_key_sequence_text(key: i32, modifiers: i32) -> QString;
+        /// The key of a key event without the modifiers that change what it types, from the
+        /// layout of the keyboard: `Qt::Key_7` for Ctrl+Shift+7 on a German keyboard, which
+        /// Qt names `Qt::Key_Slash`. The key itself where the platform cannot tell.
+        fn rk_base_key(key: i32, modifiers: i32, scan_code: i32, text: &QString) -> i32;
         /// A sequence in portable text as the user's language names its keys.
         fn rk_native_key_sequence(portable: &QString) -> QString;
     }
