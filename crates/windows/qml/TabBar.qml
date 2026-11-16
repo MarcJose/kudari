@@ -226,6 +226,9 @@ Controls.Pane {
                             // Long terminal titles are shortened so that more tabs fit.
                             Layout.maximumWidth: 220
                             text: tab.title
+                            // Programs, folders and remote hosts set titles: they are text, never
+                            // markup that could load images from the network.
+                            textFormat: Text.PlainText
                             elide: Text.ElideMiddle
                             color: tab.activity && bar.activityColor.length > 0 ? bar.activityColor : tab.palette.buttonText
                             font.italic: tab.activity && bar.activityColor.length === 0

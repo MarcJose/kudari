@@ -73,9 +73,40 @@ pub fn button(code: i32) -> Option<MouseButton> {
     }
 }
 
+/// The digit of a key in the row of digits above the letters, from 1 to 9, by its place on
+/// the keyboard: `QKeyEvent::nativeScanCode`, whatever the key types with the keys held and
+/// the layout. Its first key is code 10 for `xkb`, 2 on Windows.
+#[must_use]
+pub fn digit_key(scan_code: i32) -> Option<u8> {
+    digit_of(scan_code, cfg!(windows))
+}
+
+fn digit_of(scan_code: i32, windows: bool) -> Option<u8> {
+    let first = if windows { 0x02 } else { 10 };
+    u8::try_from(scan_code - first)
+        .ok()
+        .filter(|place| *place < 9)
+        .map(|place| place + 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_row_of_digits_is_found_by_its_place() {
+        // `xkb`: the `evdev` codes 2 to 10, plus 8.
+        assert_eq!(digit_of(10, false), Some(1));
+        assert_eq!(digit_of(18, false), Some(9));
+        assert_eq!(digit_of(19, false), None, "the key of 0");
+        assert_eq!(digit_of(9, false), None, "Escape");
+        assert_eq!(digit_of(0, false), None);
+        // Windows: the set 1 scan codes 0x02 to 0x0A.
+        assert_eq!(digit_of(0x02, true), Some(1));
+        assert_eq!(digit_of(0x0A, true), Some(9));
+        assert_eq!(digit_of(0x0B, true), None);
+        assert_eq!(digit_of(-5, true), None);
+    }
 
     #[test]
     fn modifiers_keep_their_meaning() {

@@ -229,6 +229,11 @@ hook SetSetting UrlHintsModifier ctrl+alt; sleep 0.3
 run "clear; printf 'see notes.txt:12:3 end\n'"
 input key 29 56 2; sleep 0.5
 check "a link number opens the file it shows" "$work/home/notes.txt:12|" "$(content "$work/edited")"
+# With Shift for the numbers, the key of 1 types "!"; its place still opens the first link.
+rm -f "$work/edited"
+hook SetSetting UrlHintsModifier ctrl+shift; sleep 0.3
+input key 29 42 2; sleep 0.5
+check "a link number opens with Shift held as well" "$work/home/notes.txt:12|" "$(content "$work/edited")"
 hook SetSetting UrlHintsModifier none; sleep 0.3
 hook SetSetting OpenLinksByClick false; hook SetSetting EditorCommand ""; sleep 0.3
 
@@ -562,13 +567,27 @@ run "clear; printf '\033]0;remote\a'; $work/bin/ssh 3"
 sleep 1
 check "a program sets the title of an ssh tab" "remote on 3" "$(tabs tabTitle "$first")"
 sleep 2
+# A title is text: the markup of a program shows as it is, and loads nothing from the network.
+python3 -m http.server --bind 127.0.0.1 18765 --directory "$work" > "$work/http.log" 2>&1 &
+http=$!
+hook SetSetting TitleFormat "%w"; sleep 0.3
+run "clear; printf '\033]2;<img src=\"http://127.0.0.1:18765/t.png\">x\a'"
+sleep 2
+check "a title shows its markup as text" '<img src="http://127.0.0.1:18765/t.png">x' "$(tabs tabTitle "$first")"
+kill "$http"
+check "a title loads nothing from the network" no "$(grep -q 't.png' "$work/http.log" && echo yes || echo no)"
+hook SetSetting TitleFormat "%d : %n"; sleep 0.3
 run "clear; stty raw -echo; printf '\033[?1000h\033[?1006h'; timeout 2 cat > $work/mouse; printf '\033[?1000l\033[?1006l'; stty sane"
-input click 130 8; input wheel 130 8 15; sleep 2
+# Three turns of 15 pixels, as a touchpad sends them, are three lines of 15 pixels: one
+# notch of a wheel, and one report for a program.
+input click 130 8; input wheel 130 8 15 3; sleep 2
 check "programs that ask get clicks and the wheel" yes \
     "$(tr '\033' E < "$work/mouse" | grep -qE '^E\[<0;[0-9]+;1ME\[<0;[0-9]+;1mE\[<6[45];' && echo yes)"
+check "a notch of small turns is one report" 1 "$(tr '\033' E < "$work/mouse" | grep -oE 'E\[<6[45];' | wc -l)"
 run "clear; stty raw -echo; printf '\033[?1049h'; timeout 2 cat > $work/arrows; printf '\033[?1049l'; stty sane"
-input wheel 130 8 15; sleep 2
-check "the wheel sends arrow keys to full-screen programs" yes \
+# A sideways wheel scrolls nothing; it used to count as down.
+input wheel 130 8 15 3 1; input wheel 130 8 15 3; sleep 1
+check "the wheel sends an arrow key for each line to full-screen programs" yes \
     "$(tr '\033' E < "$work/arrows" | grep -qE '^(EO[AB]){3}$' && echo yes)"
 
 hook Toggle toggle-session-monitor-once true; sleep 0.2

@@ -18,6 +18,7 @@ winget
 Sigstore
 Alacritty
 vte
+[Tt]ouchpads?
 [Aa]utostart
 borderless
 [Cc]lippy
