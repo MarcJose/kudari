@@ -832,7 +832,7 @@ fn file_in(word: &str, directory: &Path) -> Option<(String, usize, usize)> {
 
 /// The file of `name:line:column`, or of `name(line,column)` as `tsc` and MSVC write it.
 fn file_named(word: &str, directory: &Path) -> Option<String> {
-    let name = word.split(':').next().filter(|name| !name.is_empty())?;
+    let name = name_of(word, cfg!(not(unix)))?;
     if let Some(target) = file_at(name, &word[name.len()..], directory) {
         return Some(target);
     }
@@ -846,6 +846,19 @@ fn file_named(word: &str, directory: &Path) -> Option<String> {
     valid
         .then(|| file_at(stem, &format!(":{}", numbers.join(":")), directory))
         .flatten()
+}
+
+/// The name in `name:line:column`. With `drives`, a drive such as `C:\` or `C:/` is part of
+/// it; `C:name`, which is relative to the current folder of the drive, is not.
+fn name_of(word: &str, drives: bool) -> Option<&str> {
+    let bytes = word.as_bytes();
+    let drive = drives
+        && bytes.first().is_some_and(u8::is_ascii_alphabetic)
+        && bytes.get(1) == Some(&b':')
+        && matches!(bytes.get(2), Some(b'\\' | b'/'));
+    let skip = if drive { 3 } else { 0 };
+    let end = word[skip..].find(':').map_or(word.len(), |index| index + skip);
+    Some(&word[..end]).filter(|name| !name.is_empty())
 }
 
 /// The file `name` in `directory`, with `position` after it if that is `:line[:column]`.
@@ -1117,12 +1130,9 @@ mod tests {
         // GCC, Clang, `rustc` and `grep -n` end the place with a colon.
         assert_eq!(found("notes.txt:12:3:"), Some(format!("{notes}:12:3")));
         assert_eq!(found("notes.txt:12:"), Some(format!("{notes}:12")));
-        // Node.js puts it in brackets, with a relative or an absolute path. An absolute path
-        // on Windows starts with a drive, which names of files do not take yet.
+        // Node.js puts it in brackets, with a relative or an absolute path.
         assert_eq!(found("(notes.txt:12:3)"), Some(format!("{notes}:12:3")));
-        if cfg!(unix) {
-            assert_eq!(found(&format!("({notes}:12:3),")), Some(format!("{notes}:12:3")));
-        }
+        assert_eq!(found(&format!("({notes}:12:3),")), Some(format!("{notes}:12:3")));
         // `tsc` and MSVC write the place in brackets after the name.
         assert_eq!(found("notes.txt(12,3):"), Some(format!("{notes}:12:3")));
         assert_eq!(found("notes.txt(12)"), Some(format!("{notes}:12")));
@@ -1142,6 +1152,37 @@ mod tests {
         )
         .unwrap();
         assert_eq!((link.start.column.0, link.cells), (6, 14));
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn a_drive_belongs_to_the_name_on_windows() {
+        assert_eq!(name_of("C:\\work\\notes.txt:12:3", true), Some("C:\\work\\notes.txt"));
+        assert_eq!(name_of("C:/work/main.rs:10:5", true), Some("C:/work/main.rs"));
+        assert_eq!(name_of("C:\\work\\notes.txt", true), Some("C:\\work\\notes.txt"));
+        assert_eq!(name_of("C:notes.txt", true), Some("C"));
+        assert_eq!(name_of("notes.txt:12", true), Some("notes.txt"));
+        // Unix allows a colon in a name, and has no drives.
+        assert_eq!(name_of("C:\\work\\notes.txt:12", false), Some("C"));
+        assert_eq!(name_of(":12", true), None);
+    }
+
+    /// Compilers and tools on Windows mostly write absolute paths.
+    #[test]
+    #[cfg(windows)]
+    fn absolute_windows_paths_are_files() {
+        let directory = std::env::temp_dir().join(format!("kudari-drive-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("notes.txt"), "x").unwrap();
+        let notes = directory.join("notes.txt").to_string_lossy().into_owned();
+        let elsewhere = std::env::temp_dir();
+        assert_eq!(existing_file(&notes, &elsewhere), Some(notes.clone()));
+        assert_eq!(
+            existing_file(&format!("{notes}:12:3"), &elsewhere),
+            Some(format!("{notes}:12:3"))
+        );
+        let forward = notes.replace('\\', "/");
+        assert!(existing_file(&format!("{forward}:12"), &elsewhere).is_some_and(|found| found.ends_with(":12")));
         std::fs::remove_dir_all(&directory).unwrap();
     }
 
