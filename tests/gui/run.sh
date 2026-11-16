@@ -567,6 +567,16 @@ run "clear; printf '\033]0;remote\a'; $work/bin/ssh 3"
 sleep 1
 check "a program sets the title of an ssh tab" "remote on 3" "$(tabs tabTitle "$first")"
 sleep 2
+# A title is text: the markup of a program shows as it is, and loads nothing from the network.
+python3 -m http.server --bind 127.0.0.1 18765 --directory "$work" > "$work/http.log" 2>&1 &
+http=$!
+hook SetSetting TitleFormat "%w"; sleep 0.3
+run "clear; printf '\033]2;<img src=\"http://127.0.0.1:18765/t.png\">x\a'"
+sleep 2
+check "a title shows its markup as text" '<img src="http://127.0.0.1:18765/t.png">x' "$(tabs tabTitle "$first")"
+kill "$http"
+check "a title loads nothing from the network" no "$(grep -q 't.png' "$work/http.log" && echo yes || echo no)"
+hook SetSetting TitleFormat "%d : %n"; sleep 0.3
 run "clear; stty raw -echo; printf '\033[?1000h\033[?1006h'; timeout 2 cat > $work/mouse; printf '\033[?1000l\033[?1006l'; stty sane"
 # Three turns of 15 pixels, as a touchpad sends them, are three lines of 15 pixels: one
 # notch of a wheel, and one report for a program.
