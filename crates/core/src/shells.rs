@@ -346,7 +346,7 @@ function global:prompt {
     }
     "$marks$(& $global:KudariPrompt)$command"
 }
-if ((Get-Module PSReadLine) -and ((Get-PSReadLineKeyHandler -Chord Enter).Function -eq 'AcceptLine')) {
+if ((Get-Module PSReadLine) -and ((Get-PSReadLineKeyHandler -Bound | Where-Object Key -eq 'Enter' | Select-Object -First 1).Function -eq 'AcceptLine')) {
     Set-PSReadLineKeyHandler -Chord Enter -ScriptBlock {
         [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
         [Console]::Write("$([char]27)]133;C;$($global:KudariMark)$([char]27)\")
@@ -602,6 +602,40 @@ mod tests {
         let off = super::launch("", Some("cmd"), "", false, &shells, None).unwrap();
         assert!(off.environment.is_empty());
         assert_eq!(off.key, None);
+    }
+
+    /// Windows PowerShell 5.1 has `PSReadLine` 2.0, which knows less than the one of
+    /// PowerShell 7: the script must start in both without an error, and take over Enter.
+    #[test]
+    #[cfg(windows)]
+    fn both_powershells_take_the_marks() {
+        let script = format!(
+            "$ProgressPreference = 'SilentlyContinue'\nImport-Module PSReadLine\n{POWERSHELL}\n\
+             'enter: ' + (Get-PSReadLineKeyHandler -Bound | Where-Object Key -eq 'Enter' | Select-Object -First 1).Function\n"
+        );
+        let mut ran = 0;
+        for shell in ["powershell.exe", "pwsh.exe"] {
+            let Ok(output) = Command::new(shell)
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-EncodedCommand",
+                    &encoded_command(&script),
+                ])
+                .output()
+            else {
+                // PowerShell 7 need not be installed.
+                continue;
+            };
+            ran += 1;
+            let (out, err) = (
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            assert!(!err.contains("Error") && !err.contains("Exception"), "{shell}: {err}");
+            assert!(out.contains("enter: CustomAction"), "{shell}: {out} {err}");
+        }
+        assert!(ran > 0, "no PowerShell");
     }
 
     #[test]
