@@ -129,15 +129,20 @@ class Report(unittest.TestCase):
         # sync 9 and render 1, cut off: at least 10 ms, over the budget of 120 and 144 Hz only.
         self.assertIn("at least 0 % / 100 % / 100 %", text)
 
-    def cpu_of(self, name, load, *threads):
-        """Threads as (their ID, name, milliseconds at the start, at the end)."""
+    def cpu_of(self, name, load, *threads, switches=None, memory=None):
+        """Threads as (their ID, name, milliseconds at the start, at the end); `switches` adds
+        that many to each thread between start and end; `memory` is RSS, PSS and private in kB."""
         lines = []
         for tid, thread, start, end in threads:
             if start is not None:
                 lines.append(f"{load}\tstart\t{tid}\t{thread}\t{int(start * 1e6)}\t1\t0")
             if end is not None:
-                lines.append(f"{load}\tend\t{tid}\t{thread}\t{int(end * 1e6)}\t1\t0")
-        (self.directory / f"{name}.cpu").write_text("\n".join(lines) + "\n")
+                lines.append(f"{load}\tend\t{tid}\t{thread}\t{int(end * 1e6)}\t{1 + (switches or 0)}\t0")
+        if memory:
+            lines.append(f"{load}\tmemory\t" + "\t".join(str(size) for size in memory))
+        path = self.directory / f"{name}.cpu"
+        with open(path, "a") as file:
+            file.write("\n".join(lines) + "\n")
 
     def test_the_cpu_time_of_a_load_is_per_thread_between_its_start_and_end(self):
         self.run_of("kudari-1", [threaded(0.01 * index, 1) for index in range(10)])
@@ -171,6 +176,40 @@ class Report(unittest.TestCase):
         fields = [line.split("\t") for line in path.read_text().splitlines()]
         self.assertIn(["plain", "start", str(os.getpid()), "main"], [entry[:4] for entry in fields])
         self.assertTrue(all(entry[4].isdigit() for entry in fields))
+        # At the end, also its memory.
+        bench.cpu(path, os.getpid(), "plain", "end")
+        memory = [line.split("\t") for line in path.read_text().splitlines() if "\tmemory\t" in line]
+        self.assertEqual(len(memory), 1)
+        rss, pss, private = map(int, memory[0][2:])
+        self.assertGreater(rss, 0)
+        # Python shares its libraries with other processes, so not all of it is private.
+        self.assertLess(private, rss)
+
+    def test_without_output_the_wakeups_count_and_no_throughput(self):
+        self.run_of("kudari-1", [threaded(0.5 * index, 1) for index in range(4)], (("idle", 0.0, 2.0),))
+        # 30 and 10 switches in 2 s.
+        self.cpu_of("kudari-1", "idle", (1, "main", 0, 2), (2, "QSGRenderThread", 0, 1), switches=None)
+        self.cpu_of("kudari-1", "idle", (3, "Thread (pooled)", 0, 0.5), switches=30)
+        self.cpu_of("kudari-1", "idle", (4, "PTY reader", 0, 0), switches=10)
+        text = self.report("kudari")
+        self.assertNotIn("\nidle: 10 seconds", text)
+        line = next(entry for entry in text.split("idle: CPU time of the terminal")[1].splitlines() if entry.startswith("kudari "))
+        # 3.5 ms in 2 s; 40 switches and the 0 of the others in 2 s; the busiest by how often they woke up.
+        self.assertEqual(line.split()[1:5], ["4", "0.2", "-", "20"])
+        self.assertIn("Thread (pooled) 15, PTY reader 5", line)
+        self.assertIn("wakeups/s", text.split("idle: CPU time of the terminal")[1].splitlines()[1])
+        # The cursor frames of an idle terminal are not late.
+        self.assertEqual(self.frames_row(text, "idle")[2], "-")
+
+    def test_the_memory_after_each_load_and_at_the_end(self):
+        for run, private in (("1", 90 * 1024), ("2", 100 * 1024), ("3", 95 * 1024)):
+            self.run_of(f"kudari-{run}", [], (("plain", 0.0, 0.2), ("idle", 1.0, 2.0)))
+            self.cpu_of(f"kudari-{run}", "plain", (1, "main", 0, 1), memory=(300 * 1024, 110 * 1024, private))
+            self.cpu_of(f"kudari-{run}", "idle", (1, "main", 0, 1), memory=(310 * 1024, 120 * 1024, private + 1024))
+        text = self.report("kudari")
+        row = next(line.split() for line in text.split("Memory of each terminal")[1].splitlines() if line.startswith("kudari "))
+        self.assertEqual(row, ["kudari", "95", "96", "310", "120"])
+        self.assertIn("after plain  after idle", text)
 
     def test_no_run_at_all_is_said_plainly(self):
         self.assertIn("No run finished", self.report("kudari"))
@@ -252,6 +291,10 @@ class Environment(unittest.TestCase):
         warnings = self.warnings(load=1.5, governor="powersave", epp="balance_performance", **{"on battery": True})
         self.assertEqual(len(warnings), 3)
         self.assertIn("powerprofilesctl launch -p performance", warnings[2])
+
+    def test_the_settings_for_kudari_are_named(self):
+        lines = bench.describe(None, MACHINE, SOFTWARE, [], False, bench.Plan(5, 0, "1", ("Terminal.BlinkingCursor=true",)))
+        self.assertEqual(lines[1], "Settings  Terminal.BlinkingCursor=true for Kudari")
 
     def test_the_plan_names_runs_warm_up_and_seed(self):
         lines = bench.describe(None, MACHINE, SOFTWARE, [], False, bench.Plan(5, 1, "42"))
