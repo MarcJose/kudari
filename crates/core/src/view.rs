@@ -351,6 +351,8 @@ impl View {
         let opens_link = button == Some(MouseButton::Left) && modifiers.contains(Modifiers::CONTROL) && !block;
         if let Some(pressed) = button.filter(|_| reports_mouse(term, modifiers, context) && !opens_link) {
             self.pressed_button = Some(pressed);
+            // A selection whose release got lost, when the window hid during a drag, ends.
+            self.selecting = false;
             return mouse_report(term, MouseEvent::Press(pressed), modifiers, point)
                 .into_iter()
                 .collect();
@@ -430,12 +432,17 @@ impl View {
         auto_copy: bool,
         context: &Context,
     ) -> Vec<Effect> {
-        if reports_mouse(term, modifiers, context) {
-            let report = point
-                .zip(button)
-                .and_then(|(point, button)| mouse_report(term, MouseEvent::Release(button), modifiers, point));
-            self.pressed_button = None;
-            return report.into_iter().collect();
+        // The press decides who gets the release, not the keys held now: Shift can go up or
+        // down while the button is held, and the program must not see a release without a
+        // press, nor miss the release of a press.
+        if let Some(pressed) = self.pressed_button.take() {
+            let tracking = context.tracks_mouse && term.mode().intersects(TermMode::MOUSE_MODE);
+            let release = MouseEvent::Release(button.unwrap_or(pressed));
+            return point
+                .filter(|_| tracking)
+                .and_then(|point| mouse_report(term, release, modifiers, point))
+                .into_iter()
+                .collect();
         }
         if !self.selecting {
             return Vec::new();
@@ -1782,6 +1789,61 @@ mod tests {
             ]
         );
         assert!(!selection_mode(&term) && term.selection.is_none());
+    }
+
+    /// A terminal where a program such as tmux or vim gets every motion of the mouse.
+    fn tracking_term() -> Term<VoidListener> {
+        term_with("hello world\x1b[?1003h\x1b[?1006h")
+    }
+
+    fn writes(effects: &[Effect]) -> Vec<String> {
+        effects
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::Write(bytes) => Some(String::from_utf8_lossy(bytes).into_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_selection_with_shift_ends_when_shift_goes_up_first() {
+        let mut term = tracking_term();
+        let mut view = View::default();
+        let options = Options::default();
+        let context = context(&options, true, &nowhere);
+        let start = (Point::new(Line(0), Column(0)), Side::Left);
+        let end = (Point::new(Line(0), Column(4)), Side::Right);
+        view.press(&mut term, start, LEFT, 1, Modifiers::SHIFT, None, &context);
+        view.motion(&mut term, end, Modifiers::SHIFT, &context);
+        // Shift goes up before the button.
+        let released = view.release(&mut term, Some(end.0), LEFT, NONE, false, true, &context);
+        assert_eq!(released, [Effect::CopyPrimary("hello".into())]);
+        assert!(!view.selecting());
+        // The program gets the mouse again, and the selection stays where it was.
+        let moved = view.motion(&mut term, (Point::new(Line(0), Column(8)), Side::Left), NONE, &context);
+        assert_eq!(writes(&moved), ["\x1b[<35;9;1M"]);
+        assert_eq!(selected_text(&term, &options).as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn a_press_for_the_program_gets_its_release_when_shift_goes_down() {
+        let mut term = tracking_term();
+        let mut view = View::default();
+        let options = Options::default();
+        let context = context(&options, true, &nowhere);
+        let at = (Point::new(Line(0), Column(2)), Side::Left);
+        let pressed = view.press(&mut term, at, LEFT, 1, NONE, None, &context);
+        assert_eq!(writes(&pressed), ["\x1b[<0;3;1M"]);
+        // Shift goes down before the button goes up.
+        let released = view.release(&mut term, Some(at.0), LEFT, Modifiers::SHIFT, true, true, &context);
+        assert_eq!(writes(&released), ["\x1b[<4;3;1m"]);
+        // Moving afterwards is no drag with the left button.
+        let moved = view.motion(&mut term, (Point::new(Line(0), Column(5)), Side::Left), NONE, &context);
+        assert_eq!(writes(&moved), ["\x1b[<35;6;1M"]);
+        // A release that no press reported goes nowhere.
+        let orphan = view.release(&mut term, Some(at.0), LEFT, NONE, true, true, &context);
+        assert!(writes(&orphan).is_empty(), "{orphan:?}");
     }
 
     #[test]
