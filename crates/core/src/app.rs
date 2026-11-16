@@ -586,6 +586,13 @@ impl App {
             .or_else(crate::process::home)
     }
 
+    /// The folder that "Open File Manager" shows for `terminal`: where it is, whether new
+    /// terminals inherit it or not, or the home directory.
+    #[must_use]
+    pub fn folder_of(terminal: TerminalId, host: &dyn Host) -> Option<PathBuf> {
+        host.working_directory(terminal).or_else(crate::process::home)
+    }
+
     /// Where a terminal opened from the active one starts, the first one in the home directory.
     #[must_use]
     pub fn active_directory(&self, host: &dyn Host) -> Option<PathBuf> {
@@ -1636,6 +1643,8 @@ mod tests {
         assert_eq!(app.split(-5, None, &Here), (None, Vec::new()));
         let home = app_with(&[("InheritDirectory", "false")]);
         assert_eq!(home.active_directory(&Here), crate::process::home());
+        // The file manager shows where a terminal is, also when new ones start at home.
+        assert_eq!(App::folder_of(3, &Here), Some(PathBuf::from("/work/3")));
     }
 
     #[test]

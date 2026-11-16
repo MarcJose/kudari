@@ -1271,7 +1271,7 @@ impl qobject::Controller {
             ),
             TerminalCommand::MouseTracking(enabled) => backend.set_tracks_mouse(enabled),
             TerminalCommand::OpenFolder => {
-                if let Some(directory) = self.app.active_directory(&Terminals) {
+                if let Some(directory) = App::folder_of(terminal, &Terminals) {
                     frontend().open_url(&directory.to_string_lossy());
                 }
             }
