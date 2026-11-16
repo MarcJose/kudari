@@ -245,31 +245,13 @@ async fn grow(terminal: i32, direction: Direction, pixels: u32) -> i32 {
     .await
 }
 
+/// Splits through the app, so that the new terminal starts where the one split is.
 async fn split_terminal(terminal: i32, orientation: Orientation) -> i32 {
-    ask(
-        move |mut c| {
-            let new = c.as_mut().stack_mut().split(terminal, orientation).unwrap_or(-1);
-            c.refresh();
-            new
-        },
-        -1,
-    )
-    .await
+    ask(move |c| c.split_terminal(terminal, orientation), -1).await
 }
 
 async fn split_session(session: i32, orientation: Orientation) -> i32 {
-    ask(
-        move |mut c| {
-            let Some(terminal) = c.stack().session(session).map(|s| s.active_terminal) else {
-                return -1;
-            };
-            let new = c.as_mut().stack_mut().split(terminal, orientation).unwrap_or(-1);
-            c.refresh();
-            new
-        },
-        -1,
-    )
-    .await
+    ask(move |c| c.split(session, Some(orientation)), -1).await
 }
 
 #[interface(name = "io.github.marcjose.kudari")]
@@ -609,6 +591,11 @@ impl TestHooks {
     /// Clicks Allow or Deny in the question about an AI agent.
     fn answer_agent(&self, allow: bool) {
         queue(move |_| crate::kde::rk_test_answer_agent(allow));
+    }
+
+    /// Whether the window stays below an open dialog of Kudari.
+    async fn dialog_open(&self) -> bool {
+        ask(|c| *c.dialog_open(), false).await
     }
 
     /// Whether the bar shows that an AI agent has access.

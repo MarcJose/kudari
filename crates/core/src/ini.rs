@@ -200,6 +200,69 @@ fn escape(value: &str) -> String {
     text
 }
 
+/// A value as `KConfig` reads it from its file: `\s`, `\t`, `\n`, `\r`, `\\` and `\xHH`, which
+/// can also be one byte of a character in UTF-8. Other escapes keep their backslash, for
+/// lists to split.
+#[must_use]
+pub fn kconfig_unescape(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut text = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while let Some(&byte) = bytes.get(index) {
+        index += 1;
+        if byte != b'\\' {
+            text.push(byte);
+            continue;
+        }
+        let Some(&next) = bytes.get(index) else {
+            text.push(b'\\');
+            break;
+        };
+        index += 1;
+        match next {
+            b's' => text.push(b' '),
+            b't' => text.push(b'\t'),
+            b'n' => text.push(b'\n'),
+            b'r' => text.push(b'\r'),
+            b'\\' => text.push(b'\\'),
+            b'x' => {
+                let hex = bytes
+                    .get(index..index + 2)
+                    .and_then(|hex| std::str::from_utf8(hex).ok());
+                if let Some(value) = hex.and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
+                    text.push(value);
+                    index += 2;
+                } else {
+                    text.extend_from_slice(b"\\x");
+                }
+            }
+            other => text.extend_from_slice(&[b'\\', other]),
+        }
+    }
+    String::from_utf8_lossy(&text).into_owned()
+}
+
+/// The entries of a list that `KConfig` wrote, separated by commas, in which `\,` is a comma
+/// and `\\` a backslash; an empty value is an empty list.
+#[must_use]
+pub fn kconfig_list(value: &str) -> Vec<String> {
+    let mut list = Vec::new();
+    if value.is_empty() {
+        return list;
+    }
+    let mut entry = String::new();
+    let mut characters = value.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            '\\' => entry.push(characters.next().unwrap_or('\\')),
+            ',' => list.push(std::mem::take(&mut entry)),
+            other => entry.push(other),
+        }
+    }
+    list.push(entry);
+    list
+}
+
 fn unescape(value: &str) -> String {
     let mut text = String::with_capacity(value.len());
     let mut characters = value.chars();
@@ -223,6 +286,19 @@ fn unescape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn values_of_kconfig_are_unescaped_as_kconfig_does() {
+        assert_eq!(kconfig_unescape("%d : %n\\s"), "%d : %n ");
+        assert_eq!(kconfig_unescape("a\\\\b\\tc\\nd\\re"), "a\\b\tc\nd\re");
+        // Bytes of UTF-8 one by one.
+        assert_eq!(kconfig_unescape("\\xc3\\xa4 \\x41"), "ä A");
+        assert_eq!(kconfig_unescape("\\xzz\\,end\\"), "\\xzz\\,end\\");
+        assert_eq!(kconfig_unescape("plain ä"), "plain ä");
+        assert_eq!(kconfig_list("A=1,B=x\\,y,C=\\\\"), ["A=1", "B=x,y", "C=\\"]);
+        assert!(kconfig_list("").is_empty());
+        assert_eq!(kconfig_list("one"), ["one"]);
+    }
 
     #[test]
     fn groups_and_comments_are_understood() {

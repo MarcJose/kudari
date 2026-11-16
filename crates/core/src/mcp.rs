@@ -199,7 +199,8 @@ fn tools() -> Value {
             "name": "close_session",
             "title": "Close a session",
             "description": "Closes a session that open_session opened, with the programs in it. \
-                The sessions of the user cannot be closed. Needs control to be allowed.",
+                The sessions of the user cannot be closed, nor one the user protected from closing. \
+                Needs control to be allowed.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

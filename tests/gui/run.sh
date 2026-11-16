@@ -243,6 +243,14 @@ check "dropping pastes the quoted path" "'$work/source/a.txt' |" "$(content "$wo
 hook Popup "$work/source/a.txt"; sleep 1; menu_entry 2
 check "dropping copies a file" "a|" "$(content "$work/home/a.txt")"
 check "copying keeps the source" "a|" "$(content "$work/source/a.txt")"
+# The keyboard of the terminal is blocked: the menu of a drop types nothing either.
+run "clear; cat > $work/blocked"
+blocked=$(sessions activeSessionId)
+sessions setSessionKeyboardInputEnabled "$blocked" false; sleep 0.3
+hook Popup "$work/source/a.txt"; sleep 1; menu_entry 1
+sessions setSessionKeyboardInputEnabled "$blocked" true; sleep 0.3
+end_input
+check "a blocked terminal takes no path from the menu of a drop" "|" "$(content "$work/blocked")"
 hook Popup "$work/source/b.txt"; sleep 1; menu_entry 3
 check "dropping moves a file" "b|" "$(content "$work/home/b.txt")"
 check "moving removes the source" no "$([ -e "$work/source/b.txt" ] && echo yes || echo no)"
@@ -489,6 +497,14 @@ sessions raiseSession "$first"; sleep 0.4
 
 sessions runCommandInTerminal "$(sessions activeTerminalId)" "echo dbus > $work/dbus"; sleep 0.6
 check "D-Bus runs a command in a given terminal" "dbus|" "$(content "$work/dbus")"
+# A terminal split over D-Bus starts where the one split is.
+mkdir -p "$work/split-here"
+run "cd $work/split-here"
+split=$(sessions splitTerminalLeftRight "$(sessions activeTerminalId)"); sleep 1
+sessions runCommandInTerminal "$split" "pwd > $work/split-dir"; sleep 0.6
+check "a terminal split over D-Bus starts where the one split is" "$work/split-here|" "$(content "$work/split-dir")"
+sessions removeTerminal "$split"; sleep 0.6
+run "clear; cd"
 run "clear; cat > $work/typed"
 hook Key A; sleep 0.2
 hook InputMethod "vor" ""; sleep 0.2
@@ -690,6 +706,21 @@ check "an allowed agent reads the terminals" yes "$(receive | grep -q '"sessions
 check "the bar shows that an agent has access" true "$(hook AgentAccess)"
 check "another agent has to ask for itself" yes "$( (agent_once list_terminals '{}' > "$work/other" &); \
     question | grep -q 'read your terminals' && hook AnswerAgent false; sleep 0.5; refused 'The user did not allow' < "$work/other")"
+# Two dialogs at once: the window stays below the one left open until it closes as well.
+(agent_once list_terminals '{}' > "$work/third" &)
+question > /dev/null
+protected=$(active)
+sessions setSessionClosable "$protected" false; sleep 0.3
+hook Trigger close-session; sleep 1; input key 1; sleep 0.6
+check "a dialog left open keeps the window below it" true "$(hook DialogOpen)"
+hook AnswerAgent false; sleep 0.6
+check "the window comes back when the last dialog closed" false "$(hook DialogOpen)"
+sessions setSessionClosable "$protected" true; sleep 0.3
+# About Kudari shows its dialog without waiting for it: the window stays below until it closes.
+hook Popup main; sleep 1; menu_entry 1; sleep 0.5
+check "the window stays below the dialog about Kudari" true "$(hook DialogOpen)"
+input key 1; sleep 1
+check "the window comes back when the dialog about Kudari closed" false "$(hook DialogOpen)"
 check "agents may not type by default" yes "$(agent type_text '{"text": "ls"}' | refused 'Controlling terminals is switched off')"
 hook SetSetting AllowAgentControl true; sleep 0.3
 check "more rights end the access granted before" false "$(hook AgentAccess)"
@@ -720,7 +751,13 @@ check "a script reading input is no prompt for an agent" yes \
 input key 28; sleep 0.5
 check "the script got nothing from the agent" "got-|" "$(content "$work/agent-read")"
 hook SetSetting ConfirmAgentCommands false; sleep 0.3
-agent type_text "{\"terminal\": $mine, \"text\": \"echo ran-by-agent\", \"execute\": true}" > /dev/null; sleep 0.6
+# The agent was allowed when its commands waited for Return; Kudari asks about it again.
+check "commands that no longer wait end the access granted before" false "$(hook AgentAccess)"
+send type_text "{\"terminal\": $mine, \"text\": \"echo ran-by-agent\", \"execute\": true}"
+check "Kudari asks again before commands of an agent run at once" yes \
+    "$(question | grep -q 'read and control' && echo yes)"
+hook AnswerAgent true
+receive > /dev/null; sleep 0.6
 check "without confirmation an agent runs commands" yes \
     "$(agent read_terminal "{\"terminal\": $mine, \"lines\": 5}" | grep -qx 'ran-by-agent' && echo yes)"
 agent type_text "{\"terminal\": $mine, \"text\": \"sleep 30\", \"execute\": true}" > /dev/null; sleep 0.6

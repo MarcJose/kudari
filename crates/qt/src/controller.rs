@@ -57,7 +57,8 @@ pub mod qobject {
         #[qproperty(i32, work_height, cxx_name = "workHeight")]
         #[qproperty(bool, window_visible, cxx_name = "windowVisible")]
         #[qproperty(bool, fullscreen)]
-        #[qproperty(bool, dialog_open, cxx_name = "dialogOpen")]
+        /// True while a dialog of Kudari is open, which the window then stays below.
+        #[qproperty(bool, dialog_open, cxx_name = "dialogOpen", READ, NOTIFY)]
         /// True while an AI agent may use Kudari.
         #[qproperty(bool, agent_access, cxx_name = "agentAccess")]
         type Controller = super::ControllerRust;
@@ -135,6 +136,11 @@ pub mod qobject {
         /// A menu built in QML closed, which ends the session of a tab menu.
         #[qinvokable]
         fn menu_closed(self: Pin<&mut Self>);
+
+        /// A dialog of QML opened or closed; each one that opens closes once.
+        #[qinvokable]
+        #[cxx_name = "dialogActive"]
+        fn dialog_active(self: Pin<&mut Self>, active: bool);
 
         #[qinvokable]
         fn popup_terminal_menu(self: Pin<&mut Self>, x: i32, y: i32, can_copy: bool, link: &QString);
@@ -350,7 +356,27 @@ static WAITING: Mutex<Waiting> = Mutex::new(Waiting {
 });
 
 thread_local! {
-    static INSTANCE: Cell<*mut qobject::Controller> = const { Cell::new(std::ptr::null_mut()) };
+    /// The dialogs of Kudari that are open. Several can be at once, such as the settings and a
+    /// question about an agent: the window stays below them until the last one closed.
+    static DIALOGS: Cell<u32> = const { Cell::new(0) };
+}
+
+fn dialogs_open() -> bool {
+    DIALOGS.with(Cell::get) > 0
+}
+
+/// A dialog of C++ opened. It counts at once, before the window loses the focus to it,
+/// without the controller: the dialog can open from within a method of the controller, which
+/// another reference to it must not cross. The window follows from the queue.
+pub fn dialog_opened() {
+    DIALOGS.with(|count| count.set(count.get().saturating_add(1)));
+    queue(qobject::Controller::show_dialogs);
+}
+
+/// A dialog of C++ closed. It stops counting only from the queue, with what the app does when
+/// a dialog closes, so that the focus that moves away meanwhile still finds it open.
+pub fn dialog_finished() {
+    queue(qobject::Controller::dialog_closed);
 }
 
 /// Runs `action` on the Qt thread with the controller, once it has started.
@@ -369,17 +395,6 @@ pub fn queue(action: impl FnOnce(Pin<&mut qobject::Controller>) + Send + 'static
 /// its window.
 pub fn started() -> bool {
     WAITING.lock().unwrap_or_else(PoisonError::into_inner).started
-}
-
-/// Runs `action` right away. Must be called on the Qt thread.
-pub fn with_controller(action: impl FnOnce(Pin<&mut qobject::Controller>)) {
-    let pointer = INSTANCE.with(Cell::get);
-    // SAFETY: the pointer is set once to the QML-owned controller, which lives until
-    // the application exits, and it is only used on the Qt thread.
-    if let Some(controller) = unsafe { pointer.as_mut() } {
-        // SAFETY: Qt keeps a QObject in place, so the controller is never moved.
-        action(unsafe { Pin::new_unchecked(controller) });
-    }
 }
 
 pub struct ControllerRust {
@@ -453,9 +468,6 @@ impl cxx_qt::Initialize for qobject::Controller {
     fn initialize(mut self: Pin<&mut Self>) {
         let _ = THREAD.set(self.qt_thread());
         terminal::listen();
-        // SAFETY: only the address is stored, the object is not moved by QML.
-        let pointer = unsafe { std::ptr::from_mut::<qobject::Controller>(self.as_mut().get_unchecked_mut()) };
-        INSTANCE.with(|instance| instance.set(pointer));
         let skin = skin_to_json(&self.skin).to_string();
         self.as_mut().set_skin_json(qs(&skin));
         self.as_mut().apply_terminal_settings();
@@ -753,6 +765,16 @@ impl qobject::Controller {
         new.unwrap_or(-1)
     }
 
+    pub fn split_terminal(mut self: Pin<&mut Self>, terminal: TerminalId, orientation: Orientation) -> i32 {
+        let (new, effects) = self
+            .as_mut()
+            .rust_mut()
+            .app
+            .split_terminal(terminal, Some(orientation), &Terminals);
+        self.apply(effects);
+        new.unwrap_or(-1)
+    }
+
     pub fn raise(self: Pin<&mut Self>, session: SessionId) {
         self.update(|app| app.raise(session));
     }
@@ -822,8 +844,7 @@ impl qobject::Controller {
     /// `MainWindow::wmActiveWindowChanged`: own menus and dialogs do not retract.
     fn focus_lost(self: Pin<&mut Self>) {
         let has_focus = qt::rk_application_has_focus();
-        let dialog_open = *self.dialog_open();
-        self.update(|app| app.focus_lost(has_focus, dialog_open));
+        self.update(|app| app.focus_lost(has_focus, dialogs_open()));
     }
 
     /// Translates a text of the QML pages, which the check of the translations finds there.
@@ -924,9 +945,7 @@ impl qobject::Controller {
         let old = self.as_mut().rust_mut().app.replace_settings(settings);
         let new = self.app.settings();
         let skin_changed = new.skin != old.skin;
-        // Agents were allowed for what the settings permitted then; any change asks again.
-        let agents_changed =
-            (new.allow_agent_reading, new.allow_agent_control) != (old.allow_agent_reading, old.allow_agent_control);
+        let agents_changed = self.app.agent_rights_changed(&old);
         self.as_mut().apply_terminal_settings();
         if skin_changed {
             self.as_mut().apply_skin();
@@ -1229,10 +1248,27 @@ impl qobject::Controller {
         queue(|controller| controller.update(App::menu_closed));
     }
 
-    pub fn dialog_active(mut self: Pin<&mut Self>, active: bool) {
-        self.as_mut().set_dialog_open(active);
-        if !active {
-            self.update(App::dialog_closed);
+    pub fn dialog_active(self: Pin<&mut Self>, active: bool) {
+        if active {
+            DIALOGS.with(|count| count.set(count.get().saturating_add(1)));
+            self.show_dialogs();
+        } else {
+            self.dialog_closed();
+        }
+    }
+
+    fn dialog_closed(mut self: Pin<&mut Self>) {
+        DIALOGS.with(|count| count.set(count.get().saturating_sub(1)));
+        self.as_mut().show_dialogs();
+        self.update(App::dialog_closed);
+    }
+
+    /// Puts the window below the dialogs while one is open, and back when the last one closed.
+    fn show_dialogs(mut self: Pin<&mut Self>) {
+        let open = dialogs_open();
+        if self.dialog_open != open {
+            self.as_mut().rust_mut().dialog_open = open;
+            self.dialog_open_changed();
         }
     }
 
@@ -1273,7 +1309,7 @@ impl qobject::Controller {
             ),
             TerminalCommand::MouseTracking(enabled) => backend.set_tracks_mouse(enabled),
             TerminalCommand::OpenFolder => {
-                if let Some(directory) = self.app.active_directory(&Terminals) {
+                if let Some(directory) = App::folder_of(terminal, &Terminals) {
                     frontend().open_url(&directory.to_string_lossy());
                 }
             }

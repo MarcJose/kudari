@@ -117,7 +117,12 @@ fn kde_tab_color(session: i32, color: i32) {
 
 fn kde_terminal_paths(terminal: i32, paths: &QString, change_directory: bool) {
     let paths = paths.to_string();
-    crate::controller::queue(move |_| crate::terminal::send_paths(terminal, &paths, change_directory));
+    // The menu can stay open while the keyboard of the terminal gets blocked.
+    crate::controller::queue(move |controller| {
+        if controller.app().accepts_keyboard(terminal) {
+            crate::terminal::send_paths(terminal, &paths, change_directory);
+        }
+    });
 }
 
 fn kde_theme_changed() {
@@ -151,9 +156,12 @@ fn kde_menu_closed() {
     crate::controller::queue(super::controller::qobject::Controller::menu_closed);
 }
 
-/// Runs directly: the dialog blocks the Qt thread right after this call.
 fn kde_dialog_active(active: bool) {
-    crate::controller::with_controller(|controller| controller.dialog_active(active));
+    if active {
+        crate::controller::dialog_opened();
+    } else {
+        crate::controller::dialog_finished();
+    }
 }
 
 fn kde_shortcuts_changed() {

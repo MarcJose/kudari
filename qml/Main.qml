@@ -138,7 +138,7 @@ Window {
         onQuitRequested: Qt.quit()
         onSettingsRequested: module => configuration.open(module)
         onFirstRunRequested: {
-            app.dialogOpen = true;
+            app.dialogActive(true);
             firstRun.active = true;
         }
         onDialogOpenChanged: {
@@ -155,7 +155,7 @@ Window {
         sourceComponent: FirstRunDialog {
             controller: app
             onFinished: {
-                app.dialogOpen = false;
+                app.dialogActive(false);
                 firstRun.active = false;
             }
         }
@@ -165,7 +165,10 @@ Window {
         id: configuration
 
         title: app.actionText("options_configure").replace(/\s*(…|\.\.\.)$/, "")
-        onConfigViewItemChanged: app.dialogOpen = configViewItem !== null
+        // Counts once while the window of the settings is open, whichever page it shows.
+        property bool shown: configViewItem !== null
+
+        onShownChanged: app.dialogActive(shown)
         modules: [
             KirigamiSettings.ConfigurationModule {
                 moduleId: "window"

@@ -513,6 +513,13 @@ impl App {
                         "Agents may close only the sessions they opened themselves.".to_string(),
                     ));
                 }
+                // A session the user protected would only ask the user, while the agent took
+                // the answer for done; the protection is the user's decision.
+                if self.stack().session(session).is_some_and(|found| !found.closable) {
+                    return Err(Error::Denied(
+                        "The user protected this session from closing; ask the user to close it.".to_string(),
+                    ));
+                }
                 effects.extend(self.remove_session(session));
                 Ok(String::new())
             }
@@ -535,9 +542,7 @@ impl App {
     }
 
     fn keyboard_input(&self, terminal: TerminalId) -> bool {
-        self.stack()
-            .terminal_state(terminal)
-            .is_none_or(|state| state.keyboard_input_enabled)
+        self.accepts_keyboard(terminal)
     }
 
     fn prompt(&self, terminal: TerminalId, running: &dyn Terminal) -> Prompt {
@@ -556,7 +561,9 @@ impl App {
         let format = &self.settings().title_format;
         let sessions: Vec<Value> = self
             .stack()
-            .sessions()
+            .tabs()
+            .iter()
+            .filter_map(|id| self.stack().session(*id))
             .map(|session| {
                 let terminals: Vec<Value> = session
                     .terminal_ids()
@@ -1139,6 +1146,29 @@ mod tests {
         }
 
         #[test]
+        fn terminals_come_in_the_order_of_the_tabs() {
+            let mut app = allowed();
+            let host = running(false, true);
+            let first = app.stack().active_id().unwrap();
+            let _ = app.add_session(SessionType::Single, &host);
+            let (third, _) = app.add_session(SessionType::Single, &host);
+            // The user moves the third tab to the front.
+            app.stack_mut().move_tab_left(third);
+            app.stack_mut().move_tab_left(third);
+            let listed: Value = serde_json::from_str(&ask(&mut app, Request::Terminals, &host).unwrap()).unwrap();
+            let order: Vec<i64> = listed["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|session| session["id"].as_i64().unwrap())
+                .collect();
+            let tabs: Vec<i64> = app.stack().tabs().iter().map(|id| i64::from(*id)).collect();
+            assert_eq!(order, tabs);
+            assert_eq!(order[0], i64::from(third));
+            assert_eq!(order[1], i64::from(first));
+        }
+
+        #[test]
         fn agents_close_only_their_own_sessions() {
             let mut app = allowed();
             let host = running(false, true);
@@ -1168,6 +1198,15 @@ mod tests {
             let (other, _) = app.agent_request(Some("b"), Request::Close { session }, &host);
             assert!(matches!(other, Err(Error::Denied(_))), "another agent: {other:?}");
             assert!(app.stack().session(session).is_some());
+            // A session the user protected stays, and the agent learns why.
+            app.stack_mut().session_mut(session).unwrap().closable = false;
+            let (protected, effects) = app.agent_request(Some("a"), Request::Close { session }, &host);
+            assert!(matches!(protected, Err(Error::Denied(_))), "{protected:?}");
+            assert!(
+                !effects.iter().any(|effect| matches!(effect, Effect::Ask { .. })),
+                "{effects:?}"
+            );
+            app.stack_mut().session_mut(session).unwrap().closable = true;
             assert_eq!(ask(&mut app, Request::Close { session }, &host), Ok(String::new()));
             assert!(app.stack().session(session).is_none());
         }

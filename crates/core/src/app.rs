@@ -323,6 +323,16 @@ impl App {
         self.settings.screen != old.screen
     }
 
+    /// Whether agents must be asked about again after the settings were `old`: they were
+    /// allowed for what the settings permitted then. Asking before running commands again
+    /// only narrows what they may do.
+    #[must_use]
+    pub fn agent_rights_changed(&self, old: &Settings) -> bool {
+        let new = &self.settings;
+        (new.allow_agent_reading, new.allow_agent_control) != (old.allow_agent_reading, old.allow_agent_control)
+            || (old.confirm_agent_commands && !new.confirm_agent_commands)
+    }
+
     #[must_use]
     pub fn stack(&self) -> &SessionStack {
         &self.stack
@@ -449,8 +459,10 @@ impl App {
     /// tried again with the next [`Effect::Publish`].
     pub fn started(&mut self, terminals: &[TerminalId]) {
         self.running.extend(terminals);
-        self.pending_directories.clear();
+        // Those that failed keep their directory for the next try; closed ones go.
         let stack = &self.stack;
+        self.pending_directories
+            .retain(|(terminal, _)| !terminals.contains(terminal) && stack.session_for_terminal(*terminal).is_some());
         self.shells
             .retain(|terminal, _| stack.session_for_terminal(*terminal).is_some());
     }
@@ -574,6 +586,21 @@ impl App {
             .or_else(crate::process::home)
     }
 
+    /// Whether `terminal` takes what the user types, which the user can block per terminal.
+    #[must_use]
+    pub fn accepts_keyboard(&self, terminal: TerminalId) -> bool {
+        self.stack
+            .terminal_state(terminal)
+            .is_none_or(|state| state.keyboard_input_enabled)
+    }
+
+    /// The folder that "Open File Manager" shows for `terminal`: where it is, whether new
+    /// terminals inherit it or not, or the home directory.
+    #[must_use]
+    pub fn folder_of(terminal: TerminalId, host: &dyn Host) -> Option<PathBuf> {
+        host.working_directory(terminal).or_else(crate::process::home)
+    }
+
     /// Where a terminal opened from the active one starts, the first one in the home directory.
     #[must_use]
     pub fn active_directory(&self, host: &dyn Host) -> Option<PathBuf> {
@@ -635,6 +662,20 @@ impl App {
         let Some(terminal) = self.stack.session(session).map(|found| found.active_terminal) else {
             return (None, Vec::new());
         };
+        self.split_terminal(terminal, orientation, host)
+    }
+
+    /// Splits `terminal`, `None` along its longer side; the new terminal starts where it is
+    /// and with its shell.
+    pub fn split_terminal(
+        &mut self,
+        terminal: TerminalId,
+        orientation: Option<Orientation>,
+        host: &dyn Host,
+    ) -> (Option<TerminalId>, Vec<Effect>) {
+        if self.stack.session_for_terminal(terminal).is_none() {
+            return (None, Vec::new());
+        }
         let directory = self.start_directory(terminal, host);
         let (width, height) = self.area;
         let new = match orientation {
@@ -1362,7 +1403,11 @@ impl App {
         match kind {
             "width" => self.settings.set_width(store, value),
             "height" => self.settings.set_height(store, value),
-            "screen" => self.settings.set_screen(store, value),
+            // The window moves to the screen at once, as from the settings.
+            "screen" => {
+                self.settings.set_screen(store, value);
+                return vec![Effect::UpdateWorkArea, Effect::PublishSettings];
+            }
             _ => return Vec::new(),
         }
         vec![Effect::PublishSettings]
@@ -1597,10 +1642,40 @@ mod tests {
         let expected = PathBuf::from(format!("/work/{first}"));
         assert!(starts.iter().all(|start| start.directory.as_ref() == Some(&expected)));
         let (new, _) = app.split(session, None, &Here);
-        assert!(new.is_some());
+        let new = new.unwrap();
+        let inherited = |app: &App| {
+            app.pending_starts()
+                .into_iter()
+                .find(|start| start.terminal == new)
+                .and_then(|start| start.directory)
+        };
+        // That of the terminal split.
+        let expected = inherited(&app);
+        assert!(
+            expected
+                .as_ref()
+                .is_some_and(|directory| directory.starts_with("/work"))
+        );
+        // The program of the new terminal fails to start; the next try starts it in the same
+        // directory.
+        app.started(&[]);
+        assert_eq!(inherited(&app), expected, "after a failed start");
+        app.started(&[new]);
+        assert!(!app.pending_directories.iter().any(|(terminal, _)| *terminal == new));
         assert_eq!(app.split(-5, None, &Here), (None, Vec::new()));
+        // A terminal split by its id, as over D-Bus, starts where that one is too.
+        let (by_id, _) = app.split_terminal(first, Some(Orientation::Vertical), &Here);
+        let by_id = by_id.unwrap();
+        let start = app.pending_starts().into_iter().find(|start| start.terminal == by_id);
+        assert_eq!(
+            start.and_then(|start| start.directory),
+            Some(PathBuf::from(format!("/work/{first}")))
+        );
+        assert_eq!(app.split_terminal(-5, None, &Here), (None, Vec::new()));
         let home = app_with(&[("InheritDirectory", "false")]);
         assert_eq!(home.active_directory(&Here), crate::process::home());
+        // The file manager shows where a terminal is, also when new ones start at home.
+        assert_eq!(App::folder_of(3, &Here), Some(PathBuf::from("/work/3")));
     }
 
     #[test]
@@ -2085,6 +2160,28 @@ mod tests {
     }
 
     #[test]
+    fn agents_are_asked_again_when_they_may_do_more() {
+        let table = Table::default();
+        let mut app = fresh();
+        table.write("Security", "AllowAgentControl", "true");
+        let _ = app.replace_settings(Settings::load(&table));
+        // Commands no longer wait for the Return of the user.
+        table.write("Security", "ConfirmAgentCommands", "false");
+        let old = app.replace_settings(Settings::load(&table));
+        assert!(old.confirm_agent_commands);
+        assert!(app.agent_rights_changed(&old));
+        // Asking again only narrows what agents may do.
+        table.write("Security", "ConfirmAgentCommands", "true");
+        let old = app.replace_settings(Settings::load(&table));
+        assert!(!app.agent_rights_changed(&old));
+        table.write("Security", "AllowAgentReading", "true");
+        let old = app.replace_settings(Settings::load(&table));
+        assert!(app.agent_rights_changed(&old));
+        let old = app.replace_settings(Settings::load(&table));
+        assert!(!app.agent_rights_changed(&old));
+    }
+
+    #[test]
     fn only_another_screen_setting_moves_the_open_window() {
         let table = Table::default();
         let mut app = fresh();
@@ -2154,7 +2251,11 @@ mod tests {
         assert!(app.settings().keep_open);
         app.set_window_size(&table, "width", 70);
         app.set_window_size(&table, "height", 40);
-        app.set_window_size(&table, "screen", 2);
+        // The window moves to the screen chosen in the menu at once.
+        assert_eq!(
+            app.set_window_size(&table, "screen", 2),
+            [Effect::UpdateWorkArea, Effect::PublishSettings]
+        );
         assert!(app.set_window_size(&table, "depth", 1).is_empty());
         let stored = Settings::load(&table);
         assert_eq!(
