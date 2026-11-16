@@ -193,6 +193,10 @@ pub mod qobject {
         #[qinvokable]
         fn set_toggle_shortcut(self: Pin<&mut Self>, sequence: &QString) -> bool;
 
+        /// Whether the system can take `sequence` as the global shortcut at all.
+        #[qinvokable]
+        fn toggle_shortcut_supported(self: &Self, sequence: &QString) -> bool;
+
         /// The key of a key event of QML with its modifiers, in the portable text of Qt.
         #[qinvokable]
         fn key_sequence_text(self: &Self, key: i32, modifiers: i32) -> QString;
@@ -851,6 +855,10 @@ impl qobject::Controller {
 
     fn set_toggle_shortcut(self: Pin<&mut Self>, sequence: &QString) -> bool {
         frontend().set_toggle(&sequence.to_string())
+    }
+
+    fn toggle_shortcut_supported(&self, sequence: &QString) -> bool {
+        frontend().supports_toggle(&sequence.to_string())
     }
 
     fn key_sequence_text(&self, key: i32, modifiers: i32) -> QString {

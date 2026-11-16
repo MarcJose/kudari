@@ -175,6 +175,10 @@ impl GlobalShortcut for Windows {
         }
     }
 
+    fn supports_toggle(&self, sequence: &str) -> bool {
+        win::rk_win_hotkey_supported(&qs(sequence))
+    }
+
     fn foreign_toggle(&self) -> String {
         String::new()
     }

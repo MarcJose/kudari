@@ -45,7 +45,8 @@ function Test-Check([string] $name, [bool] $passed) {
 $work = (New-Item -ItemType Directory -Force (Join-Path ([IO.Path]::GetTempPath()) "kudari-gui-$PID")).FullName
 $ini = Join-Path $work 'Kudari\kudari.ini'
 New-Item -ItemType Directory -Force (Split-Path $ini) | Out-Null
-Set-Content $ini "[Behavior]`nOpenAfterStart=true`n[Dialogs]`nFirstRun=false`n[Shortcuts]`ntoggle-window-state=Ctrl+Alt+F12"
+# The shortcut is a key that has no letter: Windows used to refuse those.
+Set-Content $ini "[Behavior]`nOpenAfterStart=true`n[Dialogs]`nFirstRun=false`n[Shortcuts]`ntoggle-window-state=Ctrl+Alt+Home"
 $log = Join-Path $work 'log.txt'
 $env:APPDATA = $work
 $env:QT_FORCE_STDERR_LOGGING = '1'
@@ -125,6 +126,7 @@ function Get-Setting([string] $key) {
 try {
     $window = Wait-For { Get-Windows | Where-Object { -not $_.Current.BoundingRectangle.IsEmpty } | Select-Object -First 1 } 15
     Test-Check 'the window opens' ($null -ne $window)
+    Test-Check 'Windows takes Ctrl+Alt+Home as the shortcut' (-not (Select-String -Quiet 'refused the shortcut' $log))
 
     $buttons = 'New Session', 'New Session With', 'Keep open when the focus moves elsewhere', 'Open Menu', 'Quit'
     $missing = @($buttons | Where-Object { -not (Find-Element $_ 3) })
@@ -218,6 +220,16 @@ try {
     $errors = @(Get-Content $log -ErrorAction SilentlyContinue | Where-Object { $_ -match 'qrc:/|TypeError|ReferenceError|QML' })
     Test-Check 'the QML reports no errors' ($errors.Count -eq 0)
     if ($errors) { $errors | Select-Object -First 10 | ForEach-Object { Write-Host "      $_" } }
+
+    # A character takes the key that types it with the layout of the keyboard.
+    (Get-Content $ini) -replace '^toggle-window-state=.*', 'toggle-window-state=Ctrl+Alt+^' | Set-Content $ini
+    $characterLog = Join-Path $work 'character.txt'
+    $process = Start-Process $Program -PassThru -RedirectStandardError $characterLog -WorkingDirectory $work
+    $ByProcess = New-Object System.Windows.Automation.PropertyCondition ($Automation::ProcessIdProperty, $process.Id)
+    [void] (Wait-For { Get-Windows | Where-Object { -not $_.Current.BoundingRectangle.IsEmpty } | Select-Object -First 1 } 15)
+    Test-Check 'Windows takes Ctrl+Alt+^ as the shortcut' (-not (Select-String -Quiet 'refused the shortcut' $characterLog))
+    [void] (Invoke-Element 'Quit')
+    [void] $process.WaitForExit(10000)
 } catch {
     Test-Check "the test runs through: $($_.Exception.Message)" $false
 } finally {

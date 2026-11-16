@@ -10,6 +10,7 @@
 
 bool rk_win_claim_instance(const QString &name);
 bool rk_win_register_hotkey(const QString &sequence);
+bool rk_win_hotkey_supported(const QString &sequence);
 void rk_win_setup_tray(const QString &toggleText, const QString &quitText);
 void rk_win_set_tray_visible(bool visible);
 void rk_win_notify(const QString &title, const QString &text);

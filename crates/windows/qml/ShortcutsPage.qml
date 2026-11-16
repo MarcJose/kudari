@@ -16,7 +16,7 @@ FormCard.FormCardPage {
     required property var controller
     readonly property var shortcuts: JSON.parse(controller.shortcutsJson)
     property string toggle: controller.toggleShortcut()
-    property bool refused: false
+    property string refused: ""
     // The icons of Windows, else text.
     property string iconFont
 
@@ -35,13 +35,15 @@ FormCard.FormCardPage {
 
         FormCard.FormRow {
             caption: root.controller.actionText("toggle-window-state")
-            description: root.refused ? root.t("@info", "Another program already uses this shortcut.") : ""
+            description: root.refused === "taken" ? root.t("@info", "Another program already uses this shortcut.")
+                : root.refused === "unsupported" ? root.t("@info", "This key cannot be used as a global shortcut.") : ""
 
             KeySequenceButton {
                 controller: root.controller
                 sequence: root.toggle
                 onChosen: sequence => {
-                    root.refused = !root.controller.setToggleShortcut(sequence);
+                    root.refused = root.controller.setToggleShortcut(sequence) ? ""
+                        : root.controller.toggleShortcutSupported(sequence) ? "taken" : "unsupported";
                     root.toggle = root.controller.toggleShortcut();
                 }
             }

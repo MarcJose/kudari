@@ -36,6 +36,13 @@ QTimer *s_trayHide = nullptr;
 
 #ifdef Q_OS_WIN
 constexpr int HOTKEY_ID = 1;
+
+// The key that types `character` with the layout of the keyboard now, or 0 if none does.
+UINT keyOfCharacter(wchar_t character)
+{
+    const SHORT found = VkKeyScanExW(character, GetKeyboardLayout(0));
+    return found == -1 ? 0 : static_cast<UINT>(found & 0xff);
+}
 constexpr UINT TOGGLE_MESSAGE = WM_APP + 1;
 HWND s_window = nullptr;
 
@@ -60,8 +67,6 @@ UINT virtualKey(Qt::Key key)
         return static_cast<UINT>(key);
     }
     switch (key) {
-    case Qt::Key_QuoteLeft:
-        return VK_OEM_3;
     case Qt::Key_Space:
         return VK_SPACE;
     case Qt::Key_Insert:
@@ -72,8 +77,51 @@ UINT virtualKey(Qt::Key key)
         return VK_SCROLL;
     case Qt::Key_Escape:
         return VK_ESCAPE;
+    case Qt::Key_Home:
+        return VK_HOME;
+    case Qt::Key_End:
+        return VK_END;
+    case Qt::Key_PageUp:
+        return VK_PRIOR;
+    case Qt::Key_PageDown:
+        return VK_NEXT;
+    case Qt::Key_Left:
+        return VK_LEFT;
+    case Qt::Key_Up:
+        return VK_UP;
+    case Qt::Key_Right:
+        return VK_RIGHT;
+    case Qt::Key_Down:
+        return VK_DOWN;
+    case Qt::Key_Tab:
+    case Qt::Key_Backtab:
+        return VK_TAB;
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+        return VK_RETURN;
+    case Qt::Key_Backspace:
+        return VK_BACK;
+    case Qt::Key_Delete:
+        return VK_DELETE;
+    case Qt::Key_Print:
+        return VK_SNAPSHOT;
+    case Qt::Key_CapsLock:
+        return VK_CAPITAL;
+    case Qt::Key_NumLock:
+        return VK_NUMLOCK;
+    case Qt::Key_Menu:
+        return VK_APPS;
+    // Dead keys, as ^ left of 1 on a German keyboard, by the character they put on letters.
+    case Qt::Key_Dead_Circumflex:
+        return keyOfCharacter(L'^');
+    case Qt::Key_Dead_Grave:
+        return keyOfCharacter(L'`');
+    case Qt::Key_Dead_Acute:
+        return keyOfCharacter(L'\u00b4');
     default:
-        return 0;
+        // Other characters, such as ^, ` or ß, lie where the layout of the keyboard puts them:
+        // ` is left of 1 in the United States, and next to the backspace in Germany.
+        return key > Qt::Key_Space && key <= 0xff ? keyOfCharacter(static_cast<wchar_t>(key)) : 0;
     }
 }
 #else
@@ -128,6 +176,11 @@ bool rk_win_claim_instance(const QString &name)
     RegisterClassW(&windowClass);
     s_window = CreateWindowExW(0, className.c_str(), L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, windowClass.hInstance, nullptr);
     return true;
+}
+
+bool rk_win_hotkey_supported(const QString &sequence)
+{
+    return sequence.isEmpty() || virtualKey(QKeySequence(sequence)[0].key()) != 0;
 }
 
 bool rk_win_register_hotkey(const QString &sequence)
@@ -185,6 +238,11 @@ bool rk_win_claim_instance(const QString &name)
 }
 
 // There is no global shortcut to register without Windows.
+bool rk_win_hotkey_supported(const QString &)
+{
+    return true;
+}
+
 bool rk_win_register_hotkey(const QString &)
 {
     return true;

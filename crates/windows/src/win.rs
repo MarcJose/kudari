@@ -18,6 +18,9 @@ pub mod ffi {
         /// Registers the shortcut that toggles the window from anywhere, in the portable text
         /// of Qt, in place of the one before. False if Windows refused it.
         fn rk_win_register_hotkey(sequence: &QString) -> bool;
+        /// Whether Windows has a key for the shortcut `sequence`, with the layout of the
+        /// keyboard now.
+        fn rk_win_hotkey_supported(sequence: &QString) -> bool;
         fn rk_win_setup_tray(toggle_text: &QString, quit_text: &QString);
         fn rk_win_set_tray_visible(visible: bool);
         fn rk_win_notify(title: &QString, text: &QString);

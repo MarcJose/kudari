@@ -70,6 +70,11 @@ pub trait GlobalShortcut {
     /// Makes `sequence` the shortcut. False if the system refused it, which then keeps the
     /// one before.
     fn set_toggle(&self, sequence: &str) -> bool;
+    /// Whether the system can take `sequence` as a shortcut at all; a refused one that it can
+    /// take is held by another program.
+    fn supports_toggle(&self, _sequence: &str) -> bool {
+        true
+    }
     /// The sequence of another drop-down terminal, which the first start offers to take over.
     fn foreign_toggle(&self) -> String;
 }
