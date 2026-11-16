@@ -260,6 +260,9 @@ Item {
                             // Long terminal titles are shortened so that more tabs fit.
                             Layout.maximumWidth: Kirigami.Units.gridUnit * 12
                             text: tab.title
+                            // Programs, folders and remote hosts set titles: they are text, never
+                            // markup that could load images from the network.
+                            textFormat: Text.PlainText
                             elide: Text.ElideMiddle
                             font.family: bar.fonts.general.family
                             font.pointSize: bar.fonts.general.pointSize
