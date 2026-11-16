@@ -27,6 +27,10 @@ if [ -z "${KUDARI_GUI_TEST:-}" ]; then
         env -u WAYLAND_DISPLAY -u DISPLAY XDG_CONFIG_HOME=/nonexistent XDG_DATA_HOME=/nonexistent \
         KUDARI_GUI_TEST=1 dbus-run-session -- "$0" "$binary" > "$report" 2>&1 < /dev/null &
     test=$!
+    # Ctrl+C reaches this shell, tail and grep, but not timeout, which runs in a process
+    # group of its own. timeout passes TERM on to its group, the private bus, KWin and
+    # Kudari, and the trap of the test below cleans up.
+    trap 'kill -TERM "$test" 2>/dev/null; wait "$test"; rm -f "$report"; exit 130' INT TERM
     # Each check as it comes, so that a run that hangs shows where.
     tail -n +1 -f --pid="$test" "$report" | grep --line-buffered -E '^(ok|FAIL|[0-9]+ checks|Error in)'
     wait "$test"
