@@ -30,6 +30,8 @@ DESCRIPTIONS = {
 }
 SEQ_BYTES = sum(len(f"{n}\n") for n in range(1, 2_000_001))
 FRAME = re.compile(r"^(\S+) .*render thread.*frame rendered in \d+ms, sync=(\d+), render=\d+, swap=\d+")
+# A frame shows the output a moment after it arrived: frames this long after a load count.
+TAIL = 0.05
 
 
 def data(directory):
@@ -66,7 +68,8 @@ def when(stamp):
 
 
 def measure(directory, name):
-    """Per load of one run: seconds, bytes, and the sync times of the frames meanwhile."""
+    """Per load of one run: seconds, bytes, the sync times of the frames meanwhile, and the
+    seconds in which they were counted."""
     lines = (directory / f"{name}.txt").read_text().splitlines()
     rows, columns = lines[0].split()[1:]
     sizes = {
@@ -87,9 +90,8 @@ def measure(directory, name):
         if len(parts) != 3:
             continue
         load, start, end = parts[0], when(parts[1]), when(parts[2])
-        # A frame shows the output a moment after it arrived.
-        syncs = [sync for moment, sync in drawn if start <= moment <= end + 0.05]
-        result[load] = (end - start, sizes[load], syncs)
+        syncs = [sync for moment, sync in drawn if start <= moment <= end + TAIL]
+        result[load] = (end - start, sizes[load], syncs, end - start + TAIL)
     return f"{columns}x{rows}", result
 
 
@@ -125,9 +127,9 @@ def report(directory, order):
             done = [result[load] for _, result in runs[terminal] if load in result]
             if not done:
                 continue
-            seconds = [took for took, _, _ in done]
+            seconds = [took for took, _, _, _ in done]
             average = statistics.mean(seconds)
-            size = statistics.mean(size for _, size, _ in done)
+            size = statistics.mean(size for _, size, _, _ in done)
             cells = runs[terminal][0][0]
             rows.append((-size / average, [terminal, cells, f"{average:.2f}", f"{min(seconds):.2f}", f"{max(seconds):.2f}", f"{size / average / 1e6:.1f}", str(len(done))]))
         if not rows:
@@ -135,15 +137,16 @@ def report(directory, order):
         print(f"\n{load}: {DESCRIPTIONS[load]}")
         table(["terminal", "cells", "avg s", "min s", "max s", "MB/s", "runs"], [row for _, row in sorted(rows, key=lambda r: r[0])])
     # Only Qt Quick reports its frames: those of Kudari.
-    framed = {t: m for t, m in runs.items() if any(syncs for _, result in m for _, _, syncs in result.values())}
+    framed = {t: m for t, m in runs.items() if any(syncs for _, result in m for _, _, syncs, _ in result.values())}
     for terminal, measured in framed.items():
         rows = []
         for load in LOADS:
             done = [result[load] for _, result in measured if load in result and result[load][2]]
             if not done:
                 continue
-            rates = [len(syncs) / took for took, _, syncs in done]
-            syncs = [sync for _, _, run in done for sync in run]
+            # Over the same seconds in which the frames were counted.
+            rates = [len(syncs) / window for _, _, syncs, window in done]
+            syncs = [sync for _, _, run, _ in done for sync in run]
             rows.append([load, f"{statistics.mean(rates):.1f}", f"{min(rates):.1f}", f"{max(rates):.1f}", f"{statistics.mean(syncs):.1f}", f"{min(syncs)}", f"{max(syncs)}"])
         print(f"\n{terminal}: frames that Qt Quick drew during each load, and the milliseconds it took to prepare one")
         table(["load", "avg fps", "min fps", "max fps", "avg ms", "min ms", "max ms"], rows)

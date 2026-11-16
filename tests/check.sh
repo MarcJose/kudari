@@ -33,6 +33,9 @@ python3 tools/box_drawing.py --check
 echo "== Translations"
 python3 tools/translations.py --check --strict --quiet
 
+echo "== Tools"
+python3 tests/bench_test.py
+
 echo "== Packages for the AUR"
 python3 tools/aur.py --check
 for pkgbuild in packaging/aur/*/PKGBUILD; do
