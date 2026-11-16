@@ -25,16 +25,32 @@ pub fn resolve(link: &str, editor: &str) -> Open {
     if is_full_path(path)
         && let Some(mut words) = split_command(editor)
     {
-        let replace = |word: &str| {
-            word.replace("PATH", path)
-                .replace("LINE", line.unwrap_or("1"))
-                .replace("COLUMN", column.unwrap_or("1"))
-        };
+        let replace = |word: &str| fill(word, path, line.unwrap_or("1"), column.unwrap_or("1"));
         let program = expand_home(&replace(&words.remove(0)));
         let arguments = words.iter().map(|word| replace(word)).collect();
         return Open::Editor { program, arguments };
     }
     Open::Url(path.to_string())
+}
+
+/// `word` with `PATH`, `LINE` and `COLUMN` in place, in one pass: what goes in is not looked
+/// at again, so that a path such as `GUIDELINES.md` keeps its name.
+fn fill(word: &str, path: &str, line: &str, column: &str) -> String {
+    let mut out = String::with_capacity(word.len() + path.len());
+    let mut rest = word;
+    while let Some(character) = rest.chars().next() {
+        let found = [("PATH", path), ("LINE", line), ("COLUMN", column)]
+            .into_iter()
+            .find_map(|(name, value)| rest.strip_prefix(name).map(|after| (value, after)));
+        if let Some((value, after)) = found {
+            out.push_str(value);
+            rest = after;
+        } else {
+            out.push(character);
+            rest = &rest[character.len_utf8()..];
+        }
+    }
+    out
 }
 
 /// Whether a path names a share on the network, which Windows would log in to with the
@@ -278,6 +294,26 @@ mod tests {
             Open::Editor {
                 program: "vim".into(),
                 arguments: ["+1", "/nonexistent/a.rs"].map(String::from).to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn placeholders_in_the_path_stay_as_they_are() {
+        assert_eq!(
+            resolve("/nonexistent/GUIDELINES.md:10", "kate --line LINE --column COLUMN PATH"),
+            Open::Editor {
+                program: "kate".into(),
+                arguments: ["--line", "10", "--column", "1", "/nonexistent/GUIDELINES.md"]
+                    .map(String::from)
+                    .to_vec(),
+            }
+        );
+        assert_eq!(
+            resolve("/nonexistent/COLUMNS.csv:3:4", "vim +LINE PATH"),
+            Open::Editor {
+                program: "vim".into(),
+                arguments: ["+3", "/nonexistent/COLUMNS.csv"].map(String::from).to_vec(),
             }
         );
     }
