@@ -102,16 +102,118 @@ pub fn host() -> String {
 /// tokens. A file that already exists keeps its permissions. On Windows, the folders of the
 /// user already keep others out.
 ///
+/// The new content goes to a file beside it, which then takes its place: until then the old
+/// file stays whole, also when Kudari ends or the disk is full while it writes. A link stays
+/// a link, and the file it names is replaced. The new file gets the access of the old one,
+/// with its group and its access control list; what cannot be taken over leaves it to its
+/// owner alone, never with more access than before.
+///
 /// # Errors
 /// What the file system reports.
 pub fn write_private(path: &Path, content: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
 
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    options.open(path)?.write_all(content)
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let name = target
+        .file_name()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "no file name"))?;
+    let mut partial_name = std::ffi::OsString::from(".");
+    partial_name.push(name);
+    partial_name.push(format!(".{}.partial", std::process::id()));
+    let partial = target.with_file_name(partial_name);
+    let written = (|| {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        options.open(&partial)?.write_all(content)?;
+        replace(&partial, &target)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
+    written
+}
+
+/// Puts `partial` in the place of `target`, with the access of `target` if it exists.
+#[cfg(unix)]
+fn replace(partial: &Path, target: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    if let Ok(metadata) = std::fs::metadata(target) {
+        let mode = metadata.permissions().mode() & 0o7777;
+        let group = std::os::unix::fs::chown(partial, None, Some(metadata.gid())).is_ok();
+        std::fs::set_permissions(partial, std::fs::Permissions::from_mode(mode))?;
+        // The list comes after the mode, which would change its mask.
+        if !group || !copy_access_list(target, partial) {
+            std::fs::set_permissions(partial, std::fs::Permissions::from_mode(mode & 0o700))?;
+        }
+    }
+    std::fs::rename(partial, target)
+}
+
+/// Gives `to` the POSIX access control list of `from`; true if there was none or it went
+/// over.
+#[cfg(unix)]
+fn copy_access_list(from: &Path, to: &Path) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+
+        let name = c"system.posix_acl_access";
+        let (Ok(from), Ok(to)) = (
+            std::ffi::CString::new(from.as_os_str().as_bytes()),
+            std::ffi::CString::new(to.as_os_str().as_bytes()),
+        ) else {
+            return false;
+        };
+        // SAFETY: names that end in zero, and a buffer of the size that the first call tells.
+        unsafe {
+            let size = libc::getxattr(from.as_ptr(), name.as_ptr(), std::ptr::null_mut(), 0);
+            if size < 0 {
+                let error = std::io::Error::last_os_error().raw_os_error();
+                return matches!(error, Some(libc::ENODATA | libc::ENOTSUP));
+            }
+            let mut list = vec![0u8; size.unsigned_abs()];
+            let read = libc::getxattr(from.as_ptr(), name.as_ptr(), list.as_mut_ptr().cast(), list.len());
+            read >= 0 && libc::setxattr(to.as_ptr(), name.as_ptr(), list.as_ptr().cast(), read.unsigned_abs(), 0) == 0
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (from, to);
+        true
+    }
+}
+
+/// Puts `partial` in the place of `target`. An existing file is replaced as Windows does it
+/// for editors: it keeps its access control list and its attributes.
+#[cfg(windows)]
+fn replace(partial: &Path, target: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{REPLACEFILE_IGNORE_MERGE_ERRORS, ReplaceFileW};
+
+    if !target.exists() {
+        return std::fs::rename(partial, target);
+    }
+    let wide = |path: &Path| -> Vec<u16> { path.as_os_str().encode_wide().chain(std::iter::once(0)).collect() };
+    let (target, partial) = (wide(target), wide(partial));
+    // SAFETY: names that end in zero; the other arguments may be null.
+    let replaced = unsafe {
+        ReplaceFileW(
+            target.as_ptr(),
+            partial.as_ptr(),
+            std::ptr::null(),
+            REPLACEFILE_IGNORE_MERGE_ERRORS,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    if replaced == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 /// The name of the program behind process `pid`, for the question about an AI agent. For
@@ -142,6 +244,73 @@ mod tests {
         assert_eq!(Signal::from_number(2), Some(Signal::Interrupt));
         assert_eq!(Signal::from_number(0), None);
         assert_eq!(Signal::from_number(-1), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_old_file_stays_whole_until_the_new_one_is_written() {
+        use std::io::Read;
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = std::env::temp_dir().join(format!("kudari-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("save.txt");
+        std::fs::write(&path, b"old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        // What reads the file while it is saved, or what a crash would leave, sees the old
+        // content whole: the new one is a file of its own.
+        let mut reader = std::fs::File::open(&path).unwrap();
+        write_private(&path, b"new").unwrap();
+        let mut seen = String::new();
+        reader.read_to_string(&mut seen).unwrap();
+        assert_eq!(seen, "old");
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640);
+        // A link stays a link.
+        let link = directory.join("link.txt");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        write_private(&link, b"through the link").unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read(&path).unwrap(), b"through the link");
+        // An access control list stays, as `setfacl` sets it.
+        let listed = std::process::Command::new("setfacl")
+            .args(["-m", "u:nobody:r"])
+            .arg(&path)
+            .status()
+            .is_ok_and(|status| status.success());
+        if listed {
+            write_private(&path, b"listed").unwrap();
+            let list = std::process::Command::new("getfacl").arg(&path).output().unwrap();
+            assert!(String::from_utf8_lossy(&list.stdout).contains("user:nobody:r--"));
+        }
+        // Nothing stays beside it.
+        let names: Vec<_> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    /// An access control list set with `icacls` stays when the file is written again.
+    #[test]
+    #[cfg(windows)]
+    fn windows_keeps_the_access_of_a_file_written_again() {
+        let path = std::env::temp_dir().join(format!("kudari-access-{}.txt", std::process::id()));
+        std::fs::write(&path, b"old").unwrap();
+        let granted = std::process::Command::new("icacls")
+            .arg(&path)
+            .args(["/grant", "*S-1-5-32-546:(R)"])
+            .output()
+            .unwrap();
+        assert!(granted.status.success());
+        write_private(&path, b"new").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        let list = std::process::Command::new("icacls").arg(&path).output().unwrap();
+        let list = String::from_utf8_lossy(&list.stdout).to_string();
+        assert!(list.contains("Guests") || list.contains("S-1-5-32-546"), "{list}");
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
