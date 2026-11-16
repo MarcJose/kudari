@@ -320,8 +320,8 @@ pub fn question_text(reading: bool, control: bool, program: Option<&str>) -> Str
 pub trait Terminal {
     /// Columns and lines.
     fn size(&self) -> (usize, usize);
-    /// The title in the `TitleFormat` setting.
-    fn title(&self, format: &str) -> String;
+    /// The title in the `TitleFormat` setting, for a terminal of `session`.
+    fn title(&self, format: &str, session: SessionId) -> String;
     fn working_directory(&self) -> Option<PathBuf>;
     /// The program in the foreground.
     fn process_name(&self) -> Option<String>;
@@ -554,7 +554,7 @@ impl App {
                             "id": id,
                             "active": active,
                             "keyboard_input": keyboard,
-                            "title": running.title(format),
+                            "title": running.title(format, session.id),
                             "directory": running.working_directory(),
                             "process": running.process_name(),
                             "busy": running.is_busy(),
@@ -839,7 +839,7 @@ mod tests {
                 (80, 24)
             }
 
-            fn title(&self, format: &str) -> String {
+            fn title(&self, format: &str, _session: SessionId) -> String {
                 format!("title {format}")
             }
 

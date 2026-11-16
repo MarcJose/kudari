@@ -735,9 +735,10 @@ impl qobject::Controller {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .elapsed();
+                let session = self.app.stack().session_for_terminal(terminal).unwrap_or_default();
                 Some(app::Status {
                     terminal,
-                    title: backend.title(&format),
+                    title: backend.title(&format, session),
                     busy: backend.is_busy(),
                     quiet_for,
                 })

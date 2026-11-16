@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::process::{self, Programs};
+use crate::sessions::SessionId;
 
 /// The title of a terminal: `remote_format` while `ssh` runs in the foreground, unless it
 /// is empty, else `format`. `directory` is the working directory, as far as it is known;
@@ -38,6 +39,14 @@ pub fn local_title(programs: &dyn Programs, directory: Option<PathBuf>, format: 
             .as_ref()
             .map_or_else(String::new, |path| full_directory(path, home.as_deref())),
         process: programs.name().unwrap_or_default(),
+        // Reading the user of the program takes a file, so only for formats that show it.
+        prompt: if !format.contains("%B") {
+            String::new()
+        } else if programs.is_root() {
+            "#".to_string()
+        } else {
+            "$".to_string()
+        },
         user: process::user(),
         host: process::host(),
         window_title: window_title.to_string(),
@@ -58,6 +67,8 @@ pub struct TitleValues {
     pub directory: String,
     pub full_directory: String,
     pub process: String,
+    /// `#` while the program runs as root, else `$`.
+    pub prompt: String,
     pub user: String,
     pub host: String,
     pub window_title: String,
@@ -96,8 +107,9 @@ fn fill_in(format: &str, value: impl Fn(char) -> Option<String>) -> String {
 }
 
 /// The title of a local terminal. The placeholders are Konsole's, so that formats carry over:
-/// `%d` directory (short), `%D` directory (full), `%n` program, `%u` user, `%h` host and
-/// `%w` the title set by the program.
+/// `%d` directory (short), `%D` directory (full), `%n` program, `%u` user, `%h` host, `%B`
+/// `#` for root and else `$`, and `%w` the title set by the program; `%#`, the number of the
+/// session, comes in before with [`with_session`].
 #[must_use]
 pub fn format_title(format: &str, values: &TitleValues) -> String {
     fill_in(format, |letter| {
@@ -108,6 +120,7 @@ pub fn format_title(format: &str, values: &TitleValues) -> String {
             'u' => &values.user,
             'h' => &values.host,
             'w' => &values.window_title,
+            'B' => &values.prompt,
             _ => return None,
         };
         Some(value.clone())
@@ -135,6 +148,29 @@ fn split_port(host: &str) -> (&str, Option<&str>) {
         Some((name, port)) if is_port(&port) => (name, Some(port)),
         _ => (host, None),
     }
+}
+
+/// `format` with `%#` replaced by the number of `session`, counted from 1 as in Konsole: it
+/// stays when tabs move. `%%` stays as it is, for the format to fill in afterwards.
+#[must_use]
+pub fn with_session(format: &str, session: SessionId) -> String {
+    let mut out = String::with_capacity(format.len());
+    let mut characters = format.chars();
+    while let Some(character) = characters.next() {
+        if character != '%' {
+            out.push(character);
+            continue;
+        }
+        match characters.next() {
+            Some('#') => out.push_str(&(i64::from(session) + 1).to_string()),
+            Some(next) => {
+                out.push('%');
+                out.push(next);
+            }
+            None => out.push('%'),
+        }
+    }
+    out
 }
 
 /// Reads the arguments of `ssh`, with the option letters of its manual.
@@ -262,6 +298,57 @@ mod tests {
         Ssh(line.split(' ').map(str::to_string).collect())
     }
 
+    /// A shell, run as root or not.
+    struct Shell(bool);
+
+    impl Programs for Shell {
+        fn is_busy(&self) -> bool {
+            false
+        }
+
+        fn working_directory(&self) -> Option<PathBuf> {
+            None
+        }
+
+        fn name(&self) -> Option<String> {
+            Some("bash".into())
+        }
+
+        fn arguments(&self) -> Option<Vec<String>> {
+            Some(vec!["bash".into()])
+        }
+
+        fn signal(&self, _signal: Signal) {}
+
+        fn supports(&self, _signal: Signal) -> bool {
+            false
+        }
+
+        fn set_flow_control(&self, _enabled: bool) {}
+
+        fn is_root(&self) -> bool {
+            self.0
+        }
+    }
+
+    #[test]
+    fn konsoles_session_number_and_prompt_character_are_known() {
+        // As an imported profile of Konsole has it.
+        assert_eq!(with_session("%# %d", 0), "1 %d");
+        assert_eq!(with_session("%#:%#", 4), "5:5");
+        assert_eq!(with_session("100%%# %", 0), "100%%# %");
+        assert_eq!(
+            local_title(&Shell(false), None, &with_session("%# %n %B", 2), ""),
+            "3 bash $"
+        );
+        assert_eq!(local_title(&Shell(true), None, "%n %B", ""), "bash #");
+        // A placeholder escaped with %% stays text.
+        assert_eq!(
+            local_title(&Shell(true), None, &with_session("%%# %%B", 0), ""),
+            "%# %B"
+        );
+    }
+
     #[test]
     fn ssh_gets_the_remote_title() {
         assert_eq!(
@@ -330,6 +417,7 @@ mod tests {
             directory: "src".into(),
             full_directory: "~/x/src".into(),
             process: "vim".into(),
+            prompt: "$".into(),
             user: "ada".into(),
             host: "box".into(),
             window_title: "notes".into(),

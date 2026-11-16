@@ -32,7 +32,7 @@ use crate::process::Console;
 use crate::process::Pty;
 use crate::process::{self, Programs, Signal};
 use crate::services::{Clipboard, Desktop, Selection};
-use crate::sessions::TerminalId;
+use crate::sessions::{SessionId, TerminalId};
 use crate::title;
 
 pub use crate::options::Options;
@@ -627,14 +627,15 @@ impl Backend {
         lock(&self.mailbox.title).clone()
     }
 
-    /// The title of the terminal: the remote format while `ssh` runs, else `format`.
-    pub fn title(&self, format: &str) -> String {
+    /// The title of the terminal in `session`: the remote format while `ssh` runs, else
+    /// `format`.
+    pub fn title(&self, format: &str, session: SessionId) -> String {
         let remote = options().map_or_default(|options| options.remote_title_format);
         title::title(
             &*self.programs,
             self.working_directory(),
-            format,
-            &remote,
+            &title::with_session(format, session),
+            &title::with_session(&remote, session),
             &self.program_title(),
         )
     }
@@ -717,8 +718,8 @@ impl crate::agent::Terminal for Backend {
         Backend::size(self)
     }
 
-    fn title(&self, format: &str) -> String {
-        Backend::title(self, format)
+    fn title(&self, format: &str, session: SessionId) -> String {
+        Backend::title(self, format, session)
     }
 
     fn working_directory(&self) -> Option<PathBuf> {
