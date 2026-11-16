@@ -93,10 +93,13 @@ function Invoke-Sign([string] $file) {
 
 try {
     $target = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).target_directory
-    cargo +stable build --locked --release --package kudari-windows
+    cargo +stable build --locked --release --package kudari-windows --package kudari-console
     New-Item -ItemType Directory $stage | Out-Null
     # Users know the program as kudari; its crate needs another name next to the one of KDE.
     Copy-Item (Join-Path $target 'release\kudari-windows.exe') (Join-Path $stage 'kudari.exe')
+    # Shells find kudari.com before kudari.exe, and wait for it, as it is a program of the
+    # console: it runs the commands of kudari.exe for them.
+    Copy-Item (Join-Path $target 'release\kudari-console.exe') (Join-Path $stage 'kudari.com')
 
     # Qt, with the QML modules that the pages import; Windows brings Direct3D along. Neither
     # the QML debugger (`qmltooling`) nor touch input over the network (`generic`) is used, and
@@ -145,6 +148,7 @@ concrt140.dll) is redistributed under the license terms of Microsoft Visual Stud
 "@ | Set-Content (Join-Path $licenses 'README.txt') -Encoding utf8NoBOM
 
     Invoke-Sign (Join-Path $stage 'kudari.exe')
+    Invoke-Sign (Join-Path $stage 'kudari.com')
 
     $zip = Join-Path $Out "$name-x86_64-windows.zip"
     Compress-Archive -Path $stage -DestinationPath $zip -Force
@@ -152,6 +156,8 @@ concrt140.dll) is redistributed under the license terms of Microsoft Visual Stud
     # The package: the same files, with the manifest and the logos.
     $layout = Join-Path $work 'msix'
     Copy-Item $stage $layout -Recurse
+    # The alias of the package must start a program named .exe: kudari.com under that name.
+    Copy-Item (Join-Path $stage 'kudari.com') (Join-Path $layout 'kudari-console.exe')
     # Rendered from the icon by tools/icons.py, like the icon of the program.
     Copy-Item crates\windows\package\Assets (Join-Path $layout 'Assets') -Recurse
     $manifest = (Get-Content crates\windows\package\AppxManifest.xml -Raw).

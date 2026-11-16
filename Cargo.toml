@@ -4,7 +4,7 @@
 # The KDE front end is the package at the root; the platform-independent core is a member
 # of the workspace. See docs/architecture.md.
 [workspace]
-members = ["crates/core", "crates/qt", "crates/windows"]
+members = ["crates/core", "crates/qt", "crates/windows", "crates/console"]
 
 [workspace.package]
 version = "0.2.0"
