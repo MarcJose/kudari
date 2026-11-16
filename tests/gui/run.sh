@@ -694,6 +694,32 @@ input wheel 130 8 15 3 1; input wheel 130 8 15 3; sleep 1
 check "the wheel sends an arrow key for each line to full-screen programs" yes \
     "$(tr '\033' E < "$work/arrows" | grep -qE '^(EO[AB]){3}$' && echo yes)"
 
+# The kitty keyboard protocol: a program learns which of its flags Kudari carries out, and a
+# key that Shift changes has the code of its base key, as 2 for Ctrl+Shift+2, which types @.
+hook SetSetting KittyKeyboard true; sleep 0.3
+cat > "$work/kitty" <<'EOF'
+import os, re, select, sys, termios, tty
+saved = termios.tcgetattr(0)
+tty.setraw(0)
+os.write(1, b"\033[>31u\033[?u")
+reply = b""
+while not re.search(rb"\033\[\?\d+u", reply) and select.select([0], [], [], 2)[0]:
+    reply += os.read(0, 256)
+os.write(1, b"\033[<u\033[>1u")
+key = b""
+while not re.search(rb"\033\[[0-9;:]+u", key) and select.select([0], [], [], 5)[0]:
+    key += os.read(0, 256)
+os.write(1, b"\033[<u")
+termios.tcsetattr(0, termios.TCSAFLUSH, saved)
+with open(sys.argv[1], "wb") as out:
+    out.write((reply + b"|" + key).replace(b"\033", b"E"))
+EOF
+run "clear; python3 $work/kitty $work/kitty-out"
+sleep 0.5; input key 29 42 3; sleep 1
+check "a program learns the kitty flags that Kudari carries out" "E[?25u" "$(cut -d'|' -f1 "$work/kitty-out")"
+check "Ctrl+Shift+2 has the code of the 2 in the kitty protocol" "E[50;6u" "$(cut -d'|' -f2 "$work/kitty-out")"
+hook SetSetting KittyKeyboard false; sleep 0.3
+
 hook Toggle toggle-session-monitor-once true; sleep 0.2
 sessions setSessionMonitorActivityEnabled "$first" true; sleep 0.3
 watched=$(sessions activeTerminalId)
@@ -920,6 +946,83 @@ check "accepting the welcome takes over Yakuake's settings without asking" "80 f
 hook Trigger file_quit
 wait_quit "$kudari"
 check "quitting after the first start ends the program" no "$(kill -0 "$kudari" 2>/dev/null && echo yes || echo no)"
+
+# At a fractional scale, as 125 %, the cells measure whole pixels of the device: the lines of
+# tables are as thick in every cell, and as far apart. With a cell of 9 logical pixels, 11.25
+# of the device, they used to vary from column to column.
+mkdir "$work/scaled"
+printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nKeepOpen=true\n[Terminal]\nFontSize=11\n[Security]\nAllowRemoteCommands=true\n' \
+    > "$work/scaled/kudarirc"
+QT_SCALE_FACTOR=1.25 XDG_CONFIG_HOME="$work/scaled" "$binary" > "$work/scaled.log" 2>&1 &
+kudari=$!
+started
+window toggleWindowState; sleep 1.5
+run "clear; printf '│%.0s' \$(seq 60); echo; for i in 1 2 3; do echo; printf '─%.0s' \$(seq 60); echo; done"
+sleep 1
+hook Grab "$work/scaled/grab"; sleep 1
+# Reads the image without libraries: Qt writes PNG with 8 bits a channel and no interlacing.
+cat > "$work/lines" <<'EOF'
+import struct, sys, zlib
+data = open(sys.argv[1], "rb").read()
+chunks, at = {}, 8
+while at < len(data):
+    length, kind = struct.unpack(">I4s", data[at:at + 8])
+    chunks.setdefault(kind, []).append(data[at + 8:at + 8 + length])
+    at += 12 + length
+width, height, depth, kind = struct.unpack(">IIBB", chunks[b"IHDR"][0][:10])
+channels = {2: 3, 6: 4}[kind]
+raw = zlib.decompress(b"".join(chunks[b"IDAT"]))
+stride = width * channels
+rows, previous = [], bytearray(stride)
+for y in range(height):
+    line = raw[y * (stride + 1):(y + 1) * (stride + 1)]
+    kind_of_filter, row = line[0], bytearray(line[1:])
+    for x in range(stride):
+        left = row[x - channels] if x >= channels else 0
+        up = previous[x]
+        corner = previous[x - channels] if x >= channels else 0
+        if kind_of_filter == 1:
+            row[x] = (row[x] + left) & 255
+        elif kind_of_filter == 2:
+            row[x] = (row[x] + up) & 255
+        elif kind_of_filter == 3:
+            row[x] = (row[x] + (left + up) // 2) & 255
+        elif kind_of_filter == 4:
+            guess = left + up - corner
+            near = min((abs(guess - left), left), (abs(guess - up), up), (abs(guess - corner), corner))[1]
+            row[x] = (row[x] + near) & 255
+    rows.append(row)
+    previous = row
+background = rows[height // 2][stride - 5 * channels:stride - 5 * channels + 3]
+def lit(x, y):
+    pixel = rows[y][x * channels:x * channels + 3]
+    return sum(abs(a - b) for a, b in zip(pixel, background)) > 120
+def runs(values):
+    found, start = [], None
+    for index, on in enumerate(values + [False]):
+        if on and start is None:
+            start = index
+        elif not on and start is not None:
+            found.append((start, index - start))
+            start = None
+    return found
+# The row through the vertical lines has the most runs; its first 60 away from the edges of
+# the window, which has a frame, are the lines.
+inner = lambda found: [run for run in found if run[0] > 0 and run[0] + run[1] < width]
+bars = max((inner(runs([lit(x, y) for x in range(width)])) for y in range(height // 2)), key=len)[:60]
+middle = bars[len(bars) // 2][0] + bars[len(bars) // 2][1] // 2
+across = [x for x in range(bars[0][0], bars[-1][0], 3)]
+# The horizontal lines: the rows lit all along, above the bar of the tabs at the bottom.
+lines = runs([all(lit(x, y) for x in across) for y in range(height // 2)])
+steps = lambda found: {b[0] - a[0] for a, b in zip(found, found[1:])}
+widths = lambda found: {length for _, length in found}
+print("even" if len(bars) == 60 and len(lines) == 3 and all(len(group) == 1 for group in (widths(bars), steps(bars), widths(lines), steps(lines)))
+      else f"bars {sorted(widths(bars))} apart {sorted(steps(bars))}, lines {lines}")
+EOF
+check "at 125 %, the lines of tables are as thick and as far apart in every cell" even \
+    "$(python3 "$work/lines" "$work"/scaled/grab-*.png 2>&1 | tail -n 1)"
+hook Trigger file_quit
+wait_quit "$kudari"
 
 # Two screens, and one goes away while the window is open: KWin closes the window, and the
 # next shortcut shows it again rather than hiding a window that is gone.

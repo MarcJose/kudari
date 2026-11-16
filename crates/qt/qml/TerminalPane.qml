@@ -158,13 +158,16 @@ Item {
         anchors.rightMargin: pane.config.ScrollBarPosition !== "left" && pane.config.ScrollBarPosition !== "hidden" ? scrollBar.width : 0
         terminalId: pane.terminalId
         termFont: metrics.font
-        cellWidth: Math.round(cellMetrics.advanceWidth)
-        cellHeight: Math.round(metrics.height) + (pane.config.LineSpacing ?? 0)
+        // Cells of whole pixels of the device, also at a scale such as 125 %: every cell then
+        // starts on a pixel, and the lines of tables are as wide in each.
+        pixelRatio: Screen.devicePixelRatio
+        cellWidth: Math.max(1, Math.round(cellMetrics.advanceWidth * pixelRatio)) / pixelRatio
+        cellHeight: Math.max(1, Math.round((Math.round(metrics.height) + (pane.config.LineSpacing ?? 0)) * pixelRatio)) / pixelRatio
         boldIntense: pane.config.BoldIntense ?? true
         autoCopy: pane.config.AutoCopySelection ?? true
         alternateScrolling: pane.config.AlternateScrolling ?? true
         middleClickPaste: pane.config.MiddleClickPaste ?? "selection"
-        ascent: Math.round(metrics.ascent)
+        ascent: Math.round(metrics.ascent * pixelRatio) / pixelRatio
         focused: pane.isActive
         focus: true
         keyboardEnabled: pane.keyboardEnabled

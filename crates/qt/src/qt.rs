@@ -61,6 +61,8 @@ pub mod ffi {
             glyphs: &[u32],
             positions: &[QPointF],
         );
+        /// Draws `text` from a point on the baseline that need not be on a whole pixel.
+        fn rk_draw_text(painter: Pin<&mut QPainter>, position: &QPointF, text: &QString);
         fn rk_font_family(font: &mut QFont, family: &QString);
         /// A color from `#rgb` notation or a name as `#rrggbb`, or an empty string.
         fn rk_color_from_text(text: &QString) -> QString;
@@ -96,6 +98,10 @@ pub mod ffi {
         fn rk_ui_languages() -> QString;
         /// A key with modifiers, as from a key event of QML, in the portable text of Qt.
         fn rk_key_sequence_text(key: i32, modifiers: i32) -> QString;
+        /// The key of a key event without the modifiers that change what it types, from the
+        /// layout of the keyboard: `Qt::Key_7` for Ctrl+Shift+7 on a German keyboard, which
+        /// Qt names `Qt::Key_Slash`. The key itself where the platform cannot tell.
+        fn rk_base_key(key: i32, modifiers: i32, scan_code: i32, text: &QString) -> i32;
         /// A sequence in portable text as the user's language names its keys.
         fn rk_native_key_sequence(portable: &QString) -> QString;
     }

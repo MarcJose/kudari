@@ -21,7 +21,7 @@ use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{ClearMode, Handler, Rgb};
 use cxx_qt::{CxxQtType, Threading};
-use cxx_qt_lib::{QColor, QFont, QPen, QPoint, QPointF, QRectF, QString, QVariant};
+use cxx_qt_lib::{QColor, QFont, QPen, QPointF, QRectF, QString, QVariant};
 
 use crate::colors;
 use crate::frontend::frontend;
@@ -101,6 +101,9 @@ pub mod qobject {
         #[qproperty(i32, lines)]
         #[qproperty(bool, cursor_hidden, cxx_name = "cursorHidden")]
         #[qproperty(f64, cursor_fade, cxx_name = "cursorFade")]
+        /// Pixels of the device per logical pixel, as 1.25 at a scale of 125 %: the grid
+        /// starts on one of them, as its cells measure whole ones.
+        #[qproperty(f64, pixel_ratio, cxx_name = "pixelRatio")]
         #[qproperty(bool, url_hints, cxx_name = "urlHints")]
         #[qproperty(QString, search_lines, cxx_name = "searchLines")]
         /// True when output came since the places of the matches were found last; QML finds
@@ -270,6 +273,9 @@ impl cxx_qt::Initialize for qobject::TerminalItem {
         self.as_mut()
             .on_cursor_fade_changed(qobject::TerminalItem::update)
             .release();
+        self.as_mut()
+            .on_pixel_ratio_changed(qobject::TerminalItem::update)
+            .release();
         self.on_url_hints_changed(qobject::TerminalItem::update).release();
     }
 }
@@ -292,6 +298,7 @@ pub struct TerminalItemRust {
     lines: i32,
     cursor_hidden: bool,
     cursor_fade: f64,
+    pixel_ratio: f64,
     url_hints: bool,
     search_lines: QString,
     search_lines_stale: bool,
@@ -336,6 +343,7 @@ impl Default for TerminalItemRust {
             lines: 0,
             cursor_hidden: false,
             cursor_fade: 1.0,
+            pixel_ratio: 1.0,
             url_hints: false,
             search_lines: QString::default(),
             search_lines_stale: false,
@@ -475,15 +483,18 @@ impl qobject::TerminalItem {
         }
     }
 
-    /// Top left corner of the grid in item coordinates.
+    /// Top left corner of the grid in item coordinates, on a pixel of the device: with cells of
+    /// whole pixels, every cell then starts on one, and lines are as wide in each.
     fn text_origin(&self, columns: usize, lines: usize) -> (f64, f64) {
         let size = self.size();
-        terminal::text_origin(
+        let (x, y) = terminal::text_origin(
             size.width(),
             size.height(),
             columns as f64 * *self.cell_width(),
             lines as f64 * *self.cell_height(),
-        )
+        );
+        let ratio = self.pixel_ratio().max(0.25);
+        ((x * ratio).round() / ratio, (y * ratio).round() / ratio)
     }
 
     fn grid_for(&self, width: f64, height: f64) -> (u16, u16) {
@@ -589,13 +600,21 @@ impl qobject::TerminalItem {
     }
 
     fn key_press(self: Pin<&mut Self>, key: i32, modifiers: i32, text: &QString, scan_code: i32) -> bool {
+        let (qt_key, qt_modifiers) = (key, modifiers);
         let (key, modifiers) = (qt_input::key(key), qt_input::modifiers(modifiers));
         if !*self.keyboard_enabled() {
             return modifiers.intersects(Modifiers::SHIFT | Modifiers::ALT | Modifiers::CONTROL);
         }
+        let base = match qt_input::key(kde::rk_base_key(qt_key, qt_modifiers, scan_code, text)) {
+            crate::input::Key::Character(base) => Some(base),
+            _ => None,
+        };
         let text = text.to_string();
-        let digit = qt_input::digit_key(scan_code);
-        self.handle(|view, term, context| view.key_at(term, key, digit, modifiers, &text, context));
+        let physical = view::Physical {
+            digit: qt_input::digit_key(scan_code),
+            base,
+        };
+        self.handle(|view, term, context| view.key_at(term, key, physical, modifiers, &text, context));
         true
     }
 
@@ -1081,6 +1100,7 @@ impl qobject::TerminalItem {
                     cell_width: *self.cell_width(),
                     cell_height: *self.cell_height(),
                     ascent: *self.ascent(),
+                    pixel_ratio: *self.pixel_ratio(),
                 },
                 scheme: &scheme,
                 bold_intense: *self.bold_intense(),
@@ -1140,9 +1160,7 @@ impl qobject::TerminalItem {
                     if !runs.add(&painter, &fonts, slot, &text, (x, y), color) {
                         painter.as_mut().set_font(fonts.get(slot));
                         painter.as_mut().set_pen(&QPen::from(&qcolor(color)));
-                        painter
-                            .as_mut()
-                            .draw_text(&QPoint::new(x, y), &QString::from(text.as_str()));
+                        kde::rk_draw_text(painter.as_mut(), &QPointF::new(x, y), &QString::from(text.as_str()));
                     }
                 }
             }
@@ -1184,7 +1202,7 @@ impl GlyphRuns {
         fonts: &Fonts,
         slot: usize,
         text: &str,
-        (x, y): (i32, i32),
+        (x, y): (f64, f64),
         color: Rgb,
     ) -> bool {
         let mut characters = text.chars();
@@ -1221,7 +1239,7 @@ impl GlyphRuns {
             return false;
         };
         run.glyphs.push(glyph);
-        run.positions.push(QPointF::new(f64::from(x), f64::from(y)));
+        run.positions.push(QPointF::new(x, y));
         true
     }
 

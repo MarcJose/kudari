@@ -32,6 +32,11 @@
 #include <QPrintDialog>
 #include <QPrinter>
 #include <QTextDocument>
+// Private, as nothing public names the key of a key event on its first level.
+#include <QtGui/private/qkeymapper_p.h>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 void rk_clipboard_set(const QString &text, bool selection)
 {
@@ -205,6 +210,11 @@ void rk_frame_end(QPainter &target, std::unique_ptr<RkFrame> frame, bool opaque)
 
 // Positions on the baseline. One run per font and color spares the text layout that
 // `QPainter::drawText` does for every call.
+void rk_draw_text(QPainter &painter, const QPointF &position, const QString &text)
+{
+    painter.drawText(position, text);
+}
+
 void rk_draw_glyphs(QPainter &painter,
                     const QRawFont &font,
                     const QColor &color,
@@ -373,6 +383,21 @@ void rk_open_url_with_qt(const QString &target)
 QString rk_ui_languages()
 {
     return QLocale::system().uiLanguages().join(QLatin1Char(','));
+}
+
+int rk_base_key(int key, int modifiers, int scanCode, const QString &text)
+{
+    quint32 virtualKey = 0;
+#ifdef Q_OS_WIN
+    // The key mapper of Windows looks the key up by its virtual key, which QML does not
+    // pass on: it follows from the scan code, with the prefix of an extended key.
+    const UINT scan = (scanCode & 0x100) ? (0xE000u | (UINT(scanCode) & 0xFFu)) : UINT(scanCode);
+    virtualKey = MapVirtualKeyW(scan, MAPVK_VSC_TO_VK_EX);
+#endif
+    const QKeyEvent event(QEvent::KeyPress, key, Qt::KeyboardModifiers(modifiers), quint32(scanCode), virtualKey, 0, text);
+    // The first combination is the key on its first level, with all the modifiers.
+    const QList<QKeyCombination> possible = QKeyMapper::possibleKeys(&event);
+    return possible.isEmpty() ? key : int(possible.first().key());
 }
 
 QString rk_key_sequence_text(int key, int modifiers)

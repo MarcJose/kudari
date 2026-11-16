@@ -334,7 +334,11 @@ impl EventListener for Proxy {
                     });
                 }
             }
-            Event::PtyWrite(text) => self.reply(Reply::Text(text)),
+            // The flags of the kitty keyboard protocol in force, which `alacritty_terminal`
+            // reports with those that Kudari does not carry out.
+            Event::PtyWrite(text) => self.reply(Reply::Text(
+                crate::input::supported_keyboard_report(&text).unwrap_or(text),
+            )),
             Event::ColorRequest(index, format) => self.reply(Reply::Color(index, format)),
             Event::TextAreaSizeRequest(format) => self.reply(Reply::Size(format)),
             Event::ClipboardLoad(_, format) => self.reply(Reply::Paste(format)),
@@ -1211,8 +1215,9 @@ mod tests {
             cell_width: 8.0,
             cell_height: 16.0,
             ascent: 12.0,
+            pixel_ratio: 1.0,
         };
-        assert_eq!(geometry.cell_rect(3, 1, 1.0).x, f64::from(geometry.baseline(3, 1).0));
+        assert_eq!(geometry.cell_rect(3, 1, 1.0).x, geometry.baseline(3, 1).0);
         // With no room, the margins stay.
         assert_eq!(centered(50.0, 20.0, 80.0, 40.0, (4.0, 1.0)), (4.0, 1.0));
     }
