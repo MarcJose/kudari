@@ -122,7 +122,8 @@ try {
 
     $licenses = (New-Item -ItemType Directory (Join-Path $stage 'licenses')).FullName
     Copy-Item LICENSES\MIT.txt (Join-Path $licenses 'Kudari-MIT.txt')
-    Copy-Item THIRD_PARTY_LICENSES (Join-Path $licenses 'THIRD_PARTY_LICENSES.txt')
+    # The crates of the Windows build, which links some that Linux does not.
+    Copy-Item THIRD_PARTY_LICENSES-windows (Join-Path $licenses 'THIRD_PARTY_LICENSES.txt')
     foreach ($file in $QtLicenses.Keys) {
         $path = Join-Path $licenses "Qt-$file"
         Invoke-WebRequest "$QtLicenseUrl/$file" -OutFile $path
