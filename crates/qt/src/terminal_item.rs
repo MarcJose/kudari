@@ -768,7 +768,7 @@ impl qobject::TerminalItem {
             return;
         };
         let html = if options.copy_html {
-            view::selection_html(&term)
+            view::selection_html(&term, *self.bold_intense())
         } else {
             String::new()
         };
