@@ -134,6 +134,8 @@ fn unquote(text: &str) -> String {
 
 /// The catalogue among `catalogues`, named like `de` or `pt_BR`, for the first of
 /// `languages` that has one, in the form Qt gives them, such as `de-DE` or `zh-Hant-TW`.
+/// English is the language of the texts themselves, as `KI18n` takes it: a user who puts it
+/// first gets them, or British English, and no later language.
 #[must_use]
 pub fn choose<'a>(languages: &[String], catalogues: &[(&str, &'a str)]) -> Option<&'a str> {
     let find = |name: &str| {
@@ -142,20 +144,27 @@ pub fn choose<'a>(languages: &[String], catalogues: &[(&str, &'a str)]) -> Optio
             .find(|(found, _)| *found == name)
             .map(|(_, text)| *text)
     };
-    languages.iter().find_map(|language| {
+    for language in languages {
         let name = language.replace('-', "_");
         let base = name.split('_').next().unwrap_or_default();
+        if base == "en" {
+            return find(&name).or_else(|| name.rsplit_once('_').and_then(|(language, _)| find(language)));
+        }
         let script = match name.as_str() {
             _ if name.starts_with("zh_Hans") => Some("zh_CN"),
             _ if name.starts_with("zh_Hant") => Some("zh_TW"),
             _ if name.starts_with("sr_Latn") => Some("sr@latin"),
             _ => None,
         };
-        find(&name)
+        let found = find(&name)
             .or_else(|| script.and_then(find))
             .or_else(|| name.rsplit_once('_').and_then(|(language, _)| find(language)))
-            .or_else(|| find(base))
-    })
+            .or_else(|| find(base));
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
 }
 
 static CATALOG: OnceLock<Catalog> = OnceLock::new();
@@ -291,6 +300,7 @@ msgstr "Zitat „%1“"
             ("pt", "pt"),
             ("zh_TW", "zh_TW"),
             ("sr@latin", "sr@latin"),
+            ("en_GB", "en_GB"),
         ];
         let pick = |languages: &[&str]| {
             let languages: Vec<String> = languages.iter().map(|language| (*language).to_string()).collect();
@@ -301,7 +311,11 @@ msgstr "Zitat „%1“"
         assert_eq!(pick(&["pt-PT"]), Some("pt"));
         assert_eq!(pick(&["zh-Hant-TW"]), Some("zh_TW"));
         assert_eq!(pick(&["sr-Latn-RS"]), Some("sr@latin"));
-        assert_eq!(pick(&["en-US", "de"]), Some("de"));
+        // English first means the texts as they are, as on Plasma, though German follows.
+        assert_eq!(pick(&["en-US", "en", "de-DE", "de"]), None);
+        assert_eq!(pick(&["en", "de"]), None);
+        assert_eq!(pick(&["en-GB", "de"]), Some("en_GB"));
+        assert_eq!(pick(&["fr-FR", "de"]), Some("de"));
         assert_eq!(pick(&["en-US"]), None);
         assert_eq!(pick(&[]), None);
     }
