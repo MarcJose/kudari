@@ -32,8 +32,15 @@ impl Source<'_> {
         self.0.read(group, key, default)
     }
 
+    /// A switch as `KConfig` reads it: `true`, `yes`, `on` or `1` in any case, and their
+    /// opposites. Anything else keeps the default, so that a switch that protects, such as
+    /// the one to confirm the commands of agents, never turns off from a value it does not know.
     fn boolean(&self, group: &str, key: &str, default: bool) -> bool {
-        self.text(group, key, if default { "true" } else { "false" }) == "true"
+        match self.text(group, key, "").trim().to_ascii_lowercase().as_str() {
+            "true" | "yes" | "on" | "1" => true,
+            "false" | "no" | "off" | "0" => false,
+            _ => default,
+        }
     }
 
     fn int(&self, group: &str, key: &str, default: i32, min: i32, max: i32) -> i32 {
@@ -677,11 +684,32 @@ mod tests {
         let settings = with(&[
             ("Width", "breit"),
             ("TerminalHighlightOpacity", "x"),
-            ("KeepOpen", "yes"),
+            ("ConfirmAgentCommands", "vielleicht"),
         ]);
         assert_eq!(settings.width, 90);
         assert!((settings.terminal_highlight_opacity - 0.4).abs() < f64::EPSILON);
-        assert!(!settings.keep_open, "only `true` counts as true");
+        assert!(
+            settings.confirm_agent_commands,
+            "a value it does not know keeps the default"
+        );
+    }
+
+    #[test]
+    fn switches_read_as_kconfig_reads_them() {
+        // Written by hand or by a tool that manages configurations.
+        for value in ["true", "True", "1", "yes", "ON"] {
+            assert!(
+                with(&[("ConfirmAgentCommands", value)]).confirm_agent_commands,
+                "{value}"
+            );
+            assert!(with(&[("AllowRemoteCommands", value)]).allow_remote_commands, "{value}");
+        }
+        for value in ["false", "False", "0", "no", "off"] {
+            assert!(
+                !with(&[("ConfirmAgentCommands", value)]).confirm_agent_commands,
+                "{value}"
+            );
+        }
     }
 
     #[test]
