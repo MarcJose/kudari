@@ -266,6 +266,13 @@ pub mod qobject {
         #[qinvokable]
         fn output_names(self: &Self) -> QString;
 
+        /// Whether the window would slide over another screen, one above screen number
+        /// `target` of `screens`, a JSON list of `[x, y, width, height]`; see
+        /// `kudari_core::services::slides_into_another_screen`.
+        #[qinvokable]
+        #[cxx_name = "slidesIntoAnotherScreen"]
+        fn slides_into_another_screen(self: &Self, screens: &QString, target: i32, left: i32, right: i32) -> bool;
+
         /// Translated UI text from the catalogue in `po/`.
         #[qinvokable]
         fn translate(self: &Self, context: &QString, text: &QString) -> QString;
@@ -1023,6 +1030,15 @@ impl qobject::Controller {
             .and_then(|backend| backend.working_directory())
             .map_or_default(|directory| directory.to_string_lossy().into_owned());
         frontend().popup_drop_menu(x, y, terminal, &paths.to_string(), &directory);
+    }
+
+    fn slides_into_another_screen(&self, screens: &QString, target: i32, left: i32, right: i32) -> bool {
+        let screens: Vec<kudari_core::services::ScreenRect> =
+            serde_json::from_str(&screens.to_string()).unwrap_or_default();
+        usize::try_from(target)
+            .ok()
+            .and_then(|index| screens.get(index))
+            .is_some_and(|&screen| kudari_core::services::slides_into_another_screen(screen, left, right, &screens))
     }
 
     fn output_names(&self) -> QString {

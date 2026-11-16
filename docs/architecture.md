@@ -135,7 +135,11 @@ Each step leaves the KDE version as it was, with all its tests passing.
    shell integration of Kudari, an agent cannot type.
 8. **Packages.** The program, `kudari.exe` in the packages and `kudari-windows.exe` as cargo
    builds it beside the `kudari` of KDE, is a program without a console, so that none opens with
-   the window. `mcp`, `--version` and `--help` write to the console they came from.
+   the window. `mcp`, `--version` and `--help` write to the console they came from. Shells do
+   not wait for such a program, so beside it lies `kudari.com` from `crates/console`, a
+   program of the console without Qt. Shells find it before `kudari.exe`, and it runs these
+   commands with `kudari.exe` and waits for them, or starts the window on its own. The alias
+   of the package starts it under the name `kudari-console.exe`.
    `tools/windows-package.ps1` gathers it with Qt (`windeployqt`), the runtime of Visual
    C++ and the licenses, signs it, and makes a ZIP archive and an MSIX package with the
    alias `kudari`. The certificate is self-signed for now: the CI signs with a throwaway

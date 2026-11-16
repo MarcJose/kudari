@@ -98,6 +98,16 @@ ApplicationWindow {
             root.visible = true;
             root.requestActivate();
         }
+        // Sliding in from above, the window would pass over a screen above its own, where a
+        // scale of its own could even change the size of the terminals on the way.
+        const screens = Qt.application.screens;
+        const left = targetScreen.virtualX + windowX;
+        if (app.slidesIntoAnotherScreen(JSON.stringify(screens.map(screen => [screen.virtualX, screen.virtualY, screen.width, screen.height])),
+                                        screens.indexOf(targetScreen), left, left + windowWidth)) {
+            root.shown = visible ? 1 : 0;
+            root.visible = visible;
+            return;
+        }
         slide.to = visible ? 1 : 0;
         slide.start();
     }
@@ -407,20 +417,62 @@ ApplicationWindow {
         id: question
 
         property int questionId: -1
+        property string confirm: "continue"
+        // Questions that came while one was open: each gets its own answer, one after the other.
+        property var waiting: []
 
         function ask(id, title, text, confirm) {
+            if (visible) {
+                waiting.push({id: id, title: title, text: text, confirm: confirm});
+                return;
+            }
             questionId = id;
             question.title = title;
             body.text = text;
+            question.confirm = confirm;
             open();
+            confirmButton.forceActiveFocus();
         }
 
         anchors.centerIn: parent
         modal: true
         focus: true
-        standardButtons: Dialog.Yes | Dialog.Cancel
+        // The width of the title from its text: that of the header of the style, which elides
+        // it, follows the width of the dialog, which follows it, in a loop.
+        implicitWidth: Math.max(contentWidth + leftPadding + rightPadding, implicitFooterWidth,
+                                questionTitle.advanceWidth + leftPadding + rightPadding)
         onAccepted: app.answerQuestion(questionId, true)
         onRejected: app.answerQuestion(questionId, false)
+        onClosed: {
+            const next = waiting.shift();
+            if (next) {
+                ask(next.id, next.title, next.text, next.confirm);
+            }
+        }
+
+        // As the buttons of KDE: what the question is about, and Cancel.
+        footer: DialogButtonBox {
+            Button {
+                id: confirmButton
+
+                text: question.confirm === "quit" ? app.translate("@action:button", "Quit")
+                    : question.confirm === "close" ? app.translate("@action:button", "Close")
+                    : app.translate("@action:button", "Continue")
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+            }
+
+            Button {
+                text: app.translate("@action:button", "Cancel")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
+        }
+
+        TextMetrics {
+            id: questionTitle
+
+            text: question.title
+            font: question.header ? question.header.font : question.font
+        }
 
         Label {
             id: body
@@ -456,6 +508,8 @@ ApplicationWindow {
         anchors.centerIn: parent
         modal: true
         closePolicy: Popup.CloseOnEscape
+        implicitWidth: Math.max(contentWidth + leftPadding + rightPadding, implicitFooterWidth,
+                                agentTitle.advanceWidth + leftPadding + rightPadding)
         onRejected: {
             if (agent.length > 0) {
                 app.answerAgent(agent, false);
@@ -483,6 +537,13 @@ ApplicationWindow {
             }
         }
 
+        TextMetrics {
+            id: agentTitle
+
+            text: agentQuestion.title
+            font: agentQuestion.header ? agentQuestion.header.font : agentQuestion.font
+        }
+
         Label {
             id: agentBody
 
@@ -500,7 +561,13 @@ ApplicationWindow {
         modal: true
         focus: true
         title: "Kudari " + Qt.application.version
-        standardButtons: Dialog.Close
+
+        footer: DialogButtonBox {
+            Button {
+                text: app.translate("@action:button", "Close")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
+        }
 
         ColumnLayout {
             width: Math.min(520, root.width * 0.6)
@@ -521,8 +588,10 @@ ApplicationWindow {
 
             Label {
                 Layout.fillWidth: true
-                text: "Eike Hein and the Yakuake developers: " + app.translate("@info:credit", "Yakuake, the drop-down terminal Kudari grew out of")
-                    + "\nThe Konsole developers: " + app.translate("@info:credit", "Ideas for many terminal options")
+                text: app.translate("@info:credit", "Eike Hein and the Yakuake developers") + ": "
+                    + app.translate("@info:credit", "Yakuake, the drop-down terminal Kudari grew out of") + "\n"
+                    + app.translate("@info:credit", "The Konsole developers") + ": "
+                    + app.translate("@info:credit", "Ideas for many terminal options")
                 wrapMode: Text.Wrap
                 color: palette.placeholderText
             }
@@ -559,7 +628,6 @@ ApplicationWindow {
         focus: true
         closePolicy: Popup.NoAutoClose
         title: app.translate("@title", "Welcome to Kudari")
-        standardButtons: Dialog.Ok | Dialog.Cancel
         onAboutToShow: sequence = app.toggleShortcut()
         onAccepted: app.finishFirstRun(false, sequence)
         onRejected: app.finishFirstRun(false, "")
@@ -593,6 +661,18 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 text: app.translate("@info", "The menu lets you change it later as well.")
                 wrapMode: Text.Wrap
+            }
+        }
+
+        footer: DialogButtonBox {
+            Button {
+                text: app.translate("@action:button", "OK")
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+            }
+
+            Button {
+                text: app.translate("@action:button", "Cancel")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
             }
         }
     }

@@ -9,21 +9,22 @@ FormRow {
     id: root
 
     property string text
-    property bool checked
+    // The page binds this to its setting. Switching sets it from C++, which keeps that binding,
+    // so that the switch follows the setting when it changes elsewhere, as under KDE.
+    property alias checked: control.checked
     signal toggled
 
     caption: text
 
-    // Any change that does not come from the page counts: screen readers and UI Automation
-    // switch it without the signal toggled.
     Switch {
-        checked: root.checked
+        id: control
+
         Accessible.name: root.text
-        onCheckedChanged: {
-            if (checked !== root.checked) {
-                root.checked = checked;
-                root.toggled();
-            }
+        onToggled: root.toggled()
+        // Screen readers and UI Automation switch it without the signal toggled.
+        Accessible.onToggleAction: {
+            toggle();
+            root.toggled();
         }
     }
 }

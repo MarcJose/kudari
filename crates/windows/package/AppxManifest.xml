@@ -5,7 +5,9 @@ SPDX-License-Identifier: MIT
 
 The manifest of the MSIX package; tools/windows-package.ps1 fills in the version and the
 publisher, which must be the subject of the certificate that signs the package. The alias
-makes `kudari mcp` work on Windows as on Linux.
+makes `kudari mcp` work on Windows as on Linux. It starts kudari-console.exe, which is
+kudari.com of the archive: a program of the console, which shells wait for, and which runs
+kudari.exe.
 -->
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
@@ -38,7 +40,7 @@ makes `kudari mcp` work on Windows as on Linux.
         BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png" />
       <Extensions>
-        <uap5:Extension Category="windows.appExecutionAlias" Executable="kudari.exe"
+        <uap5:Extension Category="windows.appExecutionAlias" Executable="kudari-console.exe"
           EntryPoint="Windows.FullTrustApplication">
           <uap5:AppExecutionAlias>
             <uap5:ExecutionAlias Alias="kudari.exe" />

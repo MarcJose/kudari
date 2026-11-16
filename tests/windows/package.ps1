@@ -37,6 +37,24 @@ Test-Check 'the program in the archive is signed' ($signature.SignerCertificate.
 Test-Check 'the archive holds the licenses' (Test-Path (Join-Path $program.DirectoryName 'licenses\Qt-LGPL-3.0-only.txt'))
 Test-Check 'the archive holds the runtime of Visual C++' (Test-Path (Join-Path $program.DirectoryName 'vcruntime140.dll'))
 
+# kudari in a shell finds kudari.com, a program of the console, which the shell waits for
+# and which hands on the exit code; kudari.exe has no console, and a shell went on at once.
+$console = Join-Path $program.DirectoryName 'kudari.com'
+$found = & {
+    $env:PATH = "$($program.DirectoryName);$env:PATH"
+    (Get-Command kudari -CommandType Application | Select-Object -First 1).Source
+}
+Test-Check 'kudari in a shell finds kudari.com' ($found -eq $console)
+$bytes = [IO.File]::ReadAllBytes($console)
+$header = [BitConverter]::ToInt32($bytes, 0x3C)
+Test-Check 'kudari.com is a program of the console' ([BitConverter]::ToUInt16($bytes, $header + 0x5C) -eq 3)
+Test-Check 'kudari.com is signed' ((Get-AuthenticodeSignature $console).SignerCertificate.Thumbprint -eq $certificate.Thumbprint)
+# What kudari.exe answers comes through, in order, with its exit code.
+$lines = @(cmd /c "`"$console`" --version & echo after")
+Test-Check 'kudari.com hands on the answer of kudari.exe' ($lines.Count -eq 2 -and $lines[0] -match '^kudari \d+\.\d+\.\d+' -and $lines[1].Trim() -eq 'after')
+& $console --version | Out-Null
+Test-Check 'kudari.com hands on the exit code' ($LASTEXITCODE -eq 0)
+
 # Windows installs a package only from a publisher it trusts.
 $store = New-Object System.Security.Cryptography.X509Certificates.X509Store ('TrustedPeople', 'LocalMachine')
 $store.Open('ReadWrite')

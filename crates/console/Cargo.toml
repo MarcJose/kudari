@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de>
+# SPDX-License-Identifier: MIT
+
+[package]
+name = "kudari-console"
+description = "kudari.com: the commands of Kudari for Windows in a console that waits for them"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "kudari-console"
+path = "src/main.rs"
+
+[lints]
+workspace = true

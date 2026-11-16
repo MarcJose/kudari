@@ -191,6 +191,32 @@ try {
         Get-Content $ini | ForEach-Object { Write-Host "      ini: $_" }
     }
 
+    # A switch that was switched still follows its setting when that changes elsewhere, here
+    # by the pin button of the bar, which UI Automation switches as a screen reader does.
+    [void] (Invoke-Element 'Behavior')
+    $keep = 'Keep the window open when another window gets the focus'
+    function Get-SwitchState([string] $name) {
+        foreach ($element in Find-All $name) {
+            $pattern = $null
+            if ($element.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref] $pattern)) {
+                return [string] $pattern.Current.ToggleState
+            }
+        }
+    }
+    function Get-KeepOpen { if ((Get-Setting 'KeepOpen') -eq 'false') { 'false' } else { 'true' } }
+    $before = Get-KeepOpen
+    [void] (Invoke-Element $keep)
+    $switched = Wait-For { if ((Get-KeepOpen) -ne $before) { $true } }
+    [void] (Invoke-Element 'Keep open when the focus moves elsewhere')
+    $pinned = Wait-For { if ((Get-KeepOpen) -eq $before) { $true } }
+    Test-Check 'the pin button switches as a screen reader does it' ($switched -and $pinned)
+    $expected = if ($before -eq 'true') { 'On' } else { 'Off' }
+    $follows = Wait-For { if ((Get-SwitchState $keep) -eq $expected) { $true } } 3
+    Test-Check 'a switch follows its setting after it was switched' ($pinned -and $follows)
+    if (-not ($switched -and $pinned -and $follows)) {
+        Write-Host "      before: $before, now: $(Get-KeepOpen), switch: $(Get-SwitchState $keep)"
+    }
+
     if ($settings) {
         $settings.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
     }
@@ -223,6 +249,28 @@ try {
     Test-Check 'the buttons of the search bar have names' ($missing.Count -eq 0)
     if ($missing) { Write-Host "      missing: $($missing -join ', ')" }
 
+    # Two questions at once: each gets its own answer, the second after the first. The button
+    # that answers yes says what it does, as under KDE. The quit button of the bar is held on
+    # to, since the button of the question has its name.
+    [void] (Invoke-Element 'New Session')
+    $button = [System.Windows.Automation.ControlType]::Button
+    function Get-QuitButtons { @(Find-All 'Quit' | Where-Object { $_.Current.ControlType -eq $button }) }
+    $quitButton = Get-QuitButtons | Select-Object -First 1
+    function Press($element) { $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
+    Press $quitButton
+    $asked = Wait-For { if (@(Get-QuitButtons).Count -eq 2) { $true } }
+    Press $quitButton
+    Start-Sleep -Milliseconds 500
+    [void] (Invoke-Element 'Cancel')
+    Start-Sleep -Seconds 1
+    $waited = @(Get-QuitButtons).Count -eq 2
+    [void] (Invoke-Element 'Cancel')
+    $answered = Wait-For { if (@(Get-QuitButtons).Count -eq 1) { $true } }
+    Test-Check 'the question about quitting has a Quit button' ([bool] $asked)
+    Test-Check 'a second question waits for the answer to the first' ($waited -and $answered)
+    [void] (Invoke-Element 'Close Session')
+    [void] (Wait-For { if ((Get-TabCount) -eq $tabs) { $true } })
+
     [void] (Invoke-Element 'Quit')
     Test-Check 'the quit button ends Kudari' ($process.WaitForExit(10000))
 
@@ -238,6 +286,28 @@ try {
     [void] (Wait-For { Get-Windows | Where-Object { -not $_.Current.BoundingRectangle.IsEmpty } | Select-Object -First 1 } 15)
     Test-Check 'Windows takes Ctrl+Alt+^ as the shortcut' (-not (Select-String -Quiet 'refused the shortcut' $characterLog))
     [void] (Invoke-Element 'Quit')
+    [void] $process.WaitForExit(10000)
+
+    # In German, the credits and the buttons of the dialogs are German as well. The script
+    # stays ASCII for Windows PowerShell, so the umlauts come as their codes.
+    $env:LANGUAGE = 'de'
+    $germanLog = Join-Path $work 'german.txt'
+    $process = Start-Process $Program -PassThru -RedirectStandardError $germanLog -WorkingDirectory $work
+    Remove-Item Env:LANGUAGE
+    $ByProcess = New-Object System.Windows.Automation.PropertyCondition ($Automation::ProcessIdProperty, $process.Id)
+    [void] (Wait-For { Get-Windows | Where-Object { -not $_.Current.BoundingRectangle.IsEmpty } | Select-Object -First 1 } 15)
+    [void] (Invoke-Element "Men$([char]0xFC) $([char]0xF6)ffnen")
+    [void] (Invoke-Element "$([char]0xDC)ber Kudari")
+    $credits = Wait-For {
+        foreach ($element in Find-ByType ([System.Windows.Automation.ControlType]::Text)) {
+            if ($element.Current.Name -like '*Das Konsole-Team: *') { return $true }
+        }
+    }
+    $close = "Schlie$([char]0xDF)en"
+    Test-Check 'the credits are German in German' ([bool] $credits)
+    Test-Check 'the buttons of the dialogs are German in German' ($null -ne (Find-Element $close 3))
+    [void] (Invoke-Element $close)
+    [void] (Invoke-Element 'Beenden')
     [void] $process.WaitForExit(10000)
 } catch {
     Test-Check "the test runs through: $($_.Exception.Message)" $false

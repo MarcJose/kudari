@@ -1459,3 +1459,31 @@ msgstr "Strg+Alt"
 msgctxt "@item:inlistbox keyboard modifier"
 msgid "Shift+Alt"
 msgstr "Umschalt+Alt"
+
+msgctxt "@action:button"
+msgid "Quit"
+msgstr "Beenden"
+
+msgctxt "@action:button"
+msgid "Close"
+msgstr "Schließen"
+
+msgctxt "@action:button"
+msgid "Continue"
+msgstr "Fortfahren"
+
+msgctxt "@action:button"
+msgid "Cancel"
+msgstr "Abbrechen"
+
+msgctxt "@action:button"
+msgid "OK"
+msgstr "OK"
+
+msgctxt "@info:credit"
+msgid "Eike Hein and the Yakuake developers"
+msgstr "Eike Hein und das Yakuake-Team"
+
+msgctxt "@info:credit"
+msgid "The Konsole developers"
+msgstr "Das Konsole-Team"

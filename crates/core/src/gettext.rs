@@ -186,7 +186,26 @@ fn translate(context: &str, text: &str, argument: &str) -> String {
         .get()
         .and_then(|catalog| catalog.get(context, text))
         .unwrap_or(text);
-    markup(&found.replace("%1", argument))
+    fill(found, argument)
+}
+
+/// `template` with its markup as rich text and `argument` for `%1`. The argument is text,
+/// such as the name of a session, not markup: escaped where the template is rich text, as
+/// `KI18n` does, and as it is in plain text, which shows no entities.
+fn fill(template: &str, argument: &str) -> String {
+    let rich = template.contains('<');
+    let template = markup(template);
+    if !template.contains("%1") {
+        return template;
+    }
+    let argument = if rich { escape(argument) } else { argument.to_string() };
+    template.replace("%1", &argument)
+}
+
+/// `text` for rich text, in which `&`, `<` and `>` would be markup.
+#[must_use]
+pub fn escape(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
 /// KDE's semantic markup as rich text: `<emphasis>` in italics, or bold when strong,
@@ -335,6 +354,24 @@ msgstr "Zitat „%1“"
         assert_eq!(markup("Press <shortcut>Ctrl+C</shortcut>"), "Press Ctrl+C");
         assert_eq!(markup("<p>keep</p><br/>"), "<p>keep</p><br/>");
         assert_eq!(markup("a < b"), "a < b");
+    }
+
+    #[test]
+    fn arguments_are_text_not_markup() {
+        // A plain text, as a notification: the name stays as it is.
+        assert_eq!(
+            fill("Bell in session \u{201c}%1\u{201d}.", "<prod> db"),
+            "Bell in session \u{201c}<prod> db\u{201d}."
+        );
+        // Rich text: the name is escaped, the markup of the template is not.
+        assert_eq!(
+            fill("<warning>%1</warning> ends", "a<p>&b"),
+            "<b>a&lt;p&gt;&amp;b</b> ends"
+        );
+        assert_eq!(
+            fill("no argument <emphasis>here</emphasis>", "x"),
+            "no argument <i>here</i></b>"
+        );
     }
 
     #[test]
