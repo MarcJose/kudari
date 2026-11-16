@@ -123,20 +123,44 @@ pub struct SshTarget {
     command: String,
 }
 
+/// A host and its port, as `box:2222` or `[::1]:2222` in an address of ssh.
+fn split_port(host: &str) -> (&str, Option<&str>) {
+    let is_port = |port: &&str| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit());
+    if let Some(rest) = host.strip_prefix('[')
+        && let Some((address, after)) = rest.split_once(']')
+    {
+        return (address, after.strip_prefix(':').filter(is_port));
+    }
+    match host.rsplit_once(':') {
+        Some((name, port)) if is_port(&port) => (name, Some(port)),
+        _ => (host, None),
+    }
+}
+
 /// Reads the arguments of `ssh`, with the option letters of its manual.
 fn parse_ssh(arguments: &[String]) -> Option<SshTarget> {
-    const WITH_VALUE: &str = "bcDeEFIiJLlmOopQRSWw";
+    const WITH_VALUE: &str = "BbcDeEFIiJLlmOoPpQRSWw";
     let mut target = SshTarget::default();
     let mut words = arguments.iter();
     while let Some(word) = words.next() {
         let Some(options) = word.strip_prefix('-').filter(|options| !options.is_empty()) else {
-            let (user, host) = word
-                .rsplit_once('@')
-                .map_or(("", word.as_str()), |(user, host)| (user, host));
+            // `ssh://user@host:port`, where the port can follow the host; elsewhere a colon
+            // belongs to an address of IPv6, as in `ada@fe80::1`.
+            let uri = word.strip_prefix("ssh://");
+            let word = uri.map_or(word.as_str(), |rest| rest.split('/').next().unwrap_or_default());
+            let (user, host) = word.rsplit_once('@').map_or(("", word), |(user, host)| (user, host));
             if !user.is_empty() {
                 target.user = user.to_string();
             }
+            let (host, port) = match uri.map(|_| split_port(host)) {
+                Some((host, port)) => (host, port),
+                None => (host, None),
+            };
             target.host = host.to_string();
+            // The port of -p comes before the one of the address.
+            if let Some(port) = port.filter(|_| target.port.is_empty()) {
+                target.port = port.to_string();
+            }
             target.command = words.map(String::as_str).collect::<Vec<_>>().join(" ");
             return Some(target);
         };
@@ -263,6 +287,21 @@ mod tests {
         assert_eq!(parse("-l root -i key 10.0.0.1").unwrap().user, "root");
         assert_eq!(parse("-oBatchMode=yes host").unwrap().host, "host");
         assert_eq!(parse("-v"), None);
+        // -B and -P take a value.
+        let bound = parse("-B eth0 server").unwrap();
+        assert_eq!((bound.host.as_str(), bound.command.as_str()), ("server", ""));
+        assert_eq!(parse("-P work box").unwrap().host, "box");
+        // An address of ssh, with its port, and -p before it.
+        let uri = parse("ssh://ada@box:2222/").unwrap();
+        assert_eq!(
+            (uri.user.as_str(), uri.host.as_str(), uri.port.as_str()),
+            ("ada", "box", "2222")
+        );
+        let ipv6 = parse("ssh://[::1]:2200").unwrap();
+        assert_eq!((ipv6.host.as_str(), ipv6.port.as_str()), ("::1", "2200"));
+        assert_eq!(parse("-p 22 ssh://box:2222").unwrap().port, "22");
+        // Without ssh://, a colon is part of the host.
+        assert_eq!(parse("ada@fe80::1").unwrap().host, "fe80::1");
     }
 
     #[test]
