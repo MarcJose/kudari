@@ -148,24 +148,56 @@ pub fn link_at<T>(term: &Term<T>, point: Point, files: bool, context: &Context) 
             cells: end - start + 1,
         });
     }
-    let line: String = (0..columns).map(|column| grid[point.line][Column(column)].c).collect();
-    let (start, end, text) = word_span(&line, point.column.0)?;
-    let (target, column, cells) = url_in(&text)
+    // An address can wrap onto the next lines, as the long ones for logging in often do.
+    let (first, line) = wrapped_text(term, point.line);
+    let row = (point.line.0 - first.0) as usize * columns;
+    let (start, _, text) = word_span(&line, row + point.column.0)?;
+    let (target, begin, cells) = url_in(&text)
         .map(|url| {
-            let offset = text.find(url.as_str()).unwrap_or(0);
+            let offset = text
+                .find(url.as_str())
+                .map_or(0, |offset| text[..offset].chars().count());
             let cells = url.chars().count();
             (url, start + offset, cells)
         })
         .or_else(|| {
             let directory = (context.directory)().filter(|_| files)?;
-            let path = existing_file(&text, &directory)?;
-            Some((path, start, end - start))
+            let (path, offset, cells) = file_in(&text, &directory)?;
+            Some((path, start + offset, cells))
         })?;
-    Some(Link {
+    // The front end underlines the part on the line of the point.
+    let from = begin.max(row);
+    let to = (begin + cells).min(row + columns);
+    (from < to).then(|| Link {
         target,
-        start: Point::new(point.line, Column(column)),
-        cells,
+        start: Point::new(point.line, Column(from - row)),
+        cells: to - from,
     })
+}
+
+/// The most cells that the lines of one wrapped line can have for links, so that a long
+/// block of wrapped output costs little.
+const WRAPPED_CELLS: usize = 8192;
+
+/// The lines around `line` that wrap into one another, as the first of them and their
+/// text, one character for each cell.
+fn wrapped_text<T>(term: &Term<T>, line: Line) -> (Line, String) {
+    let grid = term.grid();
+    let columns = term.columns();
+    let reach = i32::try_from(WRAPPED_CELLS / columns.max(1)).unwrap_or(1).max(1);
+    let wraps = |line: Line| grid[line][Column(columns - 1)].flags.contains(Flags::WRAPLINE);
+    let mut first = line;
+    while first > grid.topmost_line() && line.0 - first.0 < reach && wraps(Line(first.0 - 1)) {
+        first = Line(first.0 - 1);
+    }
+    let mut last = line;
+    while last < grid.bottommost_line() && last.0 - line.0 < reach && wraps(last) {
+        last = Line(last.0 + 1);
+    }
+    let text = (first.0..=last.0)
+        .flat_map(|row| (0..columns).map(move |column| grid[Line(row)][Column(column)].c))
+        .collect();
+    (first, text)
 }
 
 /// Whether the selection covers a cell.
@@ -654,20 +686,33 @@ pub struct HintWord {
 #[must_use]
 pub fn hint_words<T>(term: &Term<T>) -> Vec<HintWord> {
     let offset = term.grid().display_offset() as i32;
+    let columns = term.columns().max(1);
+    let screen_lines = term.screen_lines() as i32;
     let mut words = Vec::new();
-    for screen_line in 0..term.screen_lines() as i32 {
-        let row = &term.grid()[Line(screen_line - offset)];
-        let text: String = (0..term.columns()).map(|column| row[Column(column)].c).collect();
-        let mut column = 0;
-        while let Some((start, end, word)) = next_word(&text, column) {
+    let mut screen_line = 0;
+    while screen_line < screen_lines {
+        // A word that wraps is one word, with one number where it starts.
+        let (first, text) = wrapped_text(term, Line(screen_line - offset));
+        let line_of = |index: usize| first.0 + (index / columns) as i32 + offset;
+        for (start, end, word) in words_in(&text) {
+            let (top, bottom) = (line_of(start), line_of(end - 1));
+            if bottom < 0 || top >= screen_lines {
+                continue;
+            }
+            // One that starts above the screen gets its number at the top.
+            let (line, column) = if top < 0 {
+                (0, 0)
+            } else {
+                (top, (start % columns) as i32)
+            };
             words.push(HintWord {
                 url: url_in(&word),
                 word,
-                line: screen_line,
-                column: start as i32,
+                line,
+                column,
             });
-            column = end;
         }
+        screen_line = line_of(text.chars().count().max(1) - 1) + 1;
     }
     words
 }
@@ -711,9 +756,29 @@ pub fn links_on_screen<T>(term: &Term<T>, directory: Option<&Path>) -> Vec<(Stri
     })
 }
 
-fn next_word(line: &str, from: usize) -> Option<(usize, usize, String)> {
-    let length = line.chars().count();
-    (from..length).find_map(|column| word_span(line, column))
+/// The words of `text` as `(start, end, word)`, counted in characters, in one pass.
+fn words_in(text: &str) -> Vec<(usize, usize, String)> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut start = 0;
+    let mut length = 0;
+    for (index, character) in text.chars().enumerate() {
+        length = index + 1;
+        if ends_word(character) {
+            if !word.is_empty() {
+                words.push((start, index, std::mem::take(&mut word)));
+            }
+        } else {
+            if word.is_empty() {
+                start = index;
+            }
+            word.push(character);
+        }
+    }
+    if !word.is_empty() {
+        words.push((start, length, word));
+    }
+    words
 }
 
 /// The links that get a number: the first nine, or the last nine when reversed.
@@ -736,10 +801,20 @@ pub fn pick_hint(links: &[(String, i32, i32)], index: usize, reverse: bool) -> O
     }
 }
 
+/// Whether a character ends a word that can be a link. Typographic quotes end it as the
+/// plain ones do: `„https://kde.org“`.
+fn ends_word(c: char) -> bool {
+    c.is_whitespace()
+        || matches!(
+            c,
+            '"' | '\'' | '<' | '>' | '`' | '„' | '“' | '”' | '‚' | '‘' | '’' | '«' | '»' | '‹' | '›'
+        )
+}
+
 /// The word around column `index` as `(start, end, text)`.
 fn word_span(line: &str, index: usize) -> Option<(usize, usize, String)> {
     let characters: Vec<char> = line.chars().collect();
-    let is_end = |c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`');
+    let is_end = ends_word;
     if is_end(*characters.get(index)?) {
         return None;
     }
@@ -756,13 +831,33 @@ fn word_span(line: &str, index: usize) -> Option<(usize, usize, String)> {
     Some((start, end, characters.get(start..end)?.iter().collect()))
 }
 
+/// `text` without what ends the sentence around it: any of `punctuation` at its end, and a
+/// closing bracket that opens nowhere in it. `…/Rust_(language)` keeps its own bracket, and
+/// `(…/x).` loses the one around it.
+fn trim_sentence_end<'a>(mut text: &'a str, punctuation: &[char]) -> &'a str {
+    while let Some(last) = text.chars().next_back() {
+        let open = match last {
+            ')' => Some('('),
+            ']' => Some('['),
+            '}' => Some('{'),
+            _ => None,
+        };
+        let unmatched = open.is_some_and(|open| text.matches(last).count() > text.matches(open).count());
+        if !unmatched && !punctuation.contains(&last) {
+            break;
+        }
+        text = &text[..text.len() - last.len_utf8()];
+    }
+    text
+}
+
 /// Finds a web address inside a word, without trailing punctuation.
 fn url_in(word: &str) -> Option<String> {
     let begin = ["https://", "http://"]
         .iter()
         .filter_map(|scheme| word.find(scheme))
         .min()?;
-    let url = word[begin..].trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '}']);
+    let url = trim_sentence_end(&word[begin..], &['.', ',', ';', ':', '!', '?']);
     url.split_once("://")
         .is_some_and(|(_, rest)| !rest.is_empty())
         .then(|| url.to_string())
@@ -778,10 +873,64 @@ fn url_at(line: &str, index: usize) -> Option<String> {
 /// programs through a click, so executables and desktop entries do not count.
 #[must_use]
 pub fn existing_file(word: &str, directory: &Path) -> Option<String> {
-    let word = word.trim_end_matches(['.', ',', ';', ')', ']']);
-    let name = word.split(':').next().filter(|name| !name.is_empty())?;
+    file_in(word, directory).map(|(target, _, _)| target)
+}
+
+/// The file that a word names, as `(target, first character, characters)`: the path with
+/// the place in it, and the part of the word that names them. See [`existing_file`].
+fn file_in(word: &str, directory: &Path) -> Option<(String, usize, usize)> {
+    // GCC, `rustc` and `grep -n` end the place with a colon: `main.c:10:5:`.
+    let punctuation = ['.', ',', ';', ':'];
+    let whole = trim_sentence_end(word, &punctuation);
+    if let Some(target) = file_named(whole, directory) {
+        return Some((target, 0, whole.chars().count()));
+    }
+    // Node.js puts it in brackets: `at f (/app/index.js:10:5)`. A name can start with a
+    // bracket of its own, so this comes second.
+    let inner = word.trim_start_matches(['(', '[', '{']);
+    let skipped = word.len() - inner.len();
+    let inner = trim_sentence_end(inner, &punctuation);
+    (skipped > 0)
+        .then(|| file_named(inner, directory))
+        .flatten()
+        .map(|target| (target, skipped, inner.chars().count()))
+}
+
+/// The file of `name:line:column`, or of `name(line,column)` as `tsc` and MSVC write it.
+fn file_named(word: &str, directory: &Path) -> Option<String> {
+    let name = name_of(word, cfg!(not(unix)))?;
+    if let Some(target) = file_at(name, &word[name.len()..], directory) {
+        return Some(target);
+    }
+    let (stem, place) = name.strip_suffix(')')?.rsplit_once('(')?;
+    let numbers: Vec<&str> = place.split(',').collect();
+    let valid = word.len() == name.len()
+        && numbers.len() <= 2
+        && numbers
+            .iter()
+            .all(|number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()));
+    valid
+        .then(|| file_at(stem, &format!(":{}", numbers.join(":")), directory))
+        .flatten()
+}
+
+/// The name in `name:line:column`. With `drives`, a drive such as `C:\` or `C:/` is part of
+/// it; `C:name`, which is relative to the current folder of the drive, is not.
+fn name_of(word: &str, drives: bool) -> Option<&str> {
+    let bytes = word.as_bytes();
+    let drive = drives
+        && bytes.first().is_some_and(u8::is_ascii_alphabetic)
+        && bytes.get(1) == Some(&b':')
+        && matches!(bytes.get(2), Some(b'\\' | b'/'));
+    let skip = if drive { 3 } else { 0 };
+    let end = word[skip..].find(':').map_or(word.len(), |index| index + skip);
+    Some(&word[..end]).filter(|name| !name.is_empty())
+}
+
+/// The file `name` in `directory`, with `position` after it if that is `:line[:column]`.
+fn file_at(name: &str, position: &str, directory: &Path) -> Option<String> {
     // Even looking at a file on a share would make Windows log in to its server.
-    if crate::links::is_remote(name) {
+    if name.is_empty() || crate::links::is_remote(name) {
         return None;
     }
     let path = match name.strip_prefix("~/") {
@@ -791,7 +940,6 @@ pub fn existing_file(word: &str, directory: &Path) -> Option<String> {
     let metadata = std::fs::metadata(&path).ok()?;
     let plain = metadata.is_file() && is_inert(&path, &metadata);
     let desktop_entry = path.extension().is_some_and(|extension| extension == "desktop");
-    let position = &word[name.len()..];
     let is_position = position
         .split(':')
         .skip(1)
@@ -1038,6 +1186,73 @@ mod tests {
     }
 
     #[test]
+    fn places_from_compilers_and_stack_traces_are_kept() {
+        let directory = std::env::temp_dir().join(format!("kudari-places-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("notes.txt"), "x").unwrap();
+        std::fs::write(directory.join("(old).txt"), "x").unwrap();
+        let notes = directory.join("notes.txt").to_string_lossy().into_owned();
+        let found = |word: &str| existing_file(word, &directory);
+        // GCC, Clang, `rustc` and `grep -n` end the place with a colon.
+        assert_eq!(found("notes.txt:12:3:"), Some(format!("{notes}:12:3")));
+        assert_eq!(found("notes.txt:12:"), Some(format!("{notes}:12")));
+        // Node.js puts it in brackets, with a relative or an absolute path.
+        assert_eq!(found("(notes.txt:12:3)"), Some(format!("{notes}:12:3")));
+        assert_eq!(found(&format!("({notes}:12:3),")), Some(format!("{notes}:12:3")));
+        // `tsc` and MSVC write the place in brackets after the name.
+        assert_eq!(found("notes.txt(12,3):"), Some(format!("{notes}:12:3")));
+        assert_eq!(found("notes.txt(12)"), Some(format!("{notes}:12")));
+        assert_eq!(found("notes.txt(x)"), None);
+        // A name with a bracket of its own stays whole.
+        let old = directory.join("(old).txt").to_string_lossy().into_owned();
+        assert_eq!(found("(old).txt:4"), Some(format!("{old}:4")));
+        // The underline leaves out the brackets and the colon.
+        let options = Options::default();
+        let here = || Some(directory.clone());
+        let context = context(&options, false, &here);
+        let link = link_at(
+            &term_of(40, "at f (notes.txt:12:3)"),
+            Point::new(Line(0), Column(9)),
+            true,
+            &context,
+        )
+        .unwrap();
+        assert_eq!((link.start.column.0, link.cells), (6, 14));
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn a_drive_belongs_to_the_name_on_windows() {
+        assert_eq!(name_of("C:\\work\\notes.txt:12:3", true), Some("C:\\work\\notes.txt"));
+        assert_eq!(name_of("C:/work/main.rs:10:5", true), Some("C:/work/main.rs"));
+        assert_eq!(name_of("C:\\work\\notes.txt", true), Some("C:\\work\\notes.txt"));
+        assert_eq!(name_of("C:notes.txt", true), Some("C"));
+        assert_eq!(name_of("notes.txt:12", true), Some("notes.txt"));
+        // Unix allows a colon in a name, and has no drives.
+        assert_eq!(name_of("C:\\work\\notes.txt:12", false), Some("C"));
+        assert_eq!(name_of(":12", true), None);
+    }
+
+    /// Compilers and tools on Windows mostly write absolute paths.
+    #[test]
+    #[cfg(windows)]
+    fn absolute_windows_paths_are_files() {
+        let directory = std::env::temp_dir().join(format!("kudari-drive-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("notes.txt"), "x").unwrap();
+        let notes = directory.join("notes.txt").to_string_lossy().into_owned();
+        let elsewhere = std::env::temp_dir();
+        assert_eq!(existing_file(&notes, &elsewhere), Some(notes.clone()));
+        assert_eq!(
+            existing_file(&format!("{notes}:12:3"), &elsewhere),
+            Some(format!("{notes}:12:3"))
+        );
+        let forward = notes.replace('\\', "/");
+        assert!(existing_file(&format!("{forward}:12"), &elsewhere).is_some_and(|found| found.ends_with(":12")));
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
     fn search_patterns_compile() {
         assert!(RegexSearch::new(&search_pattern("(x) [y]+ {z}", false, false)).is_ok());
     }
@@ -1059,6 +1274,10 @@ mod tests {
         );
         assert_eq!(existing_file("notes.txt:", &directory), Some(expected.clone()));
         assert_eq!(existing_file("notes.txt,", &directory), Some(expected));
+        // A name that ends with its own bracket keeps it.
+        std::fs::write(directory.join("draft(1)"), "x").unwrap();
+        let draft = directory.join("draft(1)").to_string_lossy().into_owned();
+        assert_eq!(existing_file("draft(1).", &directory), Some(draft));
         assert_eq!(existing_file("run.sh", &directory), None);
         assert_eq!(existing_file("evil.desktop", &directory), None);
         assert_eq!(existing_file("missing", &directory), None);
@@ -1071,6 +1290,91 @@ mod tests {
         assert_eq!(url_at(line, 10).unwrap(), "https://example.org/a?b=1");
         assert_eq!(url_at(line, 37).unwrap(), "http://x.y");
         assert_eq!(url_at(line, 1), None);
+    }
+
+    #[test]
+    fn addresses_keep_their_own_brackets_and_lose_the_quotes_around_them() {
+        let wiki = "https://en.wikipedia.org/wiki/Rust_(programming_language)";
+        assert_eq!(url_at(wiki, 10).as_deref(), Some(wiki));
+        assert_eq!(url_at("(https://a.b/x_(y))", 3).as_deref(), Some("https://a.b/x_(y)"));
+        assert_eq!(
+            url_at("see (https://a.b/x_(y)).", 8).as_deref(),
+            Some("https://a.b/x_(y)")
+        );
+        assert_eq!(url_at("(http://x.y).", 3).as_deref(), Some("http://x.y"));
+        assert_eq!(
+            url_at("Siehe „https://kde.org“.", 10).as_deref(),
+            Some("https://kde.org")
+        );
+        assert_eq!(url_at("»https://kde.org«", 3).as_deref(), Some("https://kde.org"));
+        assert_eq!(url_at("“https://kde.org”", 3).as_deref(), Some("https://kde.org"));
+    }
+
+    #[test]
+    fn the_underline_of_an_address_covers_the_address_alone() {
+        let options = Options::default();
+        let context = context(&options, false, &nowhere);
+        let at = |output: &str, column: usize| {
+            link_at(
+                &term_of(40, output),
+                Point::new(Line(0), Column(column)),
+                false,
+                &context,
+            )
+            .map(|link| (link.target, link.start.column.0, link.cells))
+        };
+        assert_eq!(
+            at("Siehe „https://kde.org“.", 10),
+            Some(("https://kde.org".into(), 7, 15))
+        );
+        // A letter of two bytes in front of the address, in the same word.
+        assert_eq!(at("ä=https://kde.org", 5), Some(("https://kde.org".into(), 2, 15)));
+    }
+
+    /// A device login of `gh` or `gcloud`, which wraps over three lines of 20 columns.
+    const DEVICE_LOGIN: &str = "https://example.org/login/device?code=ABCD-1234";
+
+    #[test]
+    fn addresses_that_wrap_open_whole() {
+        let term = term_of(20, &format!("go {DEVICE_LOGIN} now"));
+        let options = Options::default();
+        let context = context(&options, false, &nowhere);
+        let at = |line: i32, column: usize| {
+            link_at(&term, Point::new(Line(line), Column(column)), false, &context)
+                .map(|link| (link.target, link.start.line.0, link.start.column.0, link.cells))
+        };
+        // Each line underlines its own part of the address.
+        assert_eq!(at(0, 5), Some((DEVICE_LOGIN.into(), 0, 3, 17)));
+        assert_eq!(at(1, 2), Some((DEVICE_LOGIN.into(), 1, 0, 20)));
+        assert_eq!(at(2, 3), Some((DEVICE_LOGIN.into(), 2, 0, 10)));
+        assert_eq!(at(2, 12), None, "the word after it");
+        // The address has one number, where it starts.
+        assert_eq!(links_on_screen(&term, None), [(DEVICE_LOGIN.to_string(), 0, 3)]);
+    }
+
+    #[test]
+    fn an_address_that_starts_above_the_screen_has_its_number_at_the_top() {
+        // Three lines of the address, then four more: the first two scroll out of view.
+        let term = term_of(20, &format!("go {DEVICE_LOGIN}\r\na\r\nb\r\nc\r\nd"));
+        assert_eq!(links_on_screen(&term, None), [(DEVICE_LOGIN.to_string(), 0, 0)]);
+        let options = Options::default();
+        let context = context(&options, false, &nowhere);
+        let link = link_at(&term, Point::new(Line(0), Column(4)), false, &context).unwrap();
+        assert_eq!(link.target, DEVICE_LOGIN);
+    }
+
+    #[test]
+    fn words_are_found_in_one_pass() {
+        assert_eq!(
+            words_in("  a bc „d“"),
+            [
+                (2, 3, "a".to_string()),
+                (4, 6, "bc".to_string()),
+                (8, 9, "d".to_string())
+            ]
+        );
+        assert_eq!(words_in("x"), [(0, 1, "x".to_string())]);
+        assert!(words_in("   ").is_empty());
     }
 
     #[test]

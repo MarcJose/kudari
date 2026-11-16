@@ -22,7 +22,7 @@ pub enum Open {
 #[must_use]
 pub fn resolve(link: &str, editor: &str) -> Open {
     let (path, line, column) = file_position(link);
-    if path.starts_with('/')
+    if is_full_path(path)
         && let Some(mut words) = split_command(editor)
     {
         let replace = |word: &str| {
@@ -175,11 +175,24 @@ pub fn open(link: &str, editor: &str, schemes: &[String], desktop: &dyn Desktop)
     }
 }
 
-/// Splits `/path:12:3` into its parts, unless the whole text is an existing path.
+/// Whether a link names a file by its whole path: `/src/main.rs`, and on Windows
+/// `C:\src\main.rs` as well, which `Path::is_absolute` takes there where it does not take a
+/// path without a drive. An address is none.
+fn is_full_path(link: &str) -> bool {
+    link.starts_with('/') || Path::new(link).is_absolute()
+}
+
+/// Splits `/path:12:3` into its parts, unless the whole text is an existing path. Only a
+/// full path has them; see [`is_full_path`].
 fn file_position(link: &str) -> (&str, Option<&str>, Option<&str>) {
-    if !link.starts_with('/') || std::path::Path::new(link).exists() {
+    if !is_full_path(link) || Path::new(link).exists() {
         return (link, None, None);
     }
+    split_position(link)
+}
+
+/// `path:line:column` in its parts. The colon after a drive letter is none of them.
+fn split_position(link: &str) -> (&str, Option<&str>, Option<&str>) {
     let number = |text: &&str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
     let mut parts = link.rsplitn(3, ':');
     match (parts.next().filter(number), parts.next(), parts.next()) {
@@ -209,6 +222,44 @@ mod tests {
             file_position("https://example.org:8080"),
             ("https://example.org:8080", None, None)
         );
+    }
+
+    #[test]
+    fn places_split_off_windows_paths_but_not_their_drive() {
+        assert_eq!(
+            split_position("C:\\src\\main.rs:10:5"),
+            ("C:\\src\\main.rs", Some("10"), Some("5"))
+        );
+        assert_eq!(
+            split_position("C:\\src\\main.rs:10"),
+            ("C:\\src\\main.rs", Some("10"), None)
+        );
+        assert_eq!(split_position("C:\\src\\main.rs"), ("C:\\src\\main.rs", None, None));
+    }
+
+    /// cargo writes `--> src\main.rs:10:5`, which the view makes absolute.
+    #[test]
+    #[cfg(windows)]
+    fn windows_files_with_a_line_open() {
+        assert_eq!(
+            resolve("C:\\nonexistent\\a.rs:12:3", "kate --line LINE --column COLUMN PATH"),
+            Open::Editor {
+                program: "kate".into(),
+                arguments: ["--line", "12", "--column", "3", "C:\\nonexistent\\a.rs"]
+                    .map(String::from)
+                    .to_vec(),
+            }
+        );
+        let directory = std::env::temp_dir().join(format!("kudari-open-line-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("main.rs"), "x").unwrap();
+        let link = format!("{}:10:5", directory.join("main.rs").to_string_lossy());
+        let Open::Url(path) = resolve(&link, "") else {
+            panic!("no editor is set");
+        };
+        let schemes = crate::options::Options::default().link_schemes;
+        assert!(openable(&path, &schemes).is_some(), "{path}");
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 
     #[test]
