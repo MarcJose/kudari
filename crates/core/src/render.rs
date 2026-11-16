@@ -358,8 +358,11 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
     }
     paints.append(&mut glyphs);
 
-    if cursor.shape != CursorShape::Hidden && !scene.cursor_hidden {
-        let line = cursor.point.line.0 + offset;
+    // While the view is scrolled back, the cursor can be below the last line: it is not on
+    // screen then, and the space below the grid shows nothing of it.
+    let cursor_line = cursor.point.line.0 + offset;
+    if cursor.shape != CursorShape::Hidden && !scene.cursor_hidden && (0..grid_lines).contains(&cursor_line) {
+        let line = cursor_line;
         let column = cursor.point.column.0 as i32;
         let shape = if scene.focused {
             cursor.shape
@@ -506,6 +509,24 @@ mod tests {
             Paint::Text { text, color: drawn, .. } if *drawn == color => Some(text.clone()),
             _ => None,
         })
+    }
+
+    #[test]
+    fn a_cursor_below_the_screen_is_not_drawn() {
+        let scheme = crate::colors::active();
+        let mut term = term_with("1\r\n2\r\n3\r\n4\r\n5");
+        let below_grid = |term: &Term<VoidListener>| {
+            fills(&frame(term, &Options::default(), &scene(&scheme, &[], &[])))
+                .iter()
+                .any(|(rect, _)| rect.y + rect.height > GEOMETRY.origin_y + 3.0 * GEOMETRY.cell_height)
+        };
+        assert!(!below_grid(&term));
+        // One line back: the cursor in the last line is below the screen now.
+        term.scroll_display(alacritty_terminal::grid::Scroll::Delta(1));
+        assert!(!below_grid(&term));
+        let cursor = scheme.foreground;
+        let drawn = fills(&frame(&term, &Options::default(), &scene(&scheme, &[], &[])));
+        assert!(drawn.iter().all(|(_, color)| *color != cursor), "{drawn:?}");
     }
 
     #[test]

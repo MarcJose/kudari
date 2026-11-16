@@ -514,7 +514,10 @@ impl qobject::TerminalItem {
             self.as_mut().set_scroll_size(lines / total);
             self.as_mut().set_scroll_position((history - offset) / total);
             let x = origin_x + cursor.column.0 as f64 * *self.cell_width();
-            let y = origin_y + (f64::from(cursor.line.0) + offset) * *self.cell_height();
+            // A cursor below the screen, while the view is scrolled back, keeps the input method
+            // at its last line.
+            let line = (f64::from(cursor.line.0) + offset).clamp(0.0, (lines - 1.0).max(0.0));
+            let y = origin_y + line * *self.cell_height();
             self.as_mut().set_cursor_x(x);
             self.as_mut().set_cursor_y(y);
         }
