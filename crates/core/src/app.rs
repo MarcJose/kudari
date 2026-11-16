@@ -1362,7 +1362,11 @@ impl App {
         match kind {
             "width" => self.settings.set_width(store, value),
             "height" => self.settings.set_height(store, value),
-            "screen" => self.settings.set_screen(store, value),
+            // The window moves to the screen at once, as from the settings.
+            "screen" => {
+                self.settings.set_screen(store, value);
+                return vec![Effect::UpdateWorkArea, Effect::PublishSettings];
+            }
             _ => return Vec::new(),
         }
         vec![Effect::PublishSettings]
@@ -2154,7 +2158,11 @@ mod tests {
         assert!(app.settings().keep_open);
         app.set_window_size(&table, "width", 70);
         app.set_window_size(&table, "height", 40);
-        app.set_window_size(&table, "screen", 2);
+        // The window moves to the screen chosen in the menu at once.
+        assert_eq!(
+            app.set_window_size(&table, "screen", 2),
+            [Effect::UpdateWorkArea, Effect::PublishSettings]
+        );
         assert!(app.set_window_size(&table, "depth", 1).is_empty());
         let stored = Settings::load(&table);
         assert_eq!(
