@@ -17,11 +17,13 @@ use alacritty_terminal::event_loop::{EventLoop, Notifier};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::sync::FairMutex;
+use alacritty_terminal::term::color::{COUNT, Colors};
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, MIN_COLUMNS, Term, TermMode};
 use alacritty_terminal::tty;
-use alacritty_terminal::vte::ansi::{CursorStyle, Handler, Processor, StdSyncHandler};
+use alacritty_terminal::vte::ansi::{CursorStyle, Handler, Processor, Rgb, StdSyncHandler};
 
+use crate::colors::ColorScheme;
 use crate::command::Quoting;
 use crate::marks::{Marks, Prompt, Tee};
 #[cfg(windows)]
@@ -206,9 +208,15 @@ fn least_columns(columns: u16) -> u16 {
 }
 
 /// An answer that a program asked for, in the order it asked. Some need the thread of the
-/// user interface, so all of them go there, or an answer would overtake an earlier one.
+/// user interface, so all of them go there, or an answer would overtake an earlier one:
+/// programs ask for a color and then for the device attributes, and take the answer to
+/// the second as a sign that the first has none.
 enum Reply {
     Text(String),
+    /// One of the colors, by its number in [`Colors`].
+    Color(usize, Arc<dyn Fn(Rgb) -> String + Send + Sync>),
+    /// The size of the text area in pixels.
+    Size(Arc<dyn Fn(WindowSize) -> String + Send + Sync>),
     /// The text of the clipboard.
     Paste(Arc<dyn Fn(&str) -> String + Send + Sync>),
 }
@@ -284,6 +292,8 @@ impl EventListener for Proxy {
                 }
             }
             Event::PtyWrite(text) => self.reply(Reply::Text(text)),
+            Event::ColorRequest(index, format) => self.reply(Reply::Color(index, format)),
+            Event::TextAreaSizeRequest(format) => self.reply(Reply::Size(format)),
             Event::ClipboardLoad(_, format) => self.reply(Reply::Paste(format)),
             Event::ChildExit(_) | Event::Exit => listener.report(id, Report::Exited),
             _ => {}
@@ -291,8 +301,27 @@ impl EventListener for Proxy {
     }
 }
 
+/// The color a program asks for by its number in [`Colors`]: the one it set itself, else
+/// the one of the scheme, as the terminal draws it. `None` for a number without a color.
+fn requested_color(index: usize, overrides: &Colors, scheme: &ColorScheme, cursor: Option<Rgb>) -> Option<Rgb> {
+    if index >= COUNT {
+        return None;
+    }
+    overrides[index].or_else(|| match index {
+        0..=255 => Some(crate::colors::indexed_color(index as u8, scheme)),
+        256 => Some(scheme.foreground),
+        257 => Some(scheme.background),
+        258 => Some(cursor.unwrap_or(scheme.foreground)),
+        _ => None,
+    })
+}
+
 /// What a terminal knows to answer with, for [`answers`].
 struct Answering<'a> {
+    overrides: &'a Colors,
+    scheme: &'a ColorScheme,
+    cursor: Option<Rgb>,
+    size: WindowSize,
     paste: &'a dyn Fn() -> String,
 }
 
@@ -302,6 +331,13 @@ fn answers(replies: Vec<Reply>, answering: &Answering) -> Vec<u8> {
     for reply in replies {
         let text = match reply {
             Reply::Text(text) => text,
+            Reply::Color(index, format) => {
+                match requested_color(index, answering.overrides, answering.scheme, answering.cursor) {
+                    Some(color) => format(color),
+                    None => continue,
+                }
+            }
+            Reply::Size(format) => format(answering.size),
             Reply::Paste(format) => format(&(answering.paste)()),
         };
         bytes.extend_from_slice(text.as_bytes());
@@ -325,6 +361,8 @@ pub struct Backend {
     pub last_output: Mutex<Instant>,
     /// What the thread of the PTY left for the user interface.
     mailbox: Arc<Mailbox>,
+    /// The size of the screen in cells and of a cell in pixels.
+    window_size: Mutex<WindowSize>,
     /// File the terminal content is saved to regularly.
     pub auto_save: Mutex<Option<PathBuf>>,
     /// Scrollback size of this terminal, instead of the configured one.
@@ -429,6 +467,7 @@ impl Backend {
             marks,
             last_output: Mutex::new(Instant::now()),
             mailbox,
+            window_size: Mutex::new(size),
             auto_save: Mutex::new(None),
             history_lines: Mutex::new(None),
             mouse_tracking: Mutex::new(None),
@@ -503,8 +542,19 @@ impl Backend {
     /// Sends the program the answers it asked for, on the thread of the user interface.
     fn answer(&self) {
         let replies = std::mem::take(&mut *lock(&self.mailbox.replies));
+        let overrides = if replies.iter().any(|reply| matches!(reply, Reply::Color(..))) {
+            *self.term.lock().colors()
+        } else {
+            Colors::default()
+        };
         let paste = || listener().map_or_else(String::new, |listener| listener.clipboard().paste(Selection::Clipboard));
-        let answering = Answering { paste: &paste };
+        let answering = Answering {
+            overrides: &overrides,
+            scheme: &crate::colors::active(),
+            cursor: options().and_then(|options| options.cursor_color),
+            size: *lock(&self.window_size),
+            paste: &paste,
+        };
         let bytes = answers(replies, &answering);
         if !bytes.is_empty() {
             self.write(bytes);
@@ -519,6 +569,15 @@ impl Backend {
 
     pub fn resize(&self, columns: u16, lines: u16, cell_width: u16, cell_height: u16) {
         let columns = least_columns(columns);
+        let size = WindowSize {
+            num_lines: lines,
+            num_cols: columns,
+            cell_width,
+            cell_height,
+        };
+        // A zoom changes the cells without changing their number; programs that ask for
+        // the size in pixels get the new one.
+        *lock(&self.window_size) = size;
         let mut term = self.term.lock();
         if term.columns() == usize::from(columns) && term.screen_lines() == usize::from(lines) {
             return;
@@ -526,12 +585,7 @@ impl Backend {
         term.resize(TermSize::new(columns.into(), lines.into()));
         drop(term);
         let mut notifier = Notifier(self.notifier.0.clone());
-        notifier.on_resize(WindowSize {
-            num_lines: lines,
-            num_cols: columns,
-            cell_width,
-            cell_height,
-        });
+        notifier.on_resize(size);
     }
 
     /// The directory of the program in the foreground, or else the one the shell reported,
@@ -933,7 +987,8 @@ mod tests {
         assert_eq!(COPIED.take(), ["later"]);
     }
 
-    /// What the terminal answers to `output`.
+    /// What the terminal answers to `output`, with the default scheme, cells of 8 by 16
+    /// pixels and 24 lines of 80 columns.
     fn answer_to(output: &str) -> (usize, String) {
         let proxy = kept_proxy();
         let mut term = Term::new(Config::default(), &TermSize::new(80, 24), proxy.clone());
@@ -942,6 +997,15 @@ mod tests {
         let work = run_work();
         let replies = std::mem::take(&mut *lock(&proxy.mailbox.replies));
         let answering = Answering {
+            overrides: term.colors(),
+            scheme: &ColorScheme::default(),
+            cursor: None,
+            size: WindowSize {
+                num_lines: 24,
+                num_cols: 80,
+                cell_width: 8,
+                cell_height: 16,
+            },
             paste: &|| "pasted".to_string(),
         };
         (
@@ -956,6 +1020,46 @@ mod tests {
         let (work, answer) = answer_to(&"\x1b[c".repeat(1000));
         assert_eq!(work, 1);
         assert_eq!(answer, "\x1b[?6c".repeat(1000));
+    }
+
+    #[test]
+    fn programs_get_the_colors_and_the_size_they_ask_for() {
+        // As `neovim` asks for the background, and an image viewer for the size in pixels.
+        let (_, answer) = answer_to("\x1b]11;?\x1b\\");
+        assert_eq!(answer, "\x1b]11;rgb:2323/2626/2727\x1b\\");
+        let (_, answer) = answer_to("\x1b]10;?\x07\x1b]12;?\x07\x1b]4;1;?\x07");
+        assert_eq!(
+            answer,
+            "\x1b]10;rgb:fcfc/fcfc/fcfc\x07\x1b]12;rgb:fcfc/fcfc/fcfc\x07\x1b]4;1;rgb:fcfc/fcfc/fcfc\x07"
+        );
+        let (_, answer) = answer_to("\x1b[14t");
+        assert_eq!(answer, "\x1b[4;384;640t");
+        // A color that the program set is the one it gets back.
+        let (_, answer) = answer_to("\x1b]11;#102030\x1b\\\x1b]11;?\x1b\\");
+        assert_eq!(answer, "\x1b]11;rgb:1010/2020/3030\x1b\\");
+    }
+
+    #[test]
+    fn answers_keep_the_order_of_the_questions_with_one_piece_of_work() {
+        // A color, then the device attributes, which programs take as the end of the answers.
+        let (work, answer) = answer_to("\x1b]11;?\x1b\\\x1b[c\x1b[14t\x1b[c");
+        assert_eq!(work, 1);
+        assert_eq!(
+            answer,
+            "\x1b]11;rgb:2323/2626/2727\x1b\\\x1b[?6c\x1b[4;384;640t\x1b[?6c"
+        );
+    }
+
+    #[test]
+    fn colors_beyond_the_table_get_no_answer() {
+        let scheme = ColorScheme::default();
+        assert_eq!(requested_color(COUNT, &Colors::default(), &scheme, None), None);
+        assert_eq!(requested_color(usize::MAX, &Colors::default(), &scheme, None), None);
+        let cursor = Rgb { r: 1, g: 2, b: 3 };
+        assert_eq!(
+            requested_color(258, &Colors::default(), &scheme, Some(cursor)),
+            Some(cursor)
+        );
     }
 
     #[test]
