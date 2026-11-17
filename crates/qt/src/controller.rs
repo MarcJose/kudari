@@ -758,7 +758,7 @@ impl qobject::Controller {
                 Some(app::Status {
                     terminal,
                     title: backend.title(&format, session),
-                    busy: backend.is_busy(),
+                    busy: backend.is_busy_recent(),
                     quiet_for,
                 })
             })

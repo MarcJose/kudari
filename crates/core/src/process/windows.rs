@@ -10,7 +10,8 @@ use std::collections::HashMap;
 use std::io::Read as _;
 use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
@@ -24,6 +25,27 @@ use windows_sys::Win32::System::Threading::{
 use super::tree::{self, Process};
 use super::{Programs, Signal};
 
+/// How long a look at the processes serves what is only shown. Windows lists every process
+/// of the system for it, and the poll of the window asks three times for each terminal every
+/// half second: the title, the name of the program and whether it is busy.
+const RECENT: Duration = Duration::from_millis(200);
+
+/// The last list of processes, shared by all terminals.
+static SNAPSHOT: Mutex<Option<(Instant, Arc<Vec<Process>>)>> = Mutex::new(None);
+
+/// The processes of a moment ago, or now if that list is older than [`RECENT`].
+fn recent_processes() -> Arc<Vec<Process>> {
+    let mut snapshot = SNAPSHOT.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((taken, processes)) = snapshot.as_ref()
+        && taken.elapsed() < RECENT
+    {
+        return Arc::clone(processes);
+    }
+    let processes = Arc::new(processes());
+    *snapshot = Some((Instant::now(), Arc::clone(&processes)));
+    processes
+}
+
 /// The shell of a `ConPTY` and what it runs.
 pub struct Console {
     shell: u32,
@@ -31,6 +53,15 @@ pub struct Console {
     shell_start: Option<u64>,
     /// Whether the programs at these paths have windows; see [`tree::subsystem`].
     with_windows: Mutex<HashMap<PathBuf, bool>>,
+    /// The program in the foreground a moment ago; see [`RECENT`].
+    recent: Mutex<Option<Recent>>,
+}
+
+/// A look at the processes of a console that serves for [`RECENT`].
+struct Recent {
+    taken: Instant,
+    processes: Arc<Vec<Process>>,
+    foreground: u32,
 }
 
 impl Console {
@@ -41,6 +72,7 @@ impl Console {
             shell,
             shell_start: start_time(shell),
             with_windows: Mutex::default(),
+            recent: Mutex::default(),
         }
     }
 
@@ -62,8 +94,33 @@ impl Console {
         })
     }
 
-    fn foreground(&self) -> (Vec<Process>, u32) {
-        let processes = processes();
+    /// The program in the foreground now, from a fresh list: for what acts on it, such as
+    /// ending it or letting marks of the shell count.
+    fn foreground(&self) -> (Arc<Vec<Process>>, u32) {
+        let processes = Arc::new(processes());
+        let foreground = self.foreground_in(&processes);
+        (processes, foreground)
+    }
+
+    /// The program in the foreground a moment ago, for what is only shown.
+    fn foreground_recent(&self) -> (Arc<Vec<Process>>, u32) {
+        let mut recent = self.recent.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(look) = recent.as_ref()
+            && look.taken.elapsed() < RECENT
+        {
+            return (Arc::clone(&look.processes), look.foreground);
+        }
+        let processes = recent_processes();
+        let foreground = self.foreground_in(&processes);
+        *recent = Some(Recent {
+            taken: Instant::now(),
+            processes: Arc::clone(&processes),
+            foreground,
+        });
+        (processes, foreground)
+    }
+
+    fn foreground_in(&self, processes: &[Process]) -> u32 {
         let started = |id: u32| {
             if id == self.shell {
                 self.shell_start
@@ -79,8 +136,7 @@ impl Console {
                 .is_some_and(|(parent, child)| child >= parent)
                 && !self.has_windows(child.id)
         };
-        let foreground = tree::foreground(&processes, self.shell, counts);
-        (processes, foreground)
+        tree::foreground(processes, self.shell, counts)
     }
 }
 
@@ -179,17 +235,21 @@ impl Programs for Console {
         self.foreground().1 != self.shell
     }
 
+    fn is_busy_recent(&self) -> bool {
+        self.foreground_recent().1 != self.shell
+    }
+
     fn working_directory(&self) -> Option<PathBuf> {
         None
     }
 
     fn name(&self) -> Option<String> {
-        let (processes, foreground) = self.foreground();
+        let (processes, foreground) = self.foreground_recent();
         tree::name(&processes, foreground)
     }
 
     fn arguments(&self) -> Option<Vec<String>> {
-        let (processes, foreground) = self.foreground();
+        let (processes, foreground) = self.foreground_recent();
         let process = processes.iter().find(|process| process.id == foreground)?;
         Some(vec![process.name.clone()])
     }
@@ -229,6 +289,36 @@ impl Programs for Console {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_is_only_shown_shares_one_list_of_processes_for_a_moment() {
+        let shell = std::process::id();
+        // A busy machine may take longer than the moment between two questions; then the
+        // test asks again rather than failing.
+        let shared = (0..20).find_map(|_| {
+            let (one, two) = (Console::new(shell), Console::new(shell));
+            let asked = Instant::now();
+            // Two terminals, three questions each, as the poll asks them: one list.
+            let (first, _) = one.foreground_recent();
+            let (second, _) = two.foreground_recent();
+            let _ = (one.name(), two.arguments(), one.is_busy_recent());
+            let (third, _) = one.foreground_recent();
+            (asked.elapsed() < RECENT / 2).then(|| {
+                Arc::ptr_eq(&first, &second)
+                    && Arc::ptr_eq(&first, &third)
+                    // Ending a program or letting marks of the shell count looks again now.
+                    && !Arc::ptr_eq(&first, &one.foreground().0)
+            })
+        });
+        assert_eq!(shared, Some(true));
+        let console = Console::new(shell);
+        let (first, _) = console.foreground_recent();
+        std::thread::sleep(RECENT + Duration::from_millis(50));
+        assert!(
+            !Arc::ptr_eq(&first, &console.foreground_recent().0),
+            "a new look after a moment"
+        );
+    }
 
     #[test]
     fn a_program_that_the_shell_started_is_in_the_foreground() {
