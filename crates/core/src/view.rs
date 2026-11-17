@@ -109,6 +109,13 @@ pub const WHEEL_NOTCH: f64 = 120.0;
 /// Lines that one notch scrolls.
 const NOTCH_LINES: f64 = 3.0;
 
+/// Whether typing changes the screen before any echo: a selection goes away, and a view
+/// scrolled back jumps to the end of the history. Only then does a key need a frame of its own.
+#[must_use]
+pub fn typing_changes_view<T>(term: &Term<T>) -> bool {
+    term.selection.is_some() || term.grid().display_offset() > 0
+}
+
 /// How far the wheel turned, in [`WHEEL_NOTCH`] units: from the pixels a touchpad moved,
 /// one line to a cell, or else from the angle of the wheel.
 #[must_use]
@@ -392,7 +399,14 @@ impl View {
         };
         let half = term.screen_lines() as i32 / 2;
         match keytab::find(&options.key_rules, key, modifiers, modes) {
-            Some(keytab::Action::Text(bytes)) => effects.push(Effect::Type(bytes)),
+            Some(keytab::Action::Text(bytes)) => {
+                // Typing jumps to the end of the history; that shows at once, not with the echo.
+                let jumps = term.grid().display_offset() > 0;
+                effects.push(Effect::Type(bytes));
+                if jumps {
+                    effects.push(Effect::Refresh);
+                }
+            }
             Some(keytab::Action::Command(command)) => effects.push(match command {
                 keytab::Command::Erase => Effect::Type(vec![0x7f]),
                 keytab::Command::PageUp => Effect::Scroll(half),
@@ -404,9 +418,14 @@ impl View {
             }),
             None => {
                 if let Some(bytes) = input::key_bytes_with_base(mode, key, base, modifiers, text) {
+                    let changes = typing_changes_view(term);
                     term.selection = None;
                     effects.push(Effect::Type(bytes));
-                    effects.push(Effect::Refresh);
+                    // Otherwise the frame comes with the echo: a frame before it would show
+                    // the screen as it was and hold the echo back until the next one.
+                    if changes {
+                        effects.push(Effect::Refresh);
+                    }
                 }
             }
         }
@@ -572,10 +591,8 @@ impl View {
             let Some(Effect::Write(report)) = report else {
                 return Vec::new();
             };
-            return vec![
-                Effect::Write(report.repeat(notches.unsigned_abs() as usize)),
-                Effect::Refresh,
-            ];
+            // What the program draws in answer comes as output, with its own frame.
+            return vec![Effect::Write(report.repeat(notches.unsigned_abs() as usize))];
         }
         let lines = whole_steps(&mut self.wheel_rest, turn, WHEEL_NOTCH / NOTCH_LINES);
         if lines == 0 {
@@ -586,7 +603,7 @@ impl View {
         {
             let arrow = if lines > 0 { "\x1bOA" } else { "\x1bOB" };
             let count = (lines.unsigned_abs() as usize).min(term.screen_lines());
-            vec![Effect::Write(arrow.repeat(count).into_bytes()), Effect::Refresh]
+            vec![Effect::Write(arrow.repeat(count).into_bytes())]
         } else {
             vec![Effect::Scroll(lines)]
         }
@@ -1754,6 +1771,25 @@ mod tests {
     const LEFT: Option<MouseButton> = Some(MouseButton::Left);
 
     #[test]
+    fn a_key_draws_at_once_only_what_changes_before_the_echo() {
+        let options = Options::default();
+        let context = context(&options, true, &nowhere);
+        let mut view = View::default();
+        let mut term = term_with(&"line\r\n".repeat(10));
+        assert!(!typing_changes_view(&term));
+        // Scrolled back, typing jumps to the end, which shows before any echo.
+        term.scroll_display(alacritty_terminal::grid::Scroll::Delta(2));
+        assert!(typing_changes_view(&term));
+        assert_eq!(
+            view.key(&mut term, Key::Character('x'), NONE, "x", &context),
+            [Effect::Hints(false), Effect::Type(b"x".to_vec()), Effect::Refresh]
+        );
+        term.scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+        select_row(&mut term, 0);
+        assert!(typing_changes_view(&term));
+    }
+
+    #[test]
     fn keys_type_unless_something_takes_them() {
         let mut term = term_with("abc");
         let mut view = View::default();
@@ -1766,6 +1802,11 @@ mod tests {
             [Effect::Hints(false), Effect::Type(b"A".to_vec()), Effect::Refresh]
         );
         assert!(term.selection.is_none(), "typing drops the selection");
+        // Without a selection and at the end of the history, the echo brings the frame.
+        assert_eq!(
+            view.key(&mut term, Key::Character('b'), NONE, "b", &context),
+            [Effect::Hints(false), Effect::Type(b"b".to_vec())]
+        );
         assert_eq!(
             view.key(&mut term, Key::Other, NONE, "", &context),
             [Effect::Hints(false)]
@@ -2265,7 +2306,7 @@ mod tests {
         );
         assert_eq!(
             view.wheel(&term, Some(cell.0), WHEEL_NOTCH, true, &context),
-            [Effect::Write(b"\x1b[<64;3;2M".to_vec()), Effect::Refresh]
+            [Effect::Write(b"\x1b[<64;3;2M".to_vec())]
         );
         // Shift keeps the mouse for selecting, and so does a terminal that may not track it.
         assert_eq!(
@@ -2296,7 +2337,7 @@ mod tests {
         let full_screen = term_with("\x1b[?1049h\x1b[?1007h");
         assert_eq!(
             view.wheel(&full_screen, None, -120.0, true, &context),
-            [Effect::Write(b"\x1bOB\x1bOB\x1bOB".to_vec()), Effect::Refresh]
+            [Effect::Write(b"\x1bOB\x1bOB\x1bOB".to_vec())]
         );
         assert_eq!(
             view.wheel(&full_screen, None, 120.0, false, &context),
@@ -2343,7 +2384,7 @@ mod tests {
         let reports: Vec<Effect> = (0..8)
             .flat_map(|_| view.wheel(&term, at, -15.0, true, &context))
             .collect();
-        assert_eq!(reports, [Effect::Write(b"\x1b[<65;3;1M".to_vec()), Effect::Refresh]);
+        assert_eq!(reports, [Effect::Write(b"\x1b[<65;3;1M".to_vec())]);
         assert!(view.wheel(&term, at, 0.0, true, &context).is_empty());
         // Zooming with Ctrl takes a step for each notch as well, and none for nothing.
         assert_eq!(view.wheel_zoom(0.0), 0);
