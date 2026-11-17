@@ -96,6 +96,16 @@ function Find-ByType([System.Windows.Automation.ControlType] $type) {
     }
 }
 
+# Whether the element is still there: one of a window that closed is not.
+function Test-Present($element) {
+    try {
+        [void] $element.Current.Name
+        return $true
+    } catch [System.Windows.Automation.ElementNotAvailableException] {
+        return $false
+    }
+}
+
 # Clicks what has the name and can be clicked. Qt lets labels be invoked as well, to no
 # effect, so they do not count, and what can be switched is switched.
 function Invoke-Element([string] $name) {
@@ -110,7 +120,13 @@ function Invoke-Element([string] $name) {
                 return $true
             }
             if ($element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref] $pattern)) {
-                $pattern.Invoke()
+                try {
+                    $pattern.Invoke()
+                } catch {
+                    # A click that closes the window, as Quit does, can come back with an error
+                    # once the element is gone: it was done. Any other error stays one.
+                    if (-not (Wait-For { if (-not (Test-Present $element)) { $true } } 2)) { throw }
+                }
                 return $true
             }
         }
