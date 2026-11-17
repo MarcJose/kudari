@@ -174,3 +174,9 @@ All nine steps are complete.
 - A certificate of Kudari's own signs the packages, without costs or a third party. Users
   trust it once for the MSIX package. winget installs the ZIP archive, as it trusts no
   self-signed package.
+- Kudari loads libraries only from its own folder, from System32 and from the folder of Qt,
+  never from the working directory or PATH (`SetDefaultDllDirectories` at the start of
+  `main`). `alacritty_terminal` looks for `conpty.dll` with every new terminal, and a library
+  of that name in the folder Kudari was started in would otherwise run inside it. A newer
+  `conpty.dll` with its `OpenConsole.exe`, as Windows Terminal ships them, goes next to
+  `kudari.exe`.

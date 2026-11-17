@@ -18,6 +18,7 @@ void rk_win_screenshot_later(const QString &path, int delay);
 void rk_win_prepare_translucency();
 void rk_win_use_style();
 void rk_win_set_color_scheme(const QString &scheme);
+void rk_win_harden_dll_search();
 void rk_win_attach_console();
 void rk_win_watch_theme();
 void rk_win_set_backdrop(bool blurred);
