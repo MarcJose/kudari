@@ -61,6 +61,8 @@ cxx-qt-build.workspace = true
 [features]
 # Lets automated tests drive the UI over D-Bus. Never enabled for normal builds.
 test-hooks = ["kudari-qt/test-hooks"]
+# Counters of what Kudari does, written once a second with KUDARI_STATS=1, for the bench.
+stats = ["kudari-qt/stats"]
 
 [lints]
 workspace = true

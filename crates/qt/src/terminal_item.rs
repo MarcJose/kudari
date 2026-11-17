@@ -31,6 +31,7 @@ use crate::qt_input;
 use crate::render::{self, FontStyle, Paint};
 use crate::services::Selection;
 use crate::sessions::TerminalId;
+use crate::stats;
 use crate::terminal;
 use crate::view::{self, Context, Effect, View};
 
@@ -544,6 +545,7 @@ impl qobject::TerminalItem {
     }
 
     fn refresh(mut self: Pin<&mut Self>) {
+        stats::count(stats::Count::Refreshes);
         if let Some(backend) = self.as_ref().backend() {
             let term = backend.lock();
             let history = term.grid().history_size() as f64;
@@ -1036,6 +1038,7 @@ impl qobject::TerminalItem {
         };
         // SAFETY: Qt keeps the painter in place during this call.
         let mut target = unsafe { Pin::new_unchecked(painter) };
+        stats::paint(*self.terminal_id());
         // Text draws much faster into the image of `rk_frame_begin` than into the item's own.
         let opaque = *self.opaque();
         let mut frame = kde::rk_frame_begin(target.as_mut(), opaque);
@@ -1046,7 +1049,9 @@ impl qobject::TerminalItem {
             false
         };
         if drawn {
+            let copy = stats::Stopwatch::start();
             kde::rk_frame_end(target, frame);
+            copy.stop(stats::Time::FrameCopy);
         } else {
             self.paint_frame(target);
         }
@@ -1110,6 +1115,7 @@ impl qobject::TerminalItem {
             .as_ref()
             .map(|badge| (backend.local_title(&badge.format), badge));
         let fonts = Fonts::new(self.term_font(), &options);
+        let mut clock = stats::Stopwatch::start();
         let mut paints = PAINTS.take();
         let fresh_words = {
             let term = backend.lock();
@@ -1151,6 +1157,7 @@ impl qobject::TerminalItem {
             render::frame_into(&term, &options, &scene, &mut paints);
             fresh_words
         };
+        clock.lap(stats::Time::FrameBuild);
         if let Some(words) = fresh_words {
             self.as_mut().look_for_hint_files(words, backend);
         }
@@ -1205,6 +1212,7 @@ impl qobject::TerminalItem {
             }
         }
         runs.draw(painter.as_mut());
+        clock.stop(stats::Time::FrameDraw);
         paints.clear();
         PAINTS.set(paints);
     }

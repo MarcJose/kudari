@@ -31,6 +31,7 @@ use crate::process::Pty;
 use crate::process::{self, Programs, Signal};
 use crate::services::{Clipboard, Desktop, Selection};
 use crate::sessions::{SessionId, TerminalId};
+use crate::stats;
 use crate::title;
 
 pub use crate::options::Options;
@@ -317,8 +318,12 @@ impl EventListener for Proxy {
             return;
         };
         let mailbox = &self.mailbox;
+        if matches!(event, Event::Wakeup) {
+            stats::count(stats::Count::Wakeups);
+        }
         match event {
             Event::Wakeup if !mailbox.repaint_queued.swap(true, Ordering::AcqRel) => {
+                stats::count(stats::Count::Reports);
                 listener.report(id, Report::Output(Pending(mailbox.repaint_queued.clone())));
             }
             Event::Bell if !mailbox.bell_queued.swap(true, Ordering::AcqRel) => {
@@ -429,14 +434,45 @@ pub struct Backend {
     quoting: Quoting,
 }
 
+/// A lock of a terminal, which counts how long it was held when it goes; see [`stats`].
+struct Held<G> {
+    guard: G,
+    held: stats::Stopwatch,
+}
+
+impl<G: std::ops::Deref> std::ops::Deref for Held<G> {
+    type Target = G::Target;
+
+    fn deref(&self) -> &Self::Target {
+        &self.guard
+    }
+}
+
+impl<G: std::ops::DerefMut> std::ops::DerefMut for Held<G> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.guard
+    }
+}
+
+impl<G> Drop for Held<G> {
+    fn drop(&mut self) {
+        std::mem::replace(&mut self.held, stats::Stopwatch::start()).stop(stats::Time::LockHold);
+    }
+}
+
 impl Backend {
     /// The terminal, locked, with its view where it can be: `alacritty_terminal` can leave the
     /// view scrolled back past the history, or the cursor of the selection mode outside the
     /// grid, and reading there would end Kudari (see [`view::repair_view`]).
     pub fn lock(&self) -> impl std::ops::DerefMut<Target = Term<Proxy>> + '_ {
+        let waiting = stats::Stopwatch::start();
         let mut term = self.term.lock();
+        waiting.stop(stats::Time::LockWait);
         crate::view::repair_view(&mut term);
-        term
+        Held {
+            guard: term,
+            held: stats::Stopwatch::start(),
+        }
     }
 
     fn spawn(

@@ -592,6 +592,18 @@ sessions runCommandInTerminal "$first_terminal" "seq 1 40"; sleep 0.6
 stale_hidden=$(stale)
 window toggleWindowState; sleep 1
 check "output nobody sees waits until the terminal shows" "1 0 1 0" "$stale_in_background $stale_shown $stale_hidden $(stale)"
+
+# The counters of the test build: output, its refresh and paint, the lock of the terminal, the
+# queue of the Qt thread and the frame all count.
+hook ResetStats
+run "seq 1 20"
+counted=$(hook Stats | python3 -c '
+import json, sys
+stats, terminal = json.load(sys.stdin), sys.argv[1]
+needed = [stats["wakeups"], stats["reports"], stats["refreshes"], stats["paints"].get(terminal, 0)]
+needed += [stats[name]["count"] for name in ("lock_wait", "lock_hold", "queue", "frame_build", "frame_draw", "frame_copy")]
+print("yes" if all(needed) else stats)' "$first_terminal")
+check "the counters count the work of a terminal" yes "$counted"
 check "a terminal in a tab in the background has no size until it shows" "1 1 0" "$sizeless_in_background $sizeless_shown $sizeless_closed"
 run "clear"
 
@@ -1024,7 +1036,8 @@ check "quitting after the first start ends the program" no "$(kill -0 "$kudari" 
 mkdir "$work/scaled"
 printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nKeepOpen=true\n[Terminal]\nFontSize=11\n[Security]\nAllowRemoteCommands=true\n' \
     > "$work/scaled/kudarirc"
-QT_SCALE_FACTOR=1.25 XDG_CONFIG_HOME="$work/scaled" "$binary" > "$work/scaled.log" 2>&1 &
+# It writes its counters once a second as well, as the bench reads them.
+KUDARI_STATS=1 QT_SCALE_FACTOR=1.25 XDG_CONFIG_HOME="$work/scaled" "$binary" > "$work/scaled.log" 2>&1 &
 kudari=$!
 started
 window toggleWindowState; sleep 1.5
@@ -1129,6 +1142,11 @@ full=$(python3 "$work/text" "$work"/scaled/full-*.png 2>&1 | tail -n 1)
 cleared=$(python3 "$work/text" "$work"/scaled/cleared-*.png 2>&1 | tail -n 1)
 check "a translucent terminal keeps nothing of text that went away" yes \
     "$([ "$full" -gt $((cleared * 10)) ] 2>/dev/null && echo yes || echo "no: $full pixels of text, then $cleared")"
+lines=$(sed -n 's/^kudari-stats [0-9.]* //p' "$work/scaled.log" | python3 -c '
+import json, sys
+found = [json.loads(line) for line in sys.stdin]
+print("yes" if found and all("lock_wait" in stats for stats in found) and found[-1]["refreshes"] > 0 else len(found))')
+check "with KUDARI_STATS=1 the counters come once a second" yes "$lines"
 hook Trigger file_quit
 wait_quit "$kudari"
 

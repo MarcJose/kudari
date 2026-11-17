@@ -537,6 +537,17 @@ impl TestHooks {
         queue(move |_| crate::kde::rk_test_input_method(&crate::kde::qs(&preedit), &crate::kde::qs(&commit)));
     }
 
+    /// The counters of what Kudari does, as JSON; see `kudari_core::stats`. They are atomics,
+    /// read on this thread without the Qt thread.
+    fn stats(&self) -> String {
+        kudari_core::stats::json()
+    }
+
+    /// Sets the counters back, so that a check counts from now on.
+    fn reset_stats(&self) {
+        kudari_core::stats::reset();
+    }
+
     /// Saves an image of the window, to find where the checks have to click.
     fn grab(&self, path: String) {
         queue(move |_| crate::kde::rk_test_grab(&crate::kde::qs(&path)));

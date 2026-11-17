@@ -28,6 +28,7 @@ use crate::qt::{self, qs};
 use crate::services;
 use crate::sessions::{Layout, Orientation, SessionId, SessionStack, SessionType, TerminalId};
 use crate::settings::{self, Settings};
+use crate::stats;
 use crate::terminal;
 use crate::theme;
 use kudari_core::i18n::tr;
@@ -388,6 +389,11 @@ pub fn dialog_finished() {
 
 /// Runs `action` on the Qt thread with the controller, once it has started.
 pub fn queue(action: impl FnOnce(Pin<&mut qobject::Controller>) + Send + 'static) {
+    let queued = stats::Queued::new();
+    let action = move |controller: Pin<&mut qobject::Controller>| {
+        queued.runs();
+        action(controller);
+    };
     let mut waiting = WAITING.lock().unwrap_or_else(PoisonError::into_inner);
     match THREAD.get() {
         Some(thread) if waiting.started => {
@@ -396,6 +402,28 @@ pub fn queue(action: impl FnOnce(Pin<&mut qobject::Controller>) + Send + 'static
         }
         _ => waiting.actions.push(Box::new(action)),
     }
+}
+
+/// With `KUDARI_STATS=1` in a build that counts, writes the counters of [`stats`] to stderr once
+/// a second, as `kudari-stats` with the seconds since 1970 and the counters as JSON, which
+/// `tools/bench.py` reads. The counters keep counting; a reader takes the differences.
+fn report_stats() {
+    static LAST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    static WANTED: OnceLock<bool> = OnceLock::new();
+    if !stats::enabled() || !*WANTED.get_or_init(|| std::env::var_os("KUDARI_STATS").is_some_and(|value| value == "1"))
+    {
+        return;
+    }
+    let mut last = LAST.lock().unwrap_or_else(PoisonError::into_inner);
+    if last.is_some_and(|last| last.elapsed() < std::time::Duration::from_secs(1)) {
+        return;
+    }
+    *last = Some(std::time::Instant::now());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
+    eprintln!("kudari-stats {now:.3} {}", stats::json());
 }
 
 /// Whether the controller has started, with its first session and, if the settings say so,
@@ -741,6 +769,7 @@ impl qobject::Controller {
 
     /// Periodic update of titles and the monitors.
     fn poll(self: Pin<&mut Self>) {
+        report_stats();
         let format = self.app.settings().title_format.clone();
         let statuses: Vec<app::Status> = self
             .app
