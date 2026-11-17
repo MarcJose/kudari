@@ -109,6 +109,30 @@ pub const WHEEL_NOTCH: f64 = 120.0;
 /// Lines that one notch scrolls.
 const NOTCH_LINES: f64 = 3.0;
 
+/// Puts the view of `term` back where it can be, where `alacritty_terminal` can leave it
+/// outside: scrolled back further than the history goes, which output into a region that
+/// does not start at the top does while the view is scrolled back, and the cursor of the
+/// selection mode in history that is gone, after a switch to the alternate screen or a
+/// smaller history. A frame or a look at a cell there would read past the grid and end
+/// Kudari with all its terminals. Only the view moves, never the content; a selection made
+/// with a cursor out of place goes. Whether anything was out of place.
+pub fn repair_view<T>(term: &mut Term<T>) -> bool {
+    let mut repaired = false;
+    if term.grid().display_offset() > term.grid().history_size() {
+        // Scrolling by nothing keeps the view within the history.
+        term.grid_mut().scroll_display(Scroll::Delta(0));
+        repaired = true;
+    }
+    let cursor = term.vi_mode_cursor.point;
+    let within = cursor.grid_clamp(term, Boundary::Grid);
+    if within != cursor {
+        term.vi_mode_cursor.point = within;
+        term.selection = None;
+        repaired = true;
+    }
+    repaired
+}
+
 /// Whether typing changes the screen before any echo: a selection goes away, and a view
 /// scrolled back jumps to the end of the history. Only then does a key need a frame of its own.
 #[must_use]
@@ -1769,6 +1793,82 @@ mod tests {
     }
 
     const LEFT: Option<MouseButton> = Some(MouseButton::Left);
+
+    /// A terminal of 10 columns and 5 lines with room for `history` lines of history.
+    fn term_with_history(history: usize) -> Term<VoidListener> {
+        let size = alacritty_terminal::term::test::TermSize::new(10, 5);
+        let config = alacritty_terminal::term::Config {
+            scrolling_history: history,
+            ..alacritty_terminal::term::Config::default()
+        };
+        Term::new(config, &size, VoidListener)
+    }
+
+    fn feed(term: &mut Term<VoidListener>, output: &[u8]) {
+        use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+        let mut parser: Processor<StdSyncHandler> = Processor::new();
+        parser.advance(term, output);
+    }
+
+    /// Reads every cell of the view, as a frame does.
+    fn read_view(term: &Term<VoidListener>) -> usize {
+        let content = term.renderable_content();
+        let _ = content.cursor;
+        content.display_iter.count()
+    }
+
+    #[test]
+    fn output_into_a_region_below_the_top_cannot_scroll_the_view_past_the_history() {
+        let mut term = term_with_history(10_000);
+        feed(&mut term, "line\r\n".repeat(20).as_bytes());
+        term.scroll_display(Scroll::Delta(1));
+        // A scrolling region from the second line on, as some programs set, and much output.
+        feed(&mut term, b"\x1b[2;5r\x1b[5H");
+        feed(&mut term, "\n".repeat(3000).as_bytes());
+        let history = term.grid().history_size();
+        assert!(
+            term.grid().display_offset() > history,
+            "alacritty_terminal still scrolls the view too far"
+        );
+        assert!(repair_view(&mut term));
+        assert!(term.grid().display_offset() <= history);
+        assert_eq!(read_view(&term), 50);
+        assert!(!repair_view(&mut term), "once is enough");
+    }
+
+    #[test]
+    fn the_cursor_of_the_selection_mode_stays_in_the_grid_of_the_alternate_screen() {
+        let mut term = term_with_history(1000);
+        feed(&mut term, "line\r\n".repeat(40).as_bytes());
+        term.toggle_vi_mode();
+        // Deep in the history, more than a screen above it.
+        term.vi_mode_cursor.point = Point::new(Line(-30), Column(2));
+        // A program switches to the alternate screen, which has no history.
+        feed(&mut term, b"\x1b[?1049h");
+        assert!(
+            term.vi_mode_cursor.point.line < term.topmost_line(),
+            "alacritty_terminal still leaves it there"
+        );
+        assert!(repair_view(&mut term));
+        assert!(term.vi_mode_cursor.point.line >= term.topmost_line());
+        assert_eq!(read_view(&term), 50);
+    }
+
+    #[test]
+    fn a_smaller_history_keeps_the_cursor_of_the_selection_mode_in_it() {
+        let mut term = term_with_history(1000);
+        feed(&mut term, "line\r\n".repeat(400).as_bytes());
+        term.toggle_vi_mode();
+        term.vi_mode_cursor.point = Point::new(Line(-300), Column(0));
+        let config = alacritty_terminal::term::Config {
+            scrolling_history: 10,
+            ..alacritty_terminal::term::Config::default()
+        };
+        term.set_options(config);
+        assert!(term.vi_mode_cursor.point.line < term.topmost_line());
+        assert!(repair_view(&mut term));
+        assert_eq!(read_view(&term), 50);
+    }
 
     #[test]
     fn a_key_draws_at_once_only_what_changes_before_the_echo() {
