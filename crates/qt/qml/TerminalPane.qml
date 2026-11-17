@@ -51,6 +51,8 @@ Item {
     property real backgroundOpacity: 1
     property PaneTheme theme: PaneTheme {}
     readonly property alias item: terminal
+    // Whether anyone can see the terminal: its tab is the one shown, and so is the window.
+    readonly property bool seen: visible && Window.window !== null && Window.window.visible
 
     onResizePausedChanged: {
         if (!resizePaused) {
@@ -71,6 +73,25 @@ Item {
         }
         if (cursorFading.running) {
             cursorFading.reset();
+        }
+    }
+
+    // Takes in output: a terminal that nobody sees only notes it and catches up when it shows
+    // again, instead of taking the lock and drawing a frame for every piece of output in a
+    // tab in the background or a window that is hidden.
+    function refreshWhenSeen() {
+        if (seen) {
+            terminal.stale = false;
+            terminal.refresh();
+        } else {
+            terminal.stale = true;
+        }
+    }
+
+    onSeenChanged: {
+        if (seen && terminal.stale) {
+            terminal.stale = false;
+            terminal.refresh();
         }
     }
 
@@ -165,6 +186,8 @@ Item {
 
         // Whether the terminal got its first size: that one is no change to show.
         property bool sized: false
+        // Whether output came while nobody saw the terminal; see refreshWhenSeen().
+        property bool stale: false
 
         objectName: "terminal"
         anchors.fill: parent

@@ -491,13 +491,15 @@ for action in edit_select_all edit_copy select-line select-mode select-mode; do 
 # the same frame again, and a fading cursor 30 of them a second.
 hook SetSetting BlinkingCursor true; sleep 0.3
 run "clear"
-# The terminals that do not blink, of all of them: only the one in which the program runs.
+# The terminals that do not blink, of all of them: one more than before only while the
+# program hides the cursor. Terminals in tabs in the background learn of the setting when
+# they show, so they count as well, before and after.
 blinks() { hook Property terminal cursorBlinks | grep -o false | wc -l; }
 shown_blinks=$(blinks)
 run "printf '\\033[?25l'"
 hidden_blinks=$(blinks)
 run "printf '\\033[?25h'"
-check "a blinking cursor stops blinking while a program hides it" "0 1 0" "$shown_blinks $hidden_blinks $(blinks)"
+check "a blinking cursor stops blinking while a program hides it" "1 0" "$((hidden_blinks - shown_blinks)) $(($(blinks) - shown_blinks))"
 hook SetSetting BlinkingCursor false; sleep 0.3
 
 # A blinking cursor rests, steady and shown, after a while without input or output, and a key
@@ -561,6 +563,27 @@ check "closing a tab with a stopped shell ends the shell" gone \
     "$(kill -0 "$shell_pid" 2>/dev/null && echo running || echo gone)"
 kill -CONT "$shell_pid" 2>/dev/null
 sessions raiseSession "$first"; sleep 0.4
+
+# Output in a terminal that nobody sees, in a tab in the background or with the window
+# hidden, only marks it stale; it catches up when it shows.
+first_terminal=$(sessions activeTerminalId)
+# Counted against the terminals of other tabs, which stay stale until they show.
+stale() { echo $(($(hook Property terminal stale | grep -o true | wc -l) - stale_before)); }
+stale_before=0
+stale_before=$(stale)
+background=$(sessions addSession); sleep 1
+sessions raiseSession "$background"; sleep 0.4
+sessions runCommandInTerminal "$first_terminal" "seq 1 40"; sleep 0.6
+stale_in_background=$(stale)
+sessions raiseSession "$first"; sleep 0.4
+stale_shown=$(stale)
+sessions removeSession "$background"; sleep 0.8
+window toggleWindowState; sleep 1
+sessions runCommandInTerminal "$first_terminal" "seq 1 40"; sleep 0.6
+stale_hidden=$(stale)
+window toggleWindowState; sleep 1
+check "output nobody sees waits until the terminal shows" "1 0 1 0" "$stale_in_background $stale_shown $stale_hidden $(stale)"
+run "clear"
 
 sessions runCommandInTerminal "$(sessions activeTerminalId)" "echo dbus > $work/dbus"; sleep 0.6
 check "D-Bus runs a command in a given terminal" "dbus|" "$(content "$work/dbus")"

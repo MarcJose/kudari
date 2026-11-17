@@ -98,7 +98,7 @@ Window {
         onTerminalDirty: terminalId => {
             const pane = sessionArea.panes[terminalId];
             if (pane) {
-                pane.item.refresh();
+                pane.refreshWhenSeen();
             }
         }
         onFocusTerminal: terminalId => focusLater.request(terminalId)
