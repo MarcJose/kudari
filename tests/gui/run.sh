@@ -571,18 +571,28 @@ first_terminal=$(sessions activeTerminalId)
 stale() { echo $(($(hook Property terminal stale | grep -o true | wc -l) - stale_before)); }
 stale_before=0
 stale_before=$(stale)
+# The terminals without a size, against those of other tabs as well: Qt frees the image of
+# a terminal in a tab in the background.
+sizeless() { echo $(($(hook Property terminal width | tr -s ', ' '\n' | grep -cxE '0(\.0*)?') - sizeless_before)); }
+sizeless_before=0
+sizeless_before=$(sizeless)
 background=$(sessions addSession); sleep 1
 sessions raiseSession "$background"; sleep 0.4
 sessions runCommandInTerminal "$first_terminal" "seq 1 40"; sleep 0.6
 stale_in_background=$(stale)
+sizeless_in_background=$(sizeless)
 sessions raiseSession "$first"; sleep 0.4
 stale_shown=$(stale)
+# Now the new tab is the one in the background; closed, it leaves none.
+sizeless_shown=$(sizeless)
 sessions removeSession "$background"; sleep 0.8
+sizeless_closed=$(sizeless)
 window toggleWindowState; sleep 1
 sessions runCommandInTerminal "$first_terminal" "seq 1 40"; sleep 0.6
 stale_hidden=$(stale)
 window toggleWindowState; sleep 1
 check "output nobody sees waits until the terminal shows" "1 0 1 0" "$stale_in_background $stale_shown $stale_hidden $(stale)"
+check "a terminal in a tab in the background has no size until it shows" "1 1 0" "$sizeless_in_background $sizeless_shown $sizeless_closed"
 run "clear"
 
 sessions runCommandInTerminal "$(sessions activeTerminalId)" "echo dbus > $work/dbus"; sleep 0.6

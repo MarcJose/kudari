@@ -91,7 +91,8 @@ Item {
     onSeenChanged: {
         if (seen && terminal.stale) {
             terminal.stale = false;
-            terminal.refresh();
+            // Once the terminal has its size again, which comes with the same change.
+            Qt.callLater(terminal.refresh);
         }
     }
 
@@ -189,12 +190,19 @@ Item {
         // Whether output came while nobody saw the terminal; see refreshWhenSeen().
         property bool stale: false
 
+        // The room of the scrollbar beside the terminal. From the setting, not from
+        // scrollBar.visible: that turns false with a hidden tab, and the terminal would get more
+        // columns there and wrap again on every switch of tabs.
+        readonly property real leftGap: pane.config.ScrollBarPosition === "left" ? scrollBar.width : 0
+        readonly property real rightGap: pane.config.ScrollBarPosition !== "left" && pane.config.ScrollBarPosition !== "hidden" ? scrollBar.width : 0
+
         objectName: "terminal"
-        anchors.fill: parent
-        // From the setting, not from scrollBar.visible: that turns false with a hidden tab, and
-        // the terminal would get more columns there and wrap again on every switch of tabs.
-        anchors.leftMargin: pane.config.ScrollBarPosition === "left" ? scrollBar.width : 0
-        anchors.rightMargin: pane.config.ScrollBarPosition !== "left" && pane.config.ScrollBarPosition !== "hidden" ? scrollBar.width : 0
+        // A terminal in a tab in the background has no size: Qt then frees its image and its
+        // texture, some MB each, and draws nothing. It keeps its columns and lines, since
+        // applySize() leaves out any size below a cell, and catches up when it shows.
+        x: leftGap
+        width: pane.visible ? Math.max(0, parent.width - leftGap - rightGap) : 0
+        height: pane.visible ? parent.height : 0
         terminalId: pane.terminalId
         termFont: metrics.font
         // Cells of whole pixels of the device, also at a scale such as 125 %: every cell then
@@ -214,6 +222,8 @@ Item {
 
         // Width and height change one after the other. A shell that saw the value in
         // between would redraw its prompt, so only the final size is reported.
+        // Below a cell, as in a tab in the background, the terminal keeps its size: the program
+        // in it gets no change of size and wraps nothing.
         function applySize() {
             if (!pane.resizePaused && width > cellWidth && height > cellHeight) {
                 // columns and lines change within `resizeTo`, still with sized false.
@@ -595,8 +605,8 @@ Item {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         // As wide as the terminal, beside the scrollbar wherever that is.
-        anchors.leftMargin: terminal.anchors.leftMargin
-        anchors.rightMargin: terminal.anchors.rightMargin
+        anchors.leftMargin: terminal.leftGap
+        anchors.rightMargin: terminal.rightGap
         height: searchRow.implicitHeight + pane.theme.smallSpacing * 2
         color: pane.theme.backgroundColor
 

@@ -162,18 +162,31 @@ std::uint32_t rk_glyph_index(const QRawFont &font, std::uint32_t character)
 // no fast way to draw text: it converts every pixel of every glyph to 64 bits and back. Into
 // ARGB32_Premultiplied it draws text several times faster, so a frame goes there first and
 // then to the item in one piece. One image per thread serves all terminals of a window: it
-// grows to the largest of them, and each draws into its top left corner. Null when the target
-// has no size.
+// grows to the largest of them, and each draws into its top left corner. It shrinks to the
+// frame again once it has been more than twice as large for a while, as after full screen,
+// and not for a single smaller terminal among larger ones. Null when the target has no size.
 std::unique_ptr<RkFrame> rk_frame_begin(QPainter &target, bool opaque)
 {
+    // Frames in a row for which the image was more than twice as large as needed.
+    constexpr int roomyFrames = 120;
     thread_local QImage image;
+    thread_local int roomy = 0;
     QPaintDevice *device = target.device();
     if (device == nullptr || device->width() <= 0 || device->height() <= 0) {
         return nullptr;
     }
     const QSize size(device->width(), device->height());
+    const qint64 needed = qint64(size.width()) * size.height();
     if (image.width() < size.width() || image.height() < size.height()) {
         image = QImage(size.expandedTo(image.size()), QImage::Format_ARGB32_Premultiplied);
+        roomy = 0;
+    } else if (qint64(image.width()) * image.height() > 2 * needed) {
+        if (++roomy > roomyFrames) {
+            image = QImage(size, QImage::Format_ARGB32_Premultiplied);
+            roomy = 0;
+        }
+    } else {
+        roomy = 0;
     }
     image.setDevicePixelRatio(device->devicePixelRatioF());
     // An opaque terminal paints its background over all of it first.
