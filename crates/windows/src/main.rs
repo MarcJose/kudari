@@ -30,6 +30,8 @@ A drop-down terminal. A second start shows or hides the window of the first one.
   --version    show the version";
 
 fn main() {
+    // Before anything loads a library, also for `mcp`.
+    win::rk_win_harden_dll_search();
     let command = std::env::args().nth(1);
     match command.as_deref() {
         Some("mcp") => {
