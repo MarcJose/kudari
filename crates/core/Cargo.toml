@@ -38,6 +38,11 @@ windows-sys = { version = "0.61", features = [
 name = "core"
 harness = false
 
+# The allocations of the same frames and cases, with an allocator that counts them.
+[[bench]]
+name = "allocations"
+harness = false
+
 [features]
 # Random input for the tests of the front ends, which feed it to their own parsers.
 fuzz = []
