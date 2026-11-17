@@ -45,6 +45,8 @@ pub mod qobject {
         type QPainter = cxx_qt_lib::QPainter;
         include!("cxx-qt-lib/qsizef.h");
         type QSizeF = cxx_qt_lib::QSizeF;
+        include!("cxx-qt-lib/qcolor.h");
+        type QColor = cxx_qt_lib::QColor;
         include!("cxx-qt-lib/qvariant.h");
         type QVariant = cxx_qt_lib::QVariant;
         include!("cxx-qt-lib/qlist.h");
@@ -136,6 +138,16 @@ pub mod qobject {
 
         #[inherit]
         fn update(self: Pin<&mut Self>);
+
+        /// The color Qt fills the image of the item with before each paint; none if invalid.
+        #[inherit]
+        #[cxx_name = "setFillColor"]
+        fn set_fill_color(self: Pin<&mut Self>, color: &QColor);
+
+        /// Whether the item covers all its pixels, so that Qt draws it without blending.
+        #[inherit]
+        #[cxx_name = "setOpaquePainting"]
+        fn set_opaque_painting(self: Pin<&mut Self>, opaque: bool);
 
         /// Applies a new pixel size to the grid.
         #[qinvokable]
@@ -261,6 +273,20 @@ impl cxx_qt::Initialize for qobject::TerminalItem {
     fn initialize(mut self: Pin<&mut Self>) {
         // SAFETY: the pointer is only used during the call.
         unsafe { qobject::rk_enable_input_method(self.as_mut().get_unchecked_mut()) };
+        // Every frame replaces all pixels of the item (see `rk_frame_end`), so Qt need not clear
+        // them first, one pass over the whole image less.
+        self.as_mut().set_fill_color(&QColor::default());
+        // An opaque terminal paints its background over all of it: Qt then draws it without
+        // blending and leaves out what lies behind.
+        let opaque = *self.opaque();
+        self.as_mut().set_opaque_painting(opaque);
+        self.as_mut()
+            .on_opaque_changed(|mut item| {
+                let opaque = *item.opaque();
+                item.as_mut().set_opaque_painting(opaque);
+                item.update();
+            })
+            .release();
         self.as_mut()
             .on_focused_changed(|mut item| {
                 item.as_mut().report_focus();
@@ -1011,7 +1037,7 @@ impl qobject::TerminalItem {
             false
         };
         if drawn {
-            kde::rk_frame_end(target, frame, opaque);
+            kde::rk_frame_end(target, frame);
         } else {
             self.paint_frame(target);
         }
