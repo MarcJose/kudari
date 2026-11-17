@@ -54,6 +54,12 @@ impl Signal {
 pub trait Programs: Send + Sync {
     /// Whether a program other than the shell runs in the foreground.
     fn is_busy(&self) -> bool;
+    /// The same for what is only shown, such as the mark of a busy tab: it may come from a
+    /// look at the processes a moment ago, which a platform that has to list all processes
+    /// for it shares between the terminals.
+    fn is_busy_recent(&self) -> bool {
+        self.is_busy()
+    }
     /// The working directory of the program in the foreground, or else of the shell.
     fn working_directory(&self) -> Option<PathBuf>;
     /// The name of the program in the foreground.

@@ -700,6 +700,11 @@ impl Backend {
         self.programs.is_busy()
     }
 
+    /// The same for what is only shown; see [`Programs::is_busy_recent`].
+    pub fn is_busy_recent(&self) -> bool {
+        self.programs.is_busy_recent()
+    }
+
     /// Sends a signal to the program in the foreground. A console has no signal for
     /// interrupting, so there the terminal types Ctrl+C.
     pub fn send_signal(&self, signal: Signal) {
