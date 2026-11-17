@@ -721,11 +721,20 @@ impl qobject::TerminalItem {
         if !*self.keyboard_enabled() {
             return;
         }
-        if let Some(backend) = self.as_ref().backend() {
-            backend.term.lock().selection = None;
-            backend.write_user_input(text.to_string().into_bytes());
+        let Some(backend) = self.as_ref().backend() else {
+            return;
+        };
+        let changes = {
+            let mut term = backend.term.lock();
+            let changes = view::typing_changes_view(&term);
+            term.selection = None;
+            changes
+        };
+        backend.write_user_input(text.to_string().into_bytes());
+        // As with a key: the echo brings its own frame.
+        if changes {
+            self.as_mut().refresh();
         }
-        self.as_mut().refresh();
     }
 
     fn mouse_press(mut self: Pin<&mut Self>, x: f64, y: f64, button: i32, clicks: i32, modifiers: i32) {
