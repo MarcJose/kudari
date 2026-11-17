@@ -110,10 +110,65 @@ pub enum Paint {
     Text {
         x: f64,
         y: f64,
-        text: String,
+        text: Glyph,
         color: Rgb,
         font: FontStyle,
     },
+}
+
+/// The text of a [`Paint::Text`]: nearly always the one character of a cell, which it keeps
+/// without an allocation of its own, as a frame has one for each cell; a string only for a
+/// cell with combining marks and for the few labels.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Glyph {
+    /// One character, in UTF-8, and how many of the bytes it takes.
+    Char([u8; 4], u8),
+    Text(String),
+}
+
+impl Glyph {
+    /// The character of a cell with its combining marks, as many as are drawn.
+    fn of_cell(character: char, zero_width: Option<&[char]>) -> Self {
+        match zero_width {
+            Some(marks) if !marks.is_empty() => {
+                let mut text = String::from(character);
+                // A program can pile up any number on one cell, which every frame would shape.
+                text.extend(marks.iter().take(MAX_ZERO_WIDTH));
+                Self::Text(text)
+            }
+            _ => Self::from(character),
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Char(bytes, length) => bytes
+                .get(..usize::from(*length))
+                .and_then(|bytes| std::str::from_utf8(bytes).ok())
+                .unwrap_or_default(),
+            Self::Text(text) => text,
+        }
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.as_str().is_empty()
+    }
+}
+
+impl From<char> for Glyph {
+    fn from(character: char) -> Self {
+        let mut bytes = [0; 4];
+        let length = character.encode_utf8(&mut bytes).len() as u8;
+        Self::Char(bytes, length)
+    }
+}
+
+impl From<String> for Glyph {
+    fn from(text: String) -> Self {
+        Self::Text(text)
+    }
 }
 
 /// What a frame depends on besides the terminal and its options.
@@ -323,6 +378,15 @@ impl Run {
 /// off a glyph that reaches into the next cell, such as an italic one.
 #[must_use]
 pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene) -> Vec<Paint> {
+    let mut paints = Vec::new();
+    frame_into(term, options, scene, &mut paints);
+    paints
+}
+
+/// The same as [`frame`] into `out`, which it clears first: a caller that keeps `out` from one
+/// frame to the next allocates it once, not again for every frame.
+pub fn frame_into<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene, out: &mut Vec<Paint>) {
+    out.clear();
     let scheme = scene.scheme;
     let geometry = &scene.geometry;
     let (grid_columns, grid_lines) = (term.columns() as i32, term.screen_lines() as i32);
@@ -332,16 +396,18 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
     let offset = content.display_offset as i32;
     let cursor = content.cursor;
     let selection = content.selection;
+    // The underlines, strikeouts and lines of the cells; the backgrounds go to `out` first.
     let mut paints = Vec::new();
     let fill = |rect: Rect, color: Rgb, paints: &mut Vec<Paint>| paints.push(Paint::Fill(rect, color));
     // Neighbouring cells of one color in a line make one rectangle: a coloured bar of a
     // program such as `mc`, or a selection over the screen, is then a few fills a line instead
     // of one for each cell. The backgrounds come before the underlines and the lines of the
     // cells, which stay within their cells.
-    let mut backgrounds = Vec::new();
+    let backgrounds = out;
     let mut run: Option<Run> = None;
 
-    let mut glyphs = Vec::new();
+    // About one glyph a cell: room for them at once, rather than growing again and again.
+    let mut glyphs = Vec::with_capacity((grid_columns * grid_lines).max(0) as usize);
     let mut cursor_glyph = None;
     // The matches come in the order of the cells, so one index walks along with them; a
     // search over all matches for each cell took long with a frequent pattern.
@@ -382,7 +448,7 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             }
         } else {
             if let Some(done) = run.take() {
-                done.fill(geometry, &mut backgrounds);
+                done.fill(geometry, backgrounds);
             }
             if back != scheme.background {
                 run = Some(Run {
@@ -437,11 +503,7 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
         } else if cell.c != ' ' && cell.c != '\0' {
             // Every glyph goes to its own cell: the font's advance is fractional, while the
             // cells sit on whole pixels so that columns line up.
-            let mut text = String::from(cell.c);
-            if let Some(zero_width) = cell.zerowidth() {
-                // A program can pile up any number on one cell, which every frame would shape.
-                text.extend(zero_width.iter().take(MAX_ZERO_WIDTH));
-            }
+            let text = Glyph::of_cell(cell.c, cell.zerowidth());
             let (x, y) = geometry.baseline(column, line);
             glyphs.push(Paint::Text {
                 x,
@@ -454,21 +516,19 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
         if point == cursor.point {
             // The whole cell, with its accents, which the block cursor covers; nothing of a
             // hidden one, as a program shows a password with SGR 8.
-            let mut text = String::from(cell.c);
-            if let Some(zero_width) = cell.zerowidth() {
-                text.extend(zero_width.iter().take(MAX_ZERO_WIDTH));
-            }
-            if flags.contains(Flags::HIDDEN) {
-                text.clear();
-            }
+            let text = if flags.contains(Flags::HIDDEN) {
+                Glyph::Text(String::new())
+            } else {
+                Glyph::of_cell(cell.c, cell.zerowidth())
+            };
             cursor_glyph = Some((text, cell.c, flags, is_picture(flags, cell.zerowidth()), foreground));
         }
     }
     if let Some(done) = run.take() {
-        done.fill(geometry, &mut backgrounds);
+        done.fill(geometry, backgrounds);
     }
     backgrounds.append(&mut paints);
-    let mut paints = backgrounds;
+    let paints = backgrounds;
     paints.append(&mut glyphs);
 
     // While the view is scrolled back, the cursor can be below the last line: it is not on
@@ -491,7 +551,7 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
         };
         for rect in cursor_rects(geometry, column, line, cells, shape) {
             if fade == 255 {
-                fill(rect, color, &mut paints);
+                fill(rect, color, paints);
             } else {
                 paints.push(Paint::Shade(rect, color, fade));
             }
@@ -517,12 +577,12 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
     }
 
     for (index, (_, line, column)) in crate::view::visible_hints(scene.hints, options.reverse_url_hints) {
-        fill(geometry.cell_rect(*column, *line, 1.0), BLACK, &mut paints);
+        fill(geometry.cell_rect(*column, *line, 1.0), BLACK, paints);
         let (x, y) = geometry.baseline(*column, *line);
         paints.push(Paint::Text {
             x,
             y,
-            text: (index + 1).to_string(),
+            text: Glyph::Text((index + 1).to_string()),
             color: WHITE,
             font: FontStyle::default(),
         });
@@ -535,7 +595,7 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             width: 1.0,
             height: f64::from(grid_lines) * geometry.cell_height,
         };
-        fill(rect, blend(scheme.foreground, scheme.background, 96), &mut paints);
+        fill(rect, blend(scheme.foreground, scheme.background, 96), paints);
     }
     if options.line_numbers {
         // At the end of each line, faded like faint text, so they stay out of the way.
@@ -547,13 +607,12 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             paints.push(Paint::Text {
                 x,
                 y,
-                text: number,
+                text: Glyph::Text(number),
                 color,
                 font: FontStyle::default(),
             });
         }
     }
-    paints
 }
 
 #[cfg(test)]
@@ -626,9 +685,23 @@ mod tests {
         let color = options.cursor_text_color.unwrap_or(scheme.background);
         let paints = frame(&term_with(output), options, &scene(&scheme, &[], &[]));
         paints.iter().rev().find_map(|paint| match paint {
-            Paint::Text { text, color: drawn, .. } if *drawn == color => Some(text.clone()),
+            Paint::Text { text, color: drawn, .. } if *drawn == color => Some(text.as_str().to_string()),
             _ => None,
         })
+    }
+
+    #[test]
+    fn a_glyph_keeps_one_character_of_any_length_and_its_marks() {
+        for character in ['a', 'é', '中', '😀'] {
+            let glyph = Glyph::from(character);
+            assert!(matches!(glyph, Glyph::Char(..)), "{character}");
+            assert_eq!(glyph.as_str(), character.to_string());
+        }
+        let marked = Glyph::of_cell('e', Some(&['\u{301}', '\u{302}']));
+        assert_eq!(marked.as_str(), "e\u{301}\u{302}");
+        let piled = Glyph::of_cell('e', Some(&['\u{301}'; 40]));
+        assert_eq!(piled.as_str().chars().count(), 1 + MAX_ZERO_WIDTH);
+        assert!(matches!(Glyph::of_cell('x', Some(&[])), Glyph::Char(..)));
     }
 
     #[test]
