@@ -1268,6 +1268,33 @@ mod tests {
     }
 
     #[test]
+    fn the_narrowest_grid_takes_any_output() {
+        // As narrow as a pane gets: wide characters, tabs, combining marks, the insert mode,
+        // deleting and inserting characters, and wrapping, each in a thread of its own, so
+        // that a loop shows as a timeout rather than a test that never ends.
+        let columns = usize::from(least_columns(1));
+        for output in [
+            "日本語\u{1f680}日本語\r\n",
+            "\ta\tb\t\tc\r\n",
+            "e\u{301}\u{302}\u{303}a\u{301}\r\n",
+            "\x1b[4hab日cd\x1b[4l\r\n",
+            "abc\x1b[1G\x1b[5P\x1b[5@日\x1b[3X\r\n",
+            "\x1b[?7lwide日本語\x1b[?7h\r\n",
+            "日\x1b[1D\x1b[1P\x1b[2;2H\x1b[1@本\r\n",
+        ] {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut term = term_with(&output.repeat(20), columns, 3, 100);
+                term.resize(TermSize::new(columns, 2));
+                let cells = term.renderable_content().display_iter.count();
+                let _ = sender.send(cells);
+            });
+            let cells = receiver.recv_timeout(std::time::Duration::from_secs(2));
+            assert_eq!(cells, Ok(columns * 2), "{output:?}");
+        }
+    }
+
+    #[test]
     fn shrinking_with_a_wide_character_in_the_history_comes_back() {
         // An emoji in the prompt and CJK in the output, and the pane as narrow as it gets.
         let mut term = term_with("\u{1f680} ready\n日本語のテキスト\nascii\n$ ", 40, 3, 100);
