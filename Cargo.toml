@@ -7,7 +7,7 @@
 members = ["crates/core", "crates/qt", "crates/windows", "crates/console"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Marc Jose <marc@hahn-jose.de>"]
 repository = "https://github.com/MarcJose/kudari"
