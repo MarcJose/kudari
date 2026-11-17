@@ -220,6 +220,11 @@ fn least_columns(columns: u16) -> u16 {
 /// user interface, so all of them go there, or an answer would overtake an earlier one:
 /// programs ask for a color and then for the device attributes, and take the answer to
 /// the second as a sign that the first has none.
+/// The most answers that wait for the user interface. A program that asks faster than the user
+/// interface answers, as `yes $'\e[c'` while the window is busy, would otherwise make the list
+/// grow without end; more questions than this get no answer, as from a terminal that is slow.
+const MAX_REPLIES: usize = 4096;
+
 enum Reply {
     Text(String),
     /// One of the colors, by its number in [`Colors`].
@@ -288,6 +293,9 @@ impl Proxy {
     fn reply(&self, reply: Reply) {
         let first = {
             let mut replies = lock(&self.mailbox.replies);
+            if replies.len() >= MAX_REPLIES {
+                return;
+            }
             replies.push(reply);
             replies.len() == 1
         };
@@ -1136,6 +1144,14 @@ mod tests {
     }
 
     #[test]
+    fn questions_beyond_what_waits_get_no_answer() {
+        // Far more questions than the user interface takes before it answers them.
+        let (work, answer) = answer_to(&"\x1b[c".repeat(MAX_REPLIES * 3));
+        assert_eq!(work, 1);
+        assert_eq!(answer, "\x1b[?6c".repeat(MAX_REPLIES));
+    }
+
+    #[test]
     fn a_flood_of_questions_is_one_piece_of_work_for_the_front_end() {
         // `yes $'\e[c'`: a thousand questions for the device attributes.
         let (work, answer) = answer_to(&"\x1b[c".repeat(1000));
@@ -1249,6 +1265,33 @@ mod tests {
         assert_eq!(grid_size(0, 100, 9.0, 18.0).0, MIN_COLUMNS as u16);
         assert_eq!(least_columns(1), 2);
         assert_eq!(least_columns(80), 80);
+    }
+
+    #[test]
+    fn the_narrowest_grid_takes_any_output() {
+        // As narrow as a pane gets: wide characters, tabs, combining marks, the insert mode,
+        // deleting and inserting characters, and wrapping, each in a thread of its own, so
+        // that a loop shows as a timeout rather than a test that never ends.
+        let columns = usize::from(least_columns(1));
+        for output in [
+            "日本語\u{1f680}日本語\r\n",
+            "\ta\tb\t\tc\r\n",
+            "e\u{301}\u{302}\u{303}a\u{301}\r\n",
+            "\x1b[4hab日cd\x1b[4l\r\n",
+            "abc\x1b[1G\x1b[5P\x1b[5@日\x1b[3X\r\n",
+            "\x1b[?7lwide日本語\x1b[?7h\r\n",
+            "日\x1b[1D\x1b[1P\x1b[2;2H\x1b[1@本\r\n",
+        ] {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut term = term_with(&output.repeat(20), columns, 3, 100);
+                term.resize(TermSize::new(columns, 2));
+                let cells = term.renderable_content().display_iter.count();
+                let _ = sender.send(cells);
+            });
+            let cells = receiver.recv_timeout(std::time::Duration::from_secs(2));
+            assert_eq!(cells, Ok(columns * 2), "{output:?}");
+        }
     }
 
     #[test]

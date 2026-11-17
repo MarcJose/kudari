@@ -38,6 +38,10 @@ const MAX_SEQUENCE: usize = 4096;
 /// some MiB; one that is longer copies nothing rather than its start.
 pub const MAX_OSC: usize = 8 << 20;
 
+/// The most of any other OSC sequence, as a title, a link or a color, which need far less:
+/// vte would otherwise keep up to [`MAX_OSC`] of each, for every terminal, until it ends.
+pub const MAX_OSC_OTHER: usize = 64 << 10;
+
 /// What vte drops inside OSC: these bytes neither end it nor become part of it.
 fn dropped_in_osc(byte: u8) -> bool {
     matches!(byte, 0x00..=0x06 | 0x08..=0x17 | 0x19 | 0x1c..=0x1f)
@@ -187,11 +191,18 @@ impl Scanner {
                 (State::Osc, 0x18 | 0x1a) => State::Ground,
                 (State::Osc, byte) if dropped_in_osc(byte) => State::Osc,
                 (State::Osc, _) => {
-                    // vte keeps the separators apart, not in its buffer.
+                    // vte keeps the separators apart, not in its buffer. Only a text to copy may
+                    // take all of the limit.
+                    let copy = self.sequence.starts_with(b"52;");
+                    let limit = if copy {
+                        self.limit
+                    } else {
+                        self.limit.min(MAX_OSC_OTHER)
+                    };
                     if *byte != b';' {
-                        if self.length < self.limit {
+                        if self.length < limit {
                             self.length += 1;
-                        } else if self.length == self.limit && self.sequence.starts_with(b"52;") {
+                        } else if self.length == limit && copy {
                             // The start of a text to copy is not the text: a byte that base64
                             // does not know makes the copy fail as a whole.
                             *byte = b'!';
@@ -660,13 +671,32 @@ mod tests {
 
     #[test]
     fn an_osc_sequence_without_an_end_stops_growing() {
-        let mut pieces = vec![b"\x1b]0;".to_vec()];
+        // A text to copy, which may take the most of all.
+        let mut pieces = vec![b"\x1b]52;c;".to_vec()];
         pieces.extend(filler(MAX_OSC + (3 << 20)));
         pieces.push(b"\x07after".to_vec());
         let emulator = emulated(&pieces);
-        // "0" and the title, cut at the limit; what follows the sequence shows as before.
-        assert_eq!(emulator.oscs, [MAX_OSC]);
+        // "52", "c" and the text, cut at the limit, with the byte that spoils the copy; what
+        // follows the sequence shows as before.
+        assert_eq!(emulator.oscs, [MAX_OSC + 1]);
         assert_eq!(emulator.text, "after");
+    }
+
+    #[test]
+    fn other_sequences_than_a_copy_stop_far_earlier() {
+        // A title without an end: cut at the smaller limit, and what follows shows as before.
+        let mut pieces = vec![b"\x1b]2;".to_vec()];
+        pieces.extend(filler(MAX_OSC_OTHER * 4));
+        pieces.push(b"\x07after".to_vec());
+        let emulator = emulated(&pieces);
+        // "2" and the title.
+        assert_eq!(emulator.oscs, [MAX_OSC_OTHER]);
+        assert_eq!(emulator.text, "after");
+        // A copy of the same size passes whole.
+        let mut pieces = vec![b"\x1b]52;c;".to_vec()];
+        pieces.extend(filler(MAX_OSC_OTHER * 4));
+        pieces.push(b"\x07".to_vec());
+        assert_eq!(emulated(&pieces).oscs, [2 + 1 + MAX_OSC_OTHER * 4]);
     }
 
     #[test]
