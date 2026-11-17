@@ -33,6 +33,11 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
 ] }
 
+# What needs no window, measured without KWin or Qt; see the head of the file.
+[[bench]]
+name = "core"
+harness = false
+
 [features]
 # Random input for the tests of the front ends, which feed it to their own parsers.
 fuzz = []
