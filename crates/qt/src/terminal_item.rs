@@ -1110,7 +1110,8 @@ impl qobject::TerminalItem {
             .as_ref()
             .map(|badge| (backend.local_title(&badge.format), badge));
         let fonts = Fonts::new(self.term_font(), &options);
-        let (paints, fresh_words) = {
+        let mut paints = PAINTS.take();
+        let fresh_words = {
             let term = backend.lock();
             // Only the words under the lock; whether they name files is looked up later.
             let fresh_words = if *self.url_hints() {
@@ -1147,7 +1148,8 @@ impl qobject::TerminalItem {
                 hints: self.view.hints(),
                 matches: self.view.matches(),
             };
-            (render::frame(&term, &options, &scene), fresh_words)
+            render::frame_into(&term, &options, &scene, &mut paints);
+            fresh_words
         };
         if let Some(words) = fresh_words {
             self.as_mut().look_for_hint_files(words, backend);
@@ -1169,19 +1171,19 @@ impl qobject::TerminalItem {
             );
         }
         let mut runs = GlyphRuns::default();
-        for paint in paints {
+        for paint in &paints {
             match paint {
                 Paint::Fill(rect, color) => {
                     // What comes before a fill stays under it.
                     runs.draw(painter.as_mut());
                     painter
                         .as_mut()
-                        .fill_rect(&QRectF::new(rect.x, rect.y, rect.width, rect.height), &qcolor(color));
+                        .fill_rect(&QRectF::new(rect.x, rect.y, rect.width, rect.height), &qcolor(*color));
                 }
                 Paint::Shade(rect, color, alpha) => {
                     runs.draw(painter.as_mut());
-                    let mut color = qcolor(color);
-                    color.set_alpha_f(f32::from(alpha) / 255.0);
+                    let mut color = qcolor(*color);
+                    color.set_alpha_f(f32::from(*alpha) / 255.0);
                     painter
                         .as_mut()
                         .fill_rect(&QRectF::new(rect.x, rect.y, rect.width, rect.height), &color);
@@ -1193,17 +1195,26 @@ impl qobject::TerminalItem {
                     color,
                     font,
                 } => {
-                    let slot = fonts.slot(font);
-                    if !runs.add(&painter, &fonts, slot, &text, (x, y), color) {
+                    let slot = fonts.slot(*font);
+                    if !runs.add(&painter, &fonts, slot, text.as_str(), (*x, *y), *color) {
                         painter.as_mut().set_font(fonts.get(slot));
-                        painter.as_mut().set_pen(&QPen::from(&qcolor(color)));
-                        kde::rk_draw_text(painter.as_mut(), &QPointF::new(x, y), &QString::from(text.as_str()));
+                        painter.as_mut().set_pen(&QPen::from(&qcolor(*color)));
+                        kde::rk_draw_text(painter.as_mut(), &QPointF::new(*x, *y), &QString::from(text.as_str()));
                     }
                 }
             }
         }
         runs.draw(painter.as_mut());
+        paints.clear();
+        PAINTS.set(paints);
     }
+}
+
+thread_local! {
+    /// What the last frame on this thread painted, kept so that the next need not allocate
+    /// it again. One for all terminals: those of a window paint one after the other on its
+    /// render thread, and a buffer for each would hold some MB for every tab.
+    static PAINTS: std::cell::Cell<Vec<Paint>> = const { std::cell::Cell::new(Vec::new()) };
 }
 
 /// The glyphs of a frame by font and color, so that each group takes one call of
