@@ -90,7 +90,15 @@ tools/windows-package.ps1 -Out dist && tests/windows/package.ps1 dist  # the pac
 tests/windows/gui.ps1 path\to\kudari.exe  # the window, on a Windows desktop
 tools/security.sh                                # secrets, dependencies, workflows
 tools/bench.sh                                   # speed of output and drawing, against other terminals
+cargo bench -p kudari-core --bench core          # scanner, parser and frames alone, without a window
 ```
+
+`tools/bench.sh` measures Kudari as a whole in a virtual KWin, next to other terminals.
+`cargo bench -p kudari-core --bench core` measures the parts without a window: the scanner of
+the marks and the parser of the emulator over the same loads, and the paints of a frame for
+a few kinds of screen. It takes seconds and needs no KWin, so a change to one of those parts
+can be measured before and after at once; `-- throughput`, `-- frame` and `-- --runs N`
+choose. Compare figures only from the same computer.
 
 On Windows, `tools/windows-package.ps1` builds the Windows front end and packs it, as the
 release workflow does. It needs PowerShell 7, Git, Rust, Python, the Visual Studio Build
