@@ -299,6 +299,23 @@ fn cursor_rects(geometry: &Geometry, column: i32, line: i32, cells: f64, shape: 
     }
 }
 
+/// Cells next to each other in one line with the same background, from column `start` up to
+/// before `end`.
+#[derive(Clone, Copy)]
+struct Run {
+    line: i32,
+    start: i32,
+    end: i32,
+    color: Rgb,
+}
+
+impl Run {
+    fn fill(self, geometry: &Geometry, paints: &mut Vec<Paint>) {
+        let rect = geometry.cell_rect(self.start, self.line, f64::from(self.end - self.start));
+        paints.push(Paint::Fill(rect, self.color));
+    }
+}
+
 /// Everything to paint over the background of the terminal: the backgrounds, underlines,
 /// strikeouts and box drawing of the cells, then their glyphs, then the cursor, the numbers of
 /// links, the vertical line and the line numbers. The glyphs come after all backgrounds, so
@@ -317,6 +334,12 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
     let selection = content.selection;
     let mut paints = Vec::new();
     let fill = |rect: Rect, color: Rgb, paints: &mut Vec<Paint>| paints.push(Paint::Fill(rect, color));
+    // Neighbouring cells of one color in a line make one rectangle: a coloured bar of a
+    // program such as `mc`, or a selection over the screen, is then a few fills a line instead
+    // of one for each cell. The backgrounds come before the underlines and the lines of the
+    // cells, which stay within their cells.
+    let mut backgrounds = Vec::new();
+    let mut run: Option<Run> = None;
 
     let mut glyphs = Vec::new();
     let mut cursor_glyph = None;
@@ -352,8 +375,23 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
         }
 
         let cells = if flags.contains(Flags::WIDE_CHAR) { 2.0 } else { 1.0 };
-        if back != scheme.background {
-            fill(geometry.cell_rect(column, line, cells), back, &mut paints);
+        let continues = run.is_some_and(|open| open.line == line && open.end == column && open.color == back);
+        if continues {
+            if let Some(open) = run.as_mut() {
+                open.end += cells as i32;
+            }
+        } else {
+            if let Some(done) = run.take() {
+                done.fill(geometry, &mut backgrounds);
+            }
+            if back != scheme.background {
+                run = Some(Run {
+                    line,
+                    start: column,
+                    end: column + cells as i32,
+                    color: back,
+                });
+            }
         }
         if flags.intersects(Flags::ALL_UNDERLINES) {
             let color = cell
@@ -426,6 +464,11 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
             cursor_glyph = Some((text, cell.c, flags, is_picture(flags, cell.zerowidth()), foreground));
         }
     }
+    if let Some(done) = run.take() {
+        done.fill(geometry, &mut backgrounds);
+    }
+    backgrounds.append(&mut paints);
+    let mut paints = backgrounds;
     paints.append(&mut glyphs);
 
     // While the view is scrolled back, the cursor can be below the last line: it is not on
@@ -909,9 +952,52 @@ mod tests {
     }
 
     #[test]
+    fn neighbouring_cells_of_one_background_make_one_rectangle() {
+        let scheme = colors::active();
+        let red = Rgb { r: 200, g: 0, b: 0 };
+        let blue = Rgb { r: 0, g: 0, b: 200 };
+        // A red bar over four cells with a wide character in it, a gap, two red cells, then
+        // a blue one right after them; on the next line, red again.
+        let term = term_with(
+            "\x1b[48;2;200;0;0mab\u{4e2d}\x1b[0m \x1b[48;2;200;0;0mcd\x1b[48;2;0;0;200me\x1b[0m\r\n\x1b[48;2;200;0;0mf\x1b[0m",
+        );
+        let mut quiet = scene(&scheme, &[], &[]);
+        quiet.cursor_hidden = true;
+        let backgrounds = fills(&frame(&term, &Options::default(), &quiet));
+        assert_eq!(
+            backgrounds,
+            [
+                (GEOMETRY.cell_rect(0, 0, 4.0), red),
+                (GEOMETRY.cell_rect(5, 0, 2.0), red),
+                (GEOMETRY.cell_rect(7, 0, 1.0), blue),
+                (GEOMETRY.cell_rect(0, 1, 1.0), red),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_selection_over_the_screen_is_one_rectangle_a_line() {
+        let scheme = colors::active();
+        let mut term = term_with("abcdefghij\r\nklmnopqrst\r\nuvwxyz");
+        let mut selection = Selection::new(SelectionType::Lines, Point::new(Line(0), Column(0)), Side::Left);
+        selection.update(Point::new(Line(2), Column(9)), Side::Right);
+        term.selection = Some(selection);
+        let mut quiet = scene(&scheme, &[], &[]);
+        quiet.cursor_hidden = true;
+        let backgrounds = fills(&frame(&term, &Options::default(), &quiet));
+        assert_eq!(
+            backgrounds,
+            (0..3)
+                .map(|line| (GEOMETRY.cell_rect(0, line, 10.0), scheme.selection_background))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn glyphs_come_after_the_backgrounds_of_all_cells() {
         let scheme = colors::active();
-        let term = term_with("\x1b[41ma\x1b[42mb\x1b[0m\r\n\x1b[43mc\x1b[0m");
+        // Colors of their own, which no palette makes the same.
+        let term = term_with("\x1b[48;2;200;0;0ma\x1b[48;2;0;200;0mb\x1b[0m\r\n\x1b[48;2;0;0;200mc\x1b[0m");
         let mut quiet = scene(&scheme, &[], &[]);
         quiet.cursor_hidden = true;
         let paints = frame(&term, &Options::default(), &quiet);
@@ -1042,7 +1128,8 @@ mod tests {
         assert_eq!(found.get(1).map(|text| text.1), Some(BLACK));
         let backgrounds = fills(&paints);
         assert!(backgrounds.contains(&(GEOMETRY.cell_rect(0, 0, 1.0), scheme.selection_background)));
-        assert!(backgrounds.contains(&(GEOMETRY.cell_rect(4, 0, 1.0), SEARCH_HIGHLIGHT)));
+        // The three cells of the match make one rectangle.
+        assert!(backgrounds.contains(&(GEOMETRY.cell_rect(4, 0, 3.0), SEARCH_HIGHLIGHT)));
         let swapped = Options {
             invert_selection: true,
             ..Options::default()
