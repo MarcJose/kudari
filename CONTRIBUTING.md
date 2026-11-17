@@ -92,6 +92,7 @@ tools/security.sh                                # secrets, dependencies, workfl
 tools/bench.sh                                   # speed of output and drawing, against other terminals
 cargo bench -p kudari-core --bench core          # scanner, parser and frames alone, without a window
 cargo bench -p kudari-core --bench allocations   # the allocations of the same frames and cases
+tools/bench-compare.py                           # the core benchmark, main against the working tree
 ```
 
 `tools/bench.sh` measures Kudari as a whole in a virtual KWin, next to other terminals.
@@ -105,6 +106,13 @@ and `-- --runs N` choose. `--bench allocations` counts the allocations of the sa
 cases; counting needs an allocator of its own, which would make the times wrong, so it is a
 benchmark of its own. Benchmarks build with thin LTO, so that their times do not depend on
 the other code in them. Compare figures only from the same computer.
+
+On Linux, the core benchmark also counts the instructions of each figure, which vary far
+less than times: by less than a hundredth of a percent for a frame. `tools/bench-compare.py`
+builds the core benchmark of a commit, the merge base with `origin/main` by default, and of
+the working tree, runs both in turn and marks what changed: instructions by more than half a
+percent, or times by more than five where nothing could be counted. A change to the drawing,
+the parser or the scanner shows there in a minute, before a run of `tools/bench.sh`.
 
 On Windows, `tools/windows-package.ps1` builds the Windows front end and packs it, as the
 release workflow does. It needs PowerShell 7, Git, Rust, Python, the Visual Studio Build

@@ -128,6 +128,93 @@ pub fn feed(term: &mut Term<VoidListener>, bytes: &[u8]) {
     }
 }
 
+/// Counts the instructions that this thread runs in user space, which vary far less from run
+/// to run than times do: through `perf_event_open`, on Linux, if the kernel lets this process
+/// count its own (`perf_event_paranoid` up to 2). Elsewhere, or when it may not, nothing.
+pub struct Instructions {
+    #[cfg(target_os = "linux")]
+    file: std::fs::File,
+}
+
+#[cfg(target_os = "linux")]
+/// The attributes of the kernel's first version, which every later one accepts.
+#[repr(C)]
+#[derive(Default)]
+struct Attributes {
+    kind: u32,
+    size: u32,
+    config: u64,
+    sample_period: u64,
+    sample_type: u64,
+    read_format: u64,
+    flags: u64,
+    wakeup_events: u32,
+    breakpoint_type: u32,
+    config1: u64,
+}
+
+#[cfg(target_os = "linux")]
+impl Instructions {
+    const HARDWARE: u32 = 0;
+    const INSTRUCTIONS: u64 = 1;
+    const DISABLED: u64 = 1;
+    const EXCLUDE_KERNEL: u64 = 1 << 5;
+    const EXCLUDE_HYPERVISOR: u64 = 1 << 6;
+    const ENABLE: libc::c_ulong = 0x2400;
+    const DISABLE: libc::c_ulong = 0x2401;
+    const RESET: libc::c_ulong = 0x2403;
+
+    pub fn new() -> Option<Self> {
+        use std::os::fd::FromRawFd;
+        let attributes = Attributes {
+            kind: Self::HARDWARE,
+            size: size_of::<Attributes>() as u32,
+            config: Self::INSTRUCTIONS,
+            flags: Self::DISABLED | Self::EXCLUDE_KERNEL | Self::EXCLUDE_HYPERVISOR,
+            ..Attributes::default()
+        };
+        // SAFETY: the attributes live through the call and say their own size; the thread is
+        // this one (0) on any processor (-1), with no group and no flags.
+        let descriptor = unsafe { libc::syscall(libc::SYS_perf_event_open, &raw const attributes, 0, -1, -1, 0) };
+        let descriptor = i32::try_from(descriptor).ok().filter(|&descriptor| descriptor >= 0)?;
+        // SAFETY: the kernel just opened the descriptor, and nothing else owns it.
+        let file = unsafe { std::fs::File::from_raw_fd(descriptor) };
+        Some(Self { file })
+    }
+
+    fn control(&self, request: libc::c_ulong) {
+        use std::os::fd::AsRawFd;
+        // SAFETY: a request without an argument, on the descriptor of this counter.
+        unsafe { libc::ioctl(self.file.as_raw_fd(), request, 0) };
+    }
+
+    /// The instructions that `work` ran.
+    pub fn count(&self, work: &mut dyn FnMut()) -> u64 {
+        use std::io::Read;
+        self.control(Self::RESET);
+        self.control(Self::ENABLE);
+        work();
+        self.control(Self::DISABLE);
+        let mut bytes = [0; 8];
+        (&self.file)
+            .read_exact(&mut bytes)
+            .map_or(0, |()| u64::from_ne_bytes(bytes))
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl Instructions {
+    pub fn new() -> Option<Self> {
+        None
+    }
+
+    #[allow(clippy::unused_self, reason = "the same as on Linux, where it counts")]
+    pub fn count(&self, work: &mut dyn FnMut()) -> u64 {
+        work();
+        0
+    }
+}
+
 /// The cells of the frames: 8 by 15 pixels, at a scale of 1.
 pub fn geometry() -> Geometry {
     Geometry {

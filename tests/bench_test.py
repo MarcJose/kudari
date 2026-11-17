@@ -305,5 +305,46 @@ class Environment(unittest.TestCase):
         self.assertIn("kept, with --keep-env", "\n".join(self.describe(removed=["QT_SCALE_FACTOR"], kept=True)))
 
 
+compare_spec = importlib.util.spec_from_file_location("bench_compare", TOOLS / "bench-compare.py")
+compare = importlib.util.module_from_spec(compare_spec)
+compare_spec.loader.exec_module(compare)
+
+
+class Compare(unittest.TestCase):
+    def test_the_figures_come_from_the_csv_of_the_benchmark(self):
+        csv = "frame,text,us,270.5\nframe,text,instructions,8916201\nnot a figure\ncases,keys,us,oops\n"
+        self.assertEqual(compare.figures(csv), {("frame", "text", "us"): 270.5, ("frame", "text", "instructions"): 8916201.0})
+
+    def test_the_rounds_give_their_median(self):
+        rounds = [{("frame", "text", "us"): value} for value in (300.0, 270.0, 280.0)]
+        self.assertEqual(compare.combine(rounds), {("frame", "text", "us"): 280.0})
+
+    def marks(self, base, head):
+        # The metric from its column: names such as "link at" have spaces.
+        return {line[31:52].strip(): line.endswith("*") for line in compare.report(base, head)[2:] if line.strip() and not line.startswith("*")}
+
+    def test_a_change_of_instructions_is_marked_and_the_noise_of_times_is_not(self):
+        base = {("frame", "text", "us"): 270.0, ("frame", "text", "instructions"): 8_900_000.0}
+        # Three percent more instructions, and a time that moved by ten percent as well.
+        head = {("frame", "text", "us"): 297.0, ("frame", "text", "instructions"): 9_167_000.0}
+        self.assertEqual(self.marks(base, head), {"us": False, "instructions": True})
+        # The same instructions: a time that moved is noise.
+        head[("frame", "text", "instructions")] = 8_900_100.0
+        self.assertEqual(self.marks(base, head), {"us": False, "instructions": False})
+        # More than the floor, but a tenth of a percent of a large frame: noise as well.
+        head[("frame", "text", "instructions")] = 8_910_000.0
+        self.assertEqual(self.marks(base, head), {"us": False, "instructions": False})
+
+    def test_a_small_case_needs_more_than_the_floor_to_count(self):
+        base = {("cases", "link at", "instructions"): 19_729.0}
+        self.assertEqual(self.marks(base, {("cases", "link at", "instructions"): 19_888.0}), {"instructions": False})
+        self.assertEqual(self.marks(base, {("cases", "link at", "instructions"): 21_000.0}), {"instructions": True})
+
+    def test_without_counts_the_times_decide(self):
+        base = {("throughput", "plain", "parser_ms"): 130.0, ("throughput", "plain", "parser_instructions"): 0.0}
+        self.assertEqual(self.marks(base, {("throughput", "plain", "parser_ms"): 140.0, ("throughput", "plain", "parser_instructions"): 0.0}), {"parser_ms": True})
+        self.assertEqual(self.marks(base, {("throughput", "plain", "parser_ms"): 133.0, ("throughput", "plain", "parser_instructions"): 0.0}), {"parser_ms": False})
+
+
 if __name__ == "__main__":
     sys.exit(unittest.main())
