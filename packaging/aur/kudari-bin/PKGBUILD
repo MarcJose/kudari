@@ -7,7 +7,7 @@
 # sets the version and the checksum after each release.
 
 pkgname=kudari-bin
-pkgver=0.2.0
+pkgver=0.3.0
 pkgrel=1
 pkgdesc='A drop-down terminal for KDE Plasma on Wayland'
 arch=('x86_64')
@@ -23,7 +23,7 @@ depends=(
 provides=('kudari')
 conflicts=('kudari')
 source_x86_64=("$url/releases/download/v$pkgver/kudari-$pkgver-$CARCH-linux.tar.xz")
-sha256sums_x86_64=('be75728040943129249c0f43d3486136c85ea5fce202974ebac9e421387b2c16')
+sha256sums_x86_64=('7aaa4de1a4d7f80a0e9172fd8111a1bbf124317e8358279b799680c8912c916d')
 
 package() {
   cp -a usr "$pkgdir/"

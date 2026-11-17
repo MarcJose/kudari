@@ -1,6 +1,6 @@
 pkgbase = kudari-bin
 	pkgdesc = A drop-down terminal for KDE Plasma on Wayland
-	pkgver = 0.2.0
+	pkgver = 0.3.0
 	pkgrel = 1
 	url = https://github.com/MarcJose/kudari
 	arch = x86_64
@@ -34,7 +34,7 @@ pkgbase = kudari-bin
 	depends = kxmlgui
 	provides = kudari
 	conflicts = kudari
-	source_x86_64 = https://github.com/MarcJose/kudari/releases/download/v0.2.0/kudari-0.2.0-x86_64-linux.tar.xz
-	sha256sums_x86_64 = be75728040943129249c0f43d3486136c85ea5fce202974ebac9e421387b2c16
+	source_x86_64 = https://github.com/MarcJose/kudari/releases/download/v0.3.0/kudari-0.3.0-x86_64-linux.tar.xz
+	sha256sums_x86_64 = 7aaa4de1a4d7f80a0e9172fd8111a1bbf124317e8358279b799680c8912c916d
 
 pkgname = kudari-bin
