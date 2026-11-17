@@ -524,7 +524,9 @@ impl qobject::TerminalItem {
             let lines = term.screen_lines() as f64;
             let offset = term.grid().display_offset() as f64;
             let cursor = term.grid().cursor.point;
-            let blinks = term.cursor_style().blinking;
+            // Blinking and fading would only redraw the same frame while the cursor is hidden
+            // by the program or below the screen, many times a second for the fading one.
+            let blinks = term.cursor_style().blinking && render::cursor_on_screen(&term);
             let selection_mode = view::selection_mode(&term);
             let (origin_x, origin_y) = self.as_ref().text_origin(term.columns(), term.screen_lines());
             drop(term);
