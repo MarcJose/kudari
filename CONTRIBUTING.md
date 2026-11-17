@@ -91,14 +91,20 @@ tests/windows/gui.ps1 path\to\kudari.exe  # the window, on a Windows desktop
 tools/security.sh                                # secrets, dependencies, workflows
 tools/bench.sh                                   # speed of output and drawing, against other terminals
 cargo bench -p kudari-core --bench core          # scanner, parser and frames alone, without a window
+cargo bench -p kudari-core --bench allocations   # the allocations of the same frames and cases
 ```
 
 `tools/bench.sh` measures Kudari as a whole in a virtual KWin, next to other terminals.
 `cargo bench -p kudari-core --bench core` measures the parts without a window: the scanner of
 the marks and the parser of the emulator over the same loads, and the paints of a frame for
-a few kinds of screen. It takes seconds and needs no KWin, so a change to one of those parts
-can be measured before and after at once; `-- throughput`, `-- frame` and `-- --runs N`
-choose. Compare figures only from the same computer.
+a few kinds of screen, and smaller cases one by one: the words for the numbers of links, a link
+and a color under the mouse, box drawing, keys, a search through a long history, the copy as
+HTML and the wrapping on a resize. It takes seconds and needs no KWin, so a change to one of
+those parts can be measured before and after at once; `-- throughput`, `-- frame`, `-- cases`
+and `-- --runs N` choose. `--bench allocations` counts the allocations of the same frames and
+cases; counting needs an allocator of its own, which would make the times wrong, so it is a
+benchmark of its own. Benchmarks build with thin LTO, so that their times do not depend on
+the other code in them. Compare figures only from the same computer.
 
 On Windows, `tools/windows-package.ps1` builds the Windows front end and packs it, as the
 release workflow does. It needs PowerShell 7, Git, Rust, Python, the Visual Studio Build
