@@ -403,7 +403,7 @@ pub fn paste_into(terminal: TerminalId, text: String) {
     if text.is_empty() {
         return;
     }
-    let bracketed = backend.term.lock().mode().contains(TermMode::BRACKETED_PASTE);
+    let bracketed = backend.lock().mode().contains(TermMode::BRACKETED_PASTE);
     // Without bracketed paste the shell runs every line as soon as it arrives. The question
     // goes through the queue, since this can run inside a call of the controller.
     if !bracketed && would_execute(&text) {
@@ -545,7 +545,7 @@ impl qobject::TerminalItem {
 
     fn refresh(mut self: Pin<&mut Self>) {
         if let Some(backend) = self.as_ref().backend() {
-            let term = backend.term.lock();
+            let term = backend.lock();
             let history = term.grid().history_size() as f64;
             let lines = term.screen_lines() as f64;
             let offset = term.grid().display_offset() as f64;
@@ -595,7 +595,7 @@ impl qobject::TerminalItem {
             directory: &directory,
         };
         let effects = {
-            let mut term = backend.term.lock();
+            let mut term = backend.lock();
             action(&mut self.as_mut().rust_mut().view, &mut term, &context)
         };
         self.apply(effects);
@@ -680,7 +680,7 @@ impl qobject::TerminalItem {
     fn report_focus(self: Pin<&mut Self>) {
         let focused = *self.focused();
         if let Some(backend) = self.as_ref().backend() {
-            let mut term = backend.term.lock();
+            let mut term = backend.lock();
             term.is_focused = focused;
             let wanted = term.mode().contains(TermMode::FOCUS_IN_OUT);
             drop(term);
@@ -700,7 +700,7 @@ impl qobject::TerminalItem {
 
     fn scroll_by(mut self: Pin<&mut Self>, lines: i32) {
         if let Some(backend) = self.as_ref().backend() {
-            backend.term.lock().scroll_display(Scroll::Delta(lines));
+            backend.lock().scroll_display(Scroll::Delta(lines));
         }
         self.as_mut().refresh();
     }
@@ -725,7 +725,7 @@ impl qobject::TerminalItem {
             return;
         };
         let changes = {
-            let mut term = backend.term.lock();
+            let mut term = backend.lock();
             let changes = view::typing_changes_view(&term);
             term.selection = None;
             changes
@@ -795,7 +795,7 @@ impl qobject::TerminalItem {
         let Some(backend) = self.as_ref().backend() else {
             return;
         };
-        let mut term = backend.term.lock();
+        let mut term = backend.lock();
         let moved = view::scroll(&mut term, lines);
         let screen_lines = term.screen_lines() as i32;
         let (_, origin_y) = self.as_ref().text_origin(term.columns(), term.screen_lines());
@@ -817,7 +817,7 @@ impl qobject::TerminalItem {
         let Some(backend) = self.as_ref().backend() else {
             return;
         };
-        let term = backend.term.lock();
+        let term = backend.lock();
         let history = term.grid().history_size() as f64;
         let total = history + term.screen_lines() as f64;
         let offset = (history - position * total).round() as i32;
@@ -828,7 +828,7 @@ impl qobject::TerminalItem {
 
     fn has_selection(&self) -> bool {
         self.backend()
-            .is_some_and(|backend| backend.term.lock().selection.as_ref().is_some_and(|s| !s.is_empty()))
+            .is_some_and(|backend| backend.lock().selection.as_ref().is_some_and(|s| !s.is_empty()))
     }
 
     fn copy_selection(mut self: Pin<&mut Self>) {
@@ -836,7 +836,7 @@ impl qobject::TerminalItem {
             return;
         };
         let options = terminal::options().unwrap_or_default();
-        let mut term = backend.term.lock();
+        let mut term = backend.lock();
         let Some(text) = view::selected_text(&term, &options) else {
             return;
         };
@@ -881,7 +881,7 @@ impl qobject::TerminalItem {
             return false;
         };
         let found = {
-            let mut term = backend.term.lock();
+            let mut term = backend.lock();
             let pattern = pattern.to_string();
             let view = &mut self.as_mut().rust_mut().view;
             view.find(
@@ -901,7 +901,7 @@ impl qobject::TerminalItem {
     /// Finds all matches on screen for the "highlight all" option of the search.
     fn update_matches(mut self: Pin<&mut Self>) {
         if let Some(backend) = self.as_ref().backend() {
-            let term = backend.term.lock();
+            let term = backend.lock();
             self.as_mut().rust_mut().view.update_matches(&term);
         }
     }
@@ -912,7 +912,7 @@ impl qobject::TerminalItem {
             return;
         };
         let lines = {
-            let term = backend.term.lock();
+            let term = backend.lock();
             self.as_mut().rust_mut().view.search_lines(&term)
         };
         let json = lines.map(|lines| serde_json::to_string(&lines).unwrap_or_default());
@@ -928,7 +928,7 @@ impl qobject::TerminalItem {
 
     fn end_search(mut self: Pin<&mut Self>) {
         if let Some(backend) = self.as_ref().backend() {
-            let mut term = backend.term.lock();
+            let mut term = backend.lock();
             self.as_mut().rust_mut().view.end_search(&mut term);
         }
         self.as_mut().set_search_lines(QString::default());
@@ -938,14 +938,14 @@ impl qobject::TerminalItem {
 
     fn clear_selection(mut self: Pin<&mut Self>) {
         if let Some(backend) = self.as_ref().backend() {
-            backend.term.lock().selection = None;
+            backend.lock().selection = None;
         }
         self.as_mut().update();
     }
 
     fn clear_scrollback(mut self: Pin<&mut Self>) {
         if let Some(backend) = self.as_ref().backend() {
-            backend.term.lock().clear_screen(ClearMode::Saved);
+            backend.lock().clear_screen(ClearMode::Saved);
         }
         self.as_mut().refresh();
     }
@@ -960,7 +960,7 @@ impl qobject::TerminalItem {
             tracks_mouse: backend.tracks_mouse(),
             directory: &directory,
         };
-        let term = backend.term.lock();
+        let term = backend.lock();
         let (point, _) = self.cells().at(&term, x, y);
         view::link_at(&term, point, files, &context)
     }
@@ -969,7 +969,7 @@ impl qobject::TerminalItem {
         let Some(backend) = self.backend() else {
             return QString::default();
         };
-        let term = backend.term.lock();
+        let term = backend.lock();
         let (point, _) = self.cells().at(&term, x, y);
         let word = view::color_word_at(&term, point);
         drop(term);
@@ -978,7 +978,7 @@ impl qobject::TerminalItem {
 
     fn selection_contains(&self, x: f64, y: f64) -> bool {
         self.backend().is_some_and(|backend| {
-            let term = backend.term.lock();
+            let term = backend.lock();
             view::selection_contains(&term, self.cells().at(&term, x, y).0)
         })
     }
@@ -986,7 +986,7 @@ impl qobject::TerminalItem {
     fn selection_text(&self) -> QString {
         let options = terminal::options().unwrap_or_default();
         self.backend()
-            .and_then(|backend| view::selected_text(&backend.term.lock(), &options))
+            .and_then(|backend| view::selected_text(&backend.lock(), &options))
             .map_or_else(QString::default, |text| kde::qs(&text))
     }
 
@@ -999,7 +999,7 @@ impl qobject::TerminalItem {
         let Some((link, backend)) = self.link(x, y, files).zip(self.backend()) else {
             return QString::default();
         };
-        let term = backend.term.lock();
+        let term = backend.lock();
         let offset = term.grid().display_offset() as i32;
         let (origin_x, origin_y) = self.text_origin(term.columns(), term.screen_lines());
         drop(term);
@@ -1014,14 +1014,14 @@ impl qobject::TerminalItem {
 
     fn select_line(mut self: Pin<&mut Self>) {
         if let Some(backend) = self.as_ref().backend() {
-            view::select_line(&mut backend.term.lock());
+            view::select_line(&mut backend.lock());
         }
         self.as_mut().update();
     }
 
     fn select_all(mut self: Pin<&mut Self>) {
         if let Some(backend) = self.as_ref().backend() {
-            view::select_all(&mut backend.term.lock());
+            view::select_all(&mut backend.lock());
         }
         self.as_mut().update();
     }
@@ -1111,7 +1111,7 @@ impl qobject::TerminalItem {
             .map(|badge| (backend.local_title(&badge.format), badge));
         let fonts = Fonts::new(self.term_font(), &options);
         let (paints, fresh_words) = {
-            let term = backend.term.lock();
+            let term = backend.lock();
             // Only the words under the lock; whether they name files is looked up later.
             let fresh_words = if *self.url_hints() {
                 Some(view::hint_words(&term)).filter(|words| *words != self.hint_words)

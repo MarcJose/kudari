@@ -1330,7 +1330,7 @@ impl qobject::Controller {
                 }
             }
             TerminalCommand::WebSearch => {
-                let text = backend.term.lock().selection_to_string();
+                let text = backend.lock().selection_to_string();
                 if let Some(text) = text {
                     frontend().web_search(&text);
                 }

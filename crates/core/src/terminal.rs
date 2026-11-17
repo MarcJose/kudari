@@ -399,7 +399,8 @@ type System = Pty;
 type System = Console;
 
 pub struct Backend {
-    pub term: Arc<FairMutex<Term<Proxy>>>,
+    /// Taken through [`Backend::lock`], which puts a view out of place back first.
+    term: Arc<FairMutex<Term<Proxy>>>,
     notifier: Notifier,
     /// The shell and what it runs.
     programs: Arc<System>,
@@ -421,6 +422,15 @@ pub struct Backend {
 }
 
 impl Backend {
+    /// The terminal, locked, with its view where it can be: `alacritty_terminal` can leave the
+    /// view scrolled back past the history, or the cursor of the selection mode outside the
+    /// grid, and reading there would end Kudari (see [`view::repair_view`]).
+    pub fn lock(&self) -> impl std::ops::DerefMut<Target = Term<Proxy>> + '_ {
+        let mut term = self.term.lock();
+        crate::view::repair_view(&mut term);
+        term
+    }
+
     fn spawn(
         id: TerminalId,
         columns: u16,
@@ -549,7 +559,7 @@ impl Backend {
         {
             config.scrolling_history = lines;
         }
-        self.term.lock().set_options(config);
+        self.lock().set_options(config);
     }
 
     /// The scrollback size of this terminal.
@@ -599,7 +609,7 @@ impl Backend {
     fn answer(&self) {
         let replies = std::mem::take(&mut *lock(&self.mailbox.replies));
         let overrides = if replies.iter().any(|reply| matches!(reply, Reply::Color(..))) {
-            *self.term.lock().colors()
+            *self.lock().colors()
         } else {
             Colors::default()
         };
@@ -619,7 +629,7 @@ impl Backend {
 
     /// Input always returns the view to the bottom of the scrollback.
     pub fn write_user_input(&self, bytes: Vec<u8>) {
-        self.term.lock().scroll_display(Scroll::Bottom);
+        self.lock().scroll_display(Scroll::Bottom);
         self.write(bytes);
     }
 
@@ -634,7 +644,7 @@ impl Backend {
         // A zoom changes the cells without changing their number; programs that ask for
         // the size in pixels get the new one.
         *lock(&self.window_size) = size;
-        let mut term = self.term.lock();
+        let mut term = self.lock();
         if term.columns() == usize::from(columns) && term.screen_lines() == usize::from(lines) {
             return;
         }
@@ -722,7 +732,7 @@ impl Backend {
 
     /// The whole scrollback as plain text.
     pub fn full_text(&self) -> String {
-        let term = self.term.lock();
+        let term = self.lock();
         let start = Point::new(term.grid().topmost_line(), Column(0));
         let end = Point::new(term.grid().bottommost_line(), term.grid().last_column());
         term.bounds_to_string(start, end)
@@ -730,29 +740,29 @@ impl Backend {
 
     /// The last `lines` lines of scrollback and screen, or the screen when `lines` is zero.
     pub fn recent_text(&self, lines: usize) -> String {
-        last_lines(&self.term.lock(), lines)
+        last_lines(&self.lock(), lines)
     }
 
     /// Columns and lines of the screen.
     pub fn size(&self) -> (usize, usize) {
-        let term = self.term.lock();
+        let term = self.lock();
         (term.columns(), term.screen_lines())
     }
 
     /// Whether the program asked for the cursor keys of the application mode.
     pub fn app_cursor(&self) -> bool {
-        self.term.lock().mode().contains(TermMode::APP_CURSOR)
+        self.lock().mode().contains(TermMode::APP_CURSOR)
     }
 
     /// Whether the program asked for bracketed paste, as line editors such as those of
     /// bash, zsh and fish do while they edit a command line, and only then.
     pub fn bracketed_paste(&self) -> bool {
-        self.term.lock().mode().contains(TermMode::BRACKETED_PASTE)
+        self.lock().mode().contains(TermMode::BRACKETED_PASTE)
     }
 
     /// Forgets the scrollback and returns to the initial terminal state.
     pub fn reset(&self) {
-        let mut term = self.term.lock();
+        let mut term = self.lock();
         let full_screen = term.mode().contains(TermMode::ALT_SCREEN);
         term.reset_state();
         drop(term);

@@ -691,6 +691,19 @@ check "a blocked terminal takes no arrow keys from the wheel" one \
     "$(echo "$wheel" | grep -qxE 'EO[AB]' && echo one || echo "$wheel")"
 sessions removeSession "$wheeled"; sleep 0.6
 sessions raiseSession "$before_wheel"; sleep 0.4
+# Output into a scrolling region below the top while the view is scrolled back used to scroll
+# the view past the history, and the next frame ended Kudari with all its terminals.
+region=$(sessions addSession); sleep 1
+sessions raiseSession "$region"; sleep 0.4
+hook SetSetting HistoryLines 10000; sleep 0.3
+# Some history, a moment to scroll back a page with Shift+Page Up, then the output.
+run "clear; seq 300; sleep 2; printf '\\033[2;%dr\\033[%dH' \$(tput lines) \$(tput lines); seq 5000; printf '\\033[r'"
+input key 42 104; sleep 5
+check "output into a region below the top while scrolled back leaves Kudari running" yes \
+    "$(kill -0 "$kudari" 2>/dev/null && [ -n "$(state)" ] && echo yes || echo no)"
+hook SetSetting HistoryLines 1000; sleep 0.3
+sessions removeSession "$region"; sleep 0.6
+sessions raiseSession "$before_wheel"; sleep 0.4
 # Two quick clicks at different places are two single clicks: the second selects no word.
 run "clear; printf '\033]52;c;%s\a' \$(printf before | base64)"
 run "clear; printf 'apple %s\n' bananabananabananabananabananabananabananabanana"
