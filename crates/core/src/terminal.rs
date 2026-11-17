@@ -220,6 +220,11 @@ fn least_columns(columns: u16) -> u16 {
 /// user interface, so all of them go there, or an answer would overtake an earlier one:
 /// programs ask for a color and then for the device attributes, and take the answer to
 /// the second as a sign that the first has none.
+/// The most answers that wait for the user interface. A program that asks faster than the user
+/// interface answers, as `yes $'\e[c'` while the window is busy, would otherwise make the list
+/// grow without end; more questions than this get no answer, as from a terminal that is slow.
+const MAX_REPLIES: usize = 4096;
+
 enum Reply {
     Text(String),
     /// One of the colors, by its number in [`Colors`].
@@ -288,6 +293,9 @@ impl Proxy {
     fn reply(&self, reply: Reply) {
         let first = {
             let mut replies = lock(&self.mailbox.replies);
+            if replies.len() >= MAX_REPLIES {
+                return;
+            }
             replies.push(reply);
             replies.len() == 1
         };
@@ -1133,6 +1141,14 @@ mod tests {
             work,
             String::from_utf8(answers(replies, &answering)).unwrap_or_default(),
         )
+    }
+
+    #[test]
+    fn questions_beyond_what_waits_get_no_answer() {
+        // Far more questions than the user interface takes before it answers them.
+        let (work, answer) = answer_to(&"\x1b[c".repeat(MAX_REPLIES * 3));
+        assert_eq!(work, 1);
+        assert_eq!(answer, "\x1b[?6c".repeat(MAX_REPLIES));
     }
 
     #[test]
