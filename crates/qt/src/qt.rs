@@ -48,8 +48,9 @@ pub mod ffi {
         /// Starts a frame for `target`; null when the target has no size.
         fn rk_frame_begin(target: Pin<&mut QPainter>, opaque: bool) -> UniquePtr<RkFrame>;
         fn rk_frame_painter(frame: Pin<&mut RkFrame>) -> Pin<&mut QPainter>;
-        /// Copies the frame into `target`, replacing what is there if `opaque`.
-        fn rk_frame_end(target: Pin<&mut QPainter>, frame: UniquePtr<RkFrame>, opaque: bool);
+        /// Copies the frame into `target`, replacing every pixel there, also with transparent
+        /// ones: Qt does not clear the image of the item before.
+        fn rk_frame_end(target: Pin<&mut QPainter>, frame: UniquePtr<RkFrame>);
         fn rk_raw_font(painter: &QPainter, font: &QFont) -> UniquePtr<QRawFont>;
         /// The glyph of `character` in `font`, or 0 when the font has none.
         fn rk_glyph_index(font: &QRawFont, character: u32) -> u32;

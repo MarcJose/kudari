@@ -1018,39 +1018,51 @@ window toggleWindowState; sleep 1.5
 run "clear; printf '│%.0s' \$(seq 60); echo; for i in 1 2 3; do echo; printf '─%.0s' \$(seq 60); echo; done"
 sleep 1
 hook Grab "$work/scaled/grab"; sleep 1
-# Reads the image without libraries: Qt writes PNG with 8 bits a channel and no interlacing.
+# Reads an image without libraries: Qt writes PNG with 8 bits a channel and no interlacing.
+cat > "$work/pngread.py" <<'EOF'
+import struct
+import zlib
+
+
+def read(path):
+    """The width, the height, the channels and the rows of bytes of a PNG."""
+    data = open(path, "rb").read()
+    chunks, at = {}, 8
+    while at < len(data):
+        length, kind = struct.unpack(">I4s", data[at:at + 8])
+        chunks.setdefault(kind, []).append(data[at + 8:at + 8 + length])
+        at += 12 + length
+    width, height, depth, kind = struct.unpack(">IIBB", chunks[b"IHDR"][0][:10])
+    channels = {2: 3, 6: 4}[kind]
+    raw = zlib.decompress(b"".join(chunks[b"IDAT"]))
+    stride = width * channels
+    rows, previous = [], bytearray(stride)
+    for y in range(height):
+        line = raw[y * (stride + 1):(y + 1) * (stride + 1)]
+        kind_of_filter, row = line[0], bytearray(line[1:])
+        for x in range(stride):
+            left = row[x - channels] if x >= channels else 0
+            up = previous[x]
+            corner = previous[x - channels] if x >= channels else 0
+            if kind_of_filter == 1:
+                row[x] = (row[x] + left) & 255
+            elif kind_of_filter == 2:
+                row[x] = (row[x] + up) & 255
+            elif kind_of_filter == 3:
+                row[x] = (row[x] + (left + up) // 2) & 255
+            elif kind_of_filter == 4:
+                guess = left + up - corner
+                near = min((abs(guess - left), left), (abs(guess - up), up), (abs(guess - corner), corner))[1]
+                row[x] = (row[x] + near) & 255
+        rows.append(row)
+        previous = row
+    return width, height, channels, rows
+EOF
 cat > "$work/lines" <<'EOF'
-import struct, sys, zlib
-data = open(sys.argv[1], "rb").read()
-chunks, at = {}, 8
-while at < len(data):
-    length, kind = struct.unpack(">I4s", data[at:at + 8])
-    chunks.setdefault(kind, []).append(data[at + 8:at + 8 + length])
-    at += 12 + length
-width, height, depth, kind = struct.unpack(">IIBB", chunks[b"IHDR"][0][:10])
-channels = {2: 3, 6: 4}[kind]
-raw = zlib.decompress(b"".join(chunks[b"IDAT"]))
+import sys
+from pngread import read
+width, height, channels, rows = read(sys.argv[1])
 stride = width * channels
-rows, previous = [], bytearray(stride)
-for y in range(height):
-    line = raw[y * (stride + 1):(y + 1) * (stride + 1)]
-    kind_of_filter, row = line[0], bytearray(line[1:])
-    for x in range(stride):
-        left = row[x - channels] if x >= channels else 0
-        up = previous[x]
-        corner = previous[x - channels] if x >= channels else 0
-        if kind_of_filter == 1:
-            row[x] = (row[x] + left) & 255
-        elif kind_of_filter == 2:
-            row[x] = (row[x] + up) & 255
-        elif kind_of_filter == 3:
-            row[x] = (row[x] + (left + up) // 2) & 255
-        elif kind_of_filter == 4:
-            guess = left + up - corner
-            near = min((abs(guess - left), left), (abs(guess - up), up), (abs(guess - corner), corner))[1]
-            row[x] = (row[x] + near) & 255
-    rows.append(row)
-    previous = row
 background = rows[height // 2][stride - 5 * channels:stride - 5 * channels + 3]
 def lit(x, y):
     pixel = rows[y][x * channels:x * channels + 3]
@@ -1079,6 +1091,31 @@ print("even" if len(bars) == 60 and len(lines) == 3 and all(len(group) == 1 for 
 EOF
 check "at 125 %, the lines of tables are as thick and as far apart in every cell" even \
     "$(python3 "$work/lines" "$work"/scaled/grab-*.png 2>&1 | tail -n 1)"
+
+# A translucent terminal replaces every pixel of its image with each frame, transparent ones
+# as well: Qt no longer clears the image first, so text that went away must not stay.
+hook SetSetting Opacity 60; sleep 0.5
+run "clear; printf '█%.0s' \$(seq 300); echo"
+sleep 0.8
+hook Grab "$work/scaled/full"; sleep 1
+run "clear"
+sleep 0.8
+hook Grab "$work/scaled/cleared"; sleep 1
+# The pixels in the upper half of the window, where the text is, that stand out from its
+# most common color, the background, whatever the colors of the scheme.
+cat > "$work/text" <<'EOF'
+import collections
+import sys
+from pngread import read
+width, height, channels, rows = read(sys.argv[1])
+pixels = [tuple(row[x:x + 3]) for row in rows[:height // 2] for x in range(0, width * channels, channels)]
+background = collections.Counter(pixels).most_common(1)[0][0]
+print(sum(1 for pixel in pixels if sum(abs(a - b) for a, b in zip(pixel, background)) > 120))
+EOF
+full=$(python3 "$work/text" "$work"/scaled/full-*.png 2>&1 | tail -n 1)
+cleared=$(python3 "$work/text" "$work"/scaled/cleared-*.png 2>&1 | tail -n 1)
+check "a translucent terminal keeps nothing of text that went away" yes \
+    "$([ "$full" -gt $((cleared * 10)) ] 2>/dev/null && echo yes || echo "no: $full pixels of text, then $cleared")"
 hook Trigger file_quit
 wait_quit "$kudari"
 

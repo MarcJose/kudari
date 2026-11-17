@@ -56,7 +56,7 @@ struct RkFrame {
 };
 std::unique_ptr<RkFrame> rk_frame_begin(QPainter &target, bool opaque);
 QPainter &rk_frame_painter(RkFrame &frame);
-void rk_frame_end(QPainter &target, std::unique_ptr<RkFrame> frame, bool opaque);
+void rk_frame_end(QPainter &target, std::unique_ptr<RkFrame> frame);
 std::unique_ptr<QRawFont> rk_raw_font(const QPainter &painter, const QFont &font);
 std::uint32_t rk_glyph_index(const QRawFont &font, std::uint32_t character);
 void rk_draw_glyphs(QPainter &painter,

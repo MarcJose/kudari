@@ -209,14 +209,15 @@ QPainter &rk_frame_painter(RkFrame &frame)
     return frame.painter;
 }
 
-void rk_frame_end(QPainter &target, std::unique_ptr<RkFrame> frame, bool opaque)
+// Replaces every pixel of the item, transparent ones as well: the item has no fill color,
+// so Qt leaves what the last frame drew, and a translucent frame comes cleared from
+// `rk_frame_begin`.
+void rk_frame_end(QPainter &target, std::unique_ptr<RkFrame> frame)
 {
     frame->painter.end();
     target.save();
     target.resetTransform();
-    if (opaque) {
-        target.setCompositionMode(QPainter::CompositionMode_Source);
-    }
+    target.setCompositionMode(QPainter::CompositionMode_Source);
     target.drawImage(QPointF(), *frame->image, QRectF(QPointF(), frame->size));
     target.restore();
 }
