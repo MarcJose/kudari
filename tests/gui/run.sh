@@ -500,6 +500,18 @@ run "printf '\\033[?25h'"
 check "a blinking cursor stops blinking while a program hides it" "0 1 0" "$shown_blinks $hidden_blinks $(blinks)"
 hook SetSetting BlinkingCursor false; sleep 0.3
 
+# A blinking cursor rests, steady and shown, after a while without input or output, and a key
+# wakes it. Only the terminal with the focus blinks, so at most one rests.
+hook SetSetting BlinkingCursor true; hook SetSetting CursorBlinkTimeout 1; sleep 0.3
+run "clear"
+sleep 1.5
+resting() { hook Property terminal cursorResting | grep -o true | wc -l; }
+rested=$(resting)
+rested_hidden=$(hook Property terminal cursorHidden | grep -o true | wc -l)
+input key 42; sleep 0.3
+check "a blinking cursor rests shown after a while and a key wakes it" "1 0 0" "$rested $rested_hidden $(resting)"
+hook SetSetting CursorBlinkTimeout 15; hook SetSetting BlinkingCursor false; sleep 0.3
+
 # The D-Bus interface, each method checked against its counterpart.
 two_h=$(sessions addSessionTwoHorizontal); sleep 1
 two_v=$(sessions addSessionTwoVertical); sleep 1

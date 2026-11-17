@@ -58,6 +58,22 @@ Item {
         }
     }
 
+    // Ends the rest of the cursor and starts its blinking anew, shown: after a key, the cursor
+    // stays for half a cycle instead of vanishing at once.
+    function wakeCursor() {
+        terminal.cursorResting = false;
+        terminal.cursorHidden = false;
+        if (cursorRest.running) {
+            cursorRest.restart();
+        }
+        if (cursorBlink.running) {
+            cursorBlink.restart();
+        }
+        if (cursorFading.running) {
+            cursorFading.reset();
+        }
+    }
+
     function focusTerminal() {
         terminal.forceActiveFocus();
     }
@@ -197,8 +213,21 @@ Item {
             }
         }
 
-        onCursorXChanged: Qt.callLater(reportCursor)
-        onCursorYChanged: Qt.callLater(reportCursor)
+        // Output that moves the cursor also wakes it.
+        onCursorXChanged: {
+            Qt.callLater(reportCursor);
+            pane.wakeCursor();
+        }
+        onCursorYChanged: {
+            Qt.callLater(reportCursor);
+            pane.wakeCursor();
+        }
+        // So does getting the focus back.
+        onFocusedChanged: {
+            if (focused) {
+                pane.wakeCursor();
+            }
+        }
         onActiveFocusChanged: {
             if (activeFocus) {
                 pane.controller.activateTerminal(pane.terminalId);
@@ -212,7 +241,7 @@ Item {
             }
         }
         Keys.onPressed: event => {
-            cursorHidden = false;
+            pane.wakeCursor();
             if (event.key === Qt.Key_Control && mouse.containsMouse) {
                 pane.linkUnderMouse(mouse.mouseX, mouse.mouseY, Qt.ControlModifier);
             }
@@ -229,24 +258,43 @@ Item {
             onTriggered: terminal.updateSearchLines()
         }
 
-        // Whether the cursor blinks starts to change while the terminal is being refreshed;
-        // the cursor shows again after that.
+        // The cursor rests, steady and shown, after a while without input or output, as in
+        // GTK and kitty: a blinking cursor in a terminal nobody uses only costs power.
+        property bool cursorResting: false
+        // Whether the cursor blinks at all: as the program or the setting asks, unless the
+        // system turned blinking off (a time of 0), which it does for those whom it disturbs.
+        readonly property bool cursorBlinking: cursorBlinks && focused && !cursorResting && Qt.styleHints.cursorFlashTime > 0
+
         Timer {
+            id: cursorRest
+
+            interval: (pane.config.CursorBlinkTimeout ?? 15) * 1000
+            running: terminal.cursorBlinks && terminal.focused && !terminal.cursorResting && interval > 0
+            onTriggered: terminal.cursorResting = true
+        }
+
+        // Whether the cursor blinks starts to change while the terminal is being refreshed;
+        // the cursor shows again after that. Half a cycle of the system shown, half hidden.
+        Timer {
+            id: cursorBlink
+
             function reset() {
                 terminal.cursorHidden = false;
             }
 
-            interval: 500
+            interval: Math.max(1, Qt.styleHints.cursorFlashTime / 2)
             repeat: true
-            running: terminal.cursorBlinks && terminal.focused && !(pane.config.AnimatedCursor ?? false)
+            running: terminal.cursorBlinking && !(pane.config.AnimatedCursor ?? false)
             onRunningChanged: Qt.callLater(reset)
             onTriggered: terminal.cursorHidden = !terminal.cursorHidden
         }
 
-        // The fading variant of the blinking cursor, in a second. Its brightness comes from the
-        // time that passed: an animation of Qt Quick moves with the frames of the primary
-        // screen, too fast or in steps when Kudari is on a screen with another rate.
+        // The fading variant of the blinking cursor, in a cycle of the system. Its brightness
+        // comes from the time that passed: an animation of Qt Quick moves with the frames of
+        // the primary screen, too fast or in steps when Kudari is on a screen with another rate.
         Timer {
+            id: cursorFading
+
             property real start: 0
 
             function reset() {
@@ -256,9 +304,9 @@ Item {
 
             interval: 33
             repeat: true
-            running: terminal.cursorBlinks && terminal.focused && (pane.config.AnimatedCursor ?? false)
+            running: terminal.cursorBlinking && (pane.config.AnimatedCursor ?? false)
             onRunningChanged: Qt.callLater(reset)
-            onTriggered: terminal.cursorFade = 0.5 + 0.5 * Math.cos(2 * Math.PI * (Date.now() - start) / 1000)
+            onTriggered: terminal.cursorFade = 0.5 + 0.5 * Math.cos(2 * Math.PI * (Date.now() - start) / Math.max(1, Qt.styleHints.cursorFlashTime))
         }
 
         // Carries selected text to other programs and terminals.

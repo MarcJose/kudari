@@ -456,6 +456,23 @@ FormCard.FormCardPage {
 
         FormCard.FormDelegateSeparator {}
 
+        // Programs can make the cursor blink as well, so this counts without the switch above.
+        NumberField {
+            label: root.controller.translate("@label:spinbox", "Stop blinking after:")
+            from: 0
+            to: 3600
+            value: root.config.CursorBlinkTimeout
+            unit: "s"
+            zeroText: root.controller.translate("@item:inrange stop blinking", "Never")
+            onValueChanged: {
+                if (value !== root.config.CursorBlinkTimeout) {
+                    root.set("CursorBlinkTimeout", value);
+                }
+            }
+        }
+
+        FormCard.FormDelegateSeparator {}
+
         FormCard.FormComboBoxDelegate {
             text: root.controller.translate("@label:listbox", "Cursor shape:")
             model: root.cursors
