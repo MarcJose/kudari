@@ -52,6 +52,10 @@ $env:APPDATA = $work
 $env:QT_FORCE_STDERR_LOGGING = '1'
 # The texts the test looks for are the English ones of the code.
 $env:LANGUAGE = 'en'
+# A library named conpty.dll in the working directory, as in a folder Kudari is started from:
+# Kudari must not load it. A copy of version.dll does nothing when loaded.
+$planted = Join-Path $work 'conpty.dll'
+Copy-Item (Join-Path $env:SystemRoot 'System32\version.dll') $planted
 $process = Start-Process $Program -PassThru -RedirectStandardError $log -WorkingDirectory $work
 
 $Automation = [System.Windows.Automation.AutomationElement]
@@ -136,6 +140,10 @@ try {
     $tabs = Wait-For { Get-TabCount }
     [void] (Invoke-Element 'New Session')
     Test-Check 'a new session gets a tab' ($null -ne (Wait-For { if ((Get-TabCount) -eq $tabs + 1) { $true } }))
+    # Each new terminal has looked for conpty.dll by now; Windows keeps a library loaded
+    # that does not have what it was looked for.
+    $loaded = @((Get-Process -Id $process.Id).Modules | Where-Object { $_.FileName -eq $planted })
+    Test-Check 'a conpty.dll in the working directory is not loaded' ($loaded.Count -eq 0)
     [void] (Invoke-Element 'Close Session')
     Test-Check 'the close button of a tab closes its session' ($null -ne (Wait-For { if ((Get-TabCount) -eq $tabs) { $true } }))
 

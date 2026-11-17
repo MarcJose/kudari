@@ -26,6 +26,9 @@ pub mod ffi {
         fn rk_win_notify(title: &QString, text: &QString);
         /// For checks: saves the window as an image after `delay` milliseconds and quits.
         fn rk_win_screenshot_later(path: &QString, delay: i32);
+        /// Loads libraries only from the folder of the program and from System32, never from
+        /// the working directory or PATH; first thing in main.
+        fn rk_win_harden_dll_search();
         /// Writes to the console of the caller, for the commands of the command line: the
         /// program has no console of its own, so that none opens with the window.
         fn rk_win_attach_console();

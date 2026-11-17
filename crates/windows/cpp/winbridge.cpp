@@ -266,6 +266,35 @@ void rk_win_screenshot_later(const QString &path, int delay)
     });
 }
 
+// Libraries load only from the folder of the program, from System32 and from the folder of
+// Qt, not from the working directory or PATH. `alacritty_terminal` loads `conpty.dll` by name
+// for every new terminal, and Windows would otherwise take one from any folder of PATH, or
+// from the folder Kudari was started in, and run it with the rights of Kudari. A newer
+// `conpty.dll` goes next to `kudari.exe`. First thing in main, before anything loads a library.
+void rk_win_harden_dll_search()
+{
+#ifdef Q_OS_WIN
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    // Takes the working directory out of the search for the calls that bypass the default.
+    SetDllDirectoryW(L"");
+    // Qt loads its plugins later, and they need more of Qt. In the packages, Qt lies next to
+    // kudari.exe; in a build of cargo, where PATH names the folder of Qt, it does not. That
+    // folder stays in the search: the one Qt itself was loaded from, which runs already.
+    HMODULE qt = nullptr;
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(&qVersion),
+                           &qt)) {
+        std::wstring path(32768, L'\0');
+        const DWORD length = GetModuleFileNameW(qt, path.data(), DWORD(path.size()));
+        const auto folder = path.find_last_of(L'\\', length);
+        if (length > 0 && length < path.size() && folder != std::wstring::npos) {
+            path.resize(folder);
+            AddDllDirectory(path.c_str());
+        }
+    }
+#endif
+}
+
 void rk_win_attach_console()
 {
 #ifdef Q_OS_WIN
