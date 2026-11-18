@@ -11,10 +11,10 @@ use std::time::Instant;
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
+use alacritty_terminal::index::{Boundary, Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::{Flags, LineLength};
-use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
+use alacritty_terminal::term::search::{Match, RegexSearch};
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vi_mode::ViMotion;
 use alacritty_terminal::vte::ansi::Rgb;
@@ -109,6 +109,39 @@ pub const WHEEL_NOTCH: f64 = 120.0;
 /// Lines that one notch scrolls.
 const NOTCH_LINES: f64 = 3.0;
 
+/// The most matches a search looks at: a history of 100000 lines full of matches would take
+/// long to go through, and more than this are of no use to anyone.
+const MOST_MATCHES: usize = 100_000;
+
+/// The matches of `regex` from `start` to `end`, in order, at most `most` of them.
+///
+/// The search of `alacritty_terminal` goes on after the end of a match. Where the last match
+/// reaches past `end`, as one whose wide character wrapped from a line ending at `end` to the
+/// next, that is past `end`; searching from there goes around the end of the grid and finds
+/// the same match again, so its iterator of matches never ends and Kudari froze. This stops at
+/// a match that reaches `end`, before a start past it, and at a match before its start, which
+/// means the search went around.
+fn matches_between<T>(term: &Term<T>, regex: &mut RegexSearch, start: Point, end: Point, most: usize) -> Vec<Match> {
+    let mut found = Vec::new();
+    let mut point = start;
+    while found.len() < most && point <= end {
+        let Some(next) = term.regex_search_right(regex, point, end) else {
+            break;
+        };
+        if *next.start() < point {
+            break;
+        }
+        let after = *next.end();
+        found.push(next);
+        let following = after.add(term, Boundary::None, 1);
+        if after >= end || following <= after {
+            break;
+        }
+        point = following;
+    }
+    found
+}
+
 /// The text from `start` to `end`, as `Term::bounds_to_string` gives it, without its faults.
 ///
 /// Where a line ends at the last column on the spacer of a wide character that wrapped into the
@@ -182,10 +215,16 @@ fn part_between<T>(term: &Term<T>, start: Point, end: Point, wrapped_wide: bool)
 /// does not start at the top does while the view is scrolled back, and the cursor of the
 /// selection mode in history that is gone, after a switch to the alternate screen or a
 /// smaller history. A frame or a look at a cell there would read past the grid and end
-/// Kudari with all its terminals. Only the view moves, never the content; a selection made
-/// with a cursor out of place goes. Whether anything was out of place.
+/// Kudari with all its terminals. The view moves; a selection made with a cursor out of
+/// place goes.
+///
+/// It also takes out the spacer of a wide character that DCH leaves in column 0 without the
+/// character before it: the emulator steps one cell back from such a spacer, which from
+/// column 0 hides the cursor, loses text from a copy, and ends Kudari with a move of the
+/// cursor of the selection mode. The spacer becomes an empty cell, which it shows anyway.
+/// Whether anything was out of place.
 pub fn repair_view<T>(term: &mut Term<T>) -> bool {
-    let mut repaired = false;
+    let mut repaired = repair_spacers(term);
     if term.grid().display_offset() > term.grid().history_size() {
         // Scrolling by nothing keeps the view within the history.
         term.grid_mut().scroll_display(Scroll::Delta(0));
@@ -197,6 +236,39 @@ pub fn repair_view<T>(term: &mut Term<T>) -> bool {
         term.vi_mode_cursor.point = within;
         term.selection = None;
         repaired = true;
+    }
+    repaired
+}
+
+/// Takes out spacers of wide characters in column 0 in the lines of the screen, those that
+/// show, the line of the cursor of the selection mode and the ends of the selection; see
+/// [`repair_view`]. A spacer deeper in the history stays until one of these reaches it.
+fn repair_spacers<T>(term: &mut Term<T>) -> bool {
+    let (top, bottom) = (term.topmost_line().0, term.bottommost_line().0);
+    let mut repaired = false;
+    let mut repair = |term: &mut Term<T>, line: i32| {
+        if !(top..=bottom).contains(&line) {
+            return;
+        }
+        let cell = &mut term.grid_mut()[Line(line)][Column(0)];
+        if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+            cell.flags.remove(Flags::WIDE_CHAR_SPACER);
+            cell.c = ' ';
+            repaired = true;
+        }
+    };
+    // The lines that output writes to, and those that show while the view is scrolled back.
+    let (lines, offset) = (term.screen_lines() as i32, term.grid().display_offset() as i32);
+    for line in 0..lines {
+        repair(term, line);
+    }
+    for line in -offset..(lines - offset).min(0) {
+        repair(term, line);
+    }
+    repair(term, term.vi_mode_cursor.point.line.0);
+    if let Some(range) = term.selection.as_ref().and_then(|selection| selection.to_range(term)) {
+        repair(term, range.start.line.0);
+        repair(term, range.end.line.0);
     }
     repaired
 }
@@ -747,12 +819,22 @@ impl View {
             (Some(range), true) => range.start.sub(term, Boundary::None, 1),
             (None, _) => term.grid().cursor.point,
         };
-        let (direction, side) = if backwards {
-            (Direction::Left, Side::Right)
+        let top = Point::new(term.topmost_line(), Column(0));
+        let bottom = Point::new(term.bottommost_line(), term.last_column());
+        let found = if backwards {
+            // The last match up to the origin, else the last one of all, around the start.
+            let before = matches_between(term, &mut regex, top, origin, MOST_MATCHES);
+            before
+                .into_iter()
+                .rev()
+                .find(|found| *found.start() <= origin)
+                .or_else(|| matches_between(term, &mut regex, origin, bottom, MOST_MATCHES).pop())
         } else {
-            (Direction::Right, Side::Left)
+            // The first match from the origin on, else the first one of all, around the end.
+            matches_between(term, &mut regex, origin, bottom, 1)
+                .pop()
+                .or_else(|| matches_between(term, &mut regex, top, origin, 1).pop())
         };
-        let found = term.search_next(&mut regex, origin, direction, side, None);
         if let Some(found) = &found {
             let mut selection = Selection::new(SelectionType::Simple, *found.start(), Side::Left);
             selection.update(*found.end(), Side::Right);
@@ -770,7 +852,7 @@ impl View {
                 let top = -(term.grid().display_offset() as i32);
                 let start = Point::new(Line(top), Column(0));
                 let end = Point::new(Line(top + term.screen_lines() as i32 - 1), term.last_column());
-                RegexIter::new(start, end, Direction::Right, term, regex).collect()
+                matches_between(term, regex, start, end, MOST_MATCHES)
             }
             None => Vec::new(),
         };
@@ -779,14 +861,14 @@ impl View {
     /// Where the matches lie in the scrollback, as fractions from its top, for the
     /// scrollbar. `None` without a search to highlight.
     pub fn search_lines<T>(&mut self, term: &Term<T>) -> Option<Vec<f64>> {
-        const MOST_MATCHES: usize = 5000;
+        const MOST_LINES: usize = 5000;
         let regex = self.search.as_mut()?;
         let top = -(term.grid().history_size() as i32);
         let total = f64::from(term.screen_lines() as i32 - top);
         let start = Point::new(Line(top), Column(0));
         let end = Point::new(Line(term.screen_lines() as i32 - 1), term.last_column());
-        let mut lines: Vec<i32> = RegexIter::new(start, end, Direction::Right, term, regex)
-            .take(MOST_MATCHES)
+        let mut lines: Vec<i32> = matches_between(term, regex, start, end, MOST_LINES)
+            .iter()
             .map(|found| found.start().line.0)
             .collect();
         lines.dedup();
@@ -1955,6 +2037,44 @@ mod tests {
     }
 
     #[test]
+    fn deleting_half_of_a_wide_character_leaves_a_terminal_that_works() {
+        // DCH on the first half of a wide character in column 0 leaves its spacer there.
+        let mut term = term_of(10, "界x\r\x1b[P");
+        assert!(term.grid()[Line(0)][Column(0)].flags.contains(Flags::WIDE_CHAR_SPACER));
+        assert!(repair_view(&mut term));
+        assert!(!term.grid()[Line(0)][Column(0)].flags.contains(Flags::WIDE_CHAR_SPACER));
+        // The cursor shows where it is, a copy keeps the rest of the line, and the cursor of
+        // the selection mode moves from there.
+        assert_eq!(term.renderable_content().cursor.point, Point::new(Line(0), Column(0)));
+        select_all(&mut term);
+        assert_eq!(
+            selected_text(&term, &Options::default()).map(|text| text.trim().to_string()),
+            Some("x".to_string())
+        );
+        // One scrolled into the history is taken out once the view shows it.
+        let mut scrolled = term_of(10, "界x\r\x1b[P\r\n\n\n\n\n\n");
+        let line = -(scrolled.grid().history_size() as i32);
+        assert!(
+            line < 0
+                && scrolled.grid()[Line(line)][Column(0)]
+                    .flags
+                    .contains(Flags::WIDE_CHAR_SPACER)
+        );
+        scrolled.scroll_display(Scroll::Top);
+        assert!(repair_view(&mut scrolled));
+        assert!(
+            !scrolled.grid()[Line(line)][Column(0)]
+                .flags
+                .contains(Flags::WIDE_CHAR_SPACER)
+        );
+        term.selection = None;
+        toggle_selection_mode(&mut term);
+        term.vi_motion(ViMotion::Left);
+        assert!(!repair_view(&mut term));
+        assert_eq!(term.vi_mode_cursor.point.column, Column(0));
+    }
+
+    #[test]
     fn a_smaller_history_keeps_the_cursor_of_the_selection_mode_in_it() {
         let mut term = term_with_history(1000);
         feed(&mut term, "line\r\n".repeat(400).as_bytes());
@@ -2639,6 +2759,38 @@ mod tests {
         assert!(view.matches().is_empty());
         assert_eq!(view.search_lines(&term), None);
         assert!(term.selection.is_some(), "the selection of the last match stays");
+    }
+
+    #[test]
+    fn a_match_that_wraps_past_the_bottom_of_the_view_ends_the_search() {
+        // A wide character wrapped from a line that the view shows last into one it does not:
+        // the search of the emulator went around the grid after it, again and again.
+        let mut term = term_of(10, "a\r\nb\r\nc\r\nd\r\nabcdefghi日\r\n1\r\n2\r\n3\r\n4\r\n5");
+        let wrapped = (term.topmost_line().0..=term.bottommost_line().0)
+            .find(|&line| {
+                term.grid()[Line(line)][Column(9)]
+                    .flags
+                    .contains(Flags::LEADING_WIDE_CHAR_SPACER)
+            })
+            .unwrap_or_default();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut view = View::default();
+            let found = view.find(&mut term, "日", false, false, false, true);
+            // The search scrolls to its match; the view goes back to where that line is last.
+            term.scroll_display(Scroll::Bottom);
+            term.scroll_display(Scroll::Delta(term.screen_lines() as i32 - 1 - wrapped));
+            view.update_matches(&term);
+            let backwards = view.find(&mut term, "日", true, false, false, true);
+            let _ = sender.send((
+                found,
+                view.matches().len(),
+                backwards,
+                view.search_lines(&term).map(|lines| lines.len()),
+            ));
+        });
+        let done = receiver.recv_timeout(std::time::Duration::from_secs(5));
+        assert_eq!(done, Ok((true, 1, true, Some(1))));
     }
 
     #[test]
