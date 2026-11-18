@@ -29,8 +29,10 @@ kudari-core = { workspace = true, features = ["fuzz"] }
 cxx-qt-build.workspace = true
 
 [features]
-# Lets automated tests drive the UI. Never enabled for normal builds.
-test-hooks = []
+# Lets automated tests drive the UI, and counts for them. Never enabled for normal builds.
+test-hooks = ["stats"]
+# Counters of what Kudari does, for the GUI test and the bench; see kudari-core's stats.
+stats = ["kudari-core/stats"]
 
 [lints]
 workspace = true

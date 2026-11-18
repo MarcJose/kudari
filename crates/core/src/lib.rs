@@ -34,6 +34,7 @@ pub mod services;
 pub mod sessions;
 pub mod settings;
 pub mod shells;
+pub mod stats;
 pub mod terminal;
 pub mod theme;
 pub mod title;

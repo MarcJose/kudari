@@ -46,6 +46,8 @@ harness = false
 [features]
 # Random input for the tests of the front ends, which feed it to their own parsers.
 fuzz = []
+# Counters of what Kudari does, for the GUI test and the bench; see src/stats.rs.
+stats = []
 
 [lints]
 workspace = true

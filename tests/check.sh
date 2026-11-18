@@ -54,6 +54,8 @@ cargo clippy --locked --workspace --all-targets --features test-hooks -- -D warn
 
 echo "== Unit tests"
 cargo test --locked --workspace
+# The counters exist only with their feature, and so do their tests.
+cargo test --locked -p kudari-core --features stats --lib stats::
 
 echo "== C++ warnings"
 # The headers of Qt and KDE are system headers here: only our own code counts.
