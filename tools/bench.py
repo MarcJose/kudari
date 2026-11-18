@@ -685,6 +685,27 @@ def counters(terminal, measured):
     table(["load", "wakeups/s", "refreshes/s", "paints/s", "lock wait p95", "lock hold p95", "queue p95", "build µs", "draw µs", "copy µs"], rows)
 
 
+def profiles(directory):
+    """For a run with --perf: the command of `perf report` for each load of each run, by the
+    times of its start and end on the clock of `perf`."""
+    found = []
+    for path in sorted(directory.glob("*-*.perf")):
+        terminal, run = path.stem.rsplit("-", 1)
+        data = directory / f"perf-{terminal}-{run}.data"
+        if not run.isdigit() or not data.exists():
+            continue
+        for line in path.read_text().splitlines():
+            parts = line.split()
+            if len(parts) == 3:
+                found.append((terminal, run, parts[0], f"perf report -i {data} --time {parts[1]},{parts[2]} --sort comm,dso,sym"))
+    if not found:
+        return
+    print("\nProfiles of perf, one for each load of each run; --sort sym --comm 'PTY reader' and the like")
+    print("show one thread, and perf report --no-children shows where the time itself goes.")
+    for terminal, run, load, command in found:
+        print(f"{terminal} run {run}, {load}: {command}")
+
+
 def ranged(whole, width):
     """Whole milliseconds cut off, `width` of them added up, as the range they stand for."""
     return milliseconds(whole) if width == 1 else f"{whole}-{whole + width}"
@@ -726,6 +747,7 @@ def report(directory, order, detail=False):
         if any(measured.frames for _, (_, result, _) in runs[terminal] for measured in result.values()):
             drawing(terminal, runs[terminal], detail)
         counters(terminal, runs[terminal])
+    profiles(directory)
 
 # The scenarios of `tools/bench.sh --scenarios` that wait, in the order of the report, with
 # what each of them shows.

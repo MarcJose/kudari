@@ -248,6 +248,23 @@ class Report(unittest.TestCase):
         self.assertEqual(bench.bucket_quantile([3, 0, 0, 1], 0.95), 8)
         self.assertIsNone(bench.bucket_quantile([0, 0], 0.5))
 
+    def test_a_profiled_run_names_the_command_for_each_load(self):
+        self.run_of("kudari-1", [threaded(0.1, 1)])
+        (self.directory / "kudari-1.perf").write_text("plain 100.000001 100.200002\n")
+        (self.directory / "perf-kudari-1.data").write_text("")
+        # A warm-up run has no command.
+        (self.directory / "kudari-w1.perf").write_text("plain 90.0 90.2\n")
+        (self.directory / "perf-kudari-w1.data").write_text("")
+        text = self.report("kudari")
+        self.assertIn(f"kudari run 1, plain: perf report -i {self.directory / 'perf-kudari-1.data'} --time 100.000001,100.200002 --sort comm,dso,sym", text)
+        self.assertNotIn("run w1", text)
+        self.assertNotIn("Profiles of perf", self.report_without_perf())
+
+    def report_without_perf(self):
+        for path in self.directory.glob("*perf*"):
+            path.unlink()
+        return self.report("kudari")
+
     def test_no_run_at_all_is_said_plainly(self):
         self.assertIn("No run finished", self.report("kudari"))
 
