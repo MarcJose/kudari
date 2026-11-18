@@ -47,8 +47,11 @@
 # All of them run full screen in a virtual KWin of 2560x1440, xterm through Xwayland, on a
 # D-Bus and with settings of their own, so the desktop and its settings stay out of it. The
 # loads are plain text, text in 256 colors, 300 full screens with colors of their own in
-# every cell, as a busy program draws them, and the numbers up to 2,000,000. Each terminal
-# keeps its own font, so the number of cells differs between them. The graphics card of the
+# every cell, as a busy program draws them, and the numbers up to 2,000,000. A load is timed
+# on the monotonic clock from its first byte to the answer of the terminal to a query of the
+# cursor (DSR) after its last, when the terminal has read and parsed all of it; the report
+# gives that query alone and how long each terminal still worked after the last byte. Each
+# terminal keeps its own font, so the number of cells differs between them. The graphics card of the
 # computer draws, so compare only runs on the same computer. Needs kwin_wayland with
 # Xwayland, qdbus6, dbus-run-session and python3, and kscreen-doctor for --scale.
 set -eu
@@ -86,41 +89,10 @@ built() {
     fi
     named "$name=$store/kudari"
 }
-stamp() { date +%Y-%m-%dT%H:%M:%S.%3N; }
-
-# As the shell of the terminal under test: waits until the window is up, then times each load.
+# As the shell of the terminal under test: waits until the window is up, then times each load
+# on the monotonic clock, up to the answer of the terminal to a query of the cursor.
 if [ "${KUDARI_BENCH_ROLE:-}" = workload ]; then
-    while [ ! -e "$KUDARI_BENCH_WORK/go" ]; do sleep 0.2; done
-    terminal_pid=$(cat "$KUDARI_BENCH_WORK/pid")
-    sleep 1
-    size=$(stty size)
-    rows=${size% *} cols=${size#* }
-    python3 "$tools/bench.py" frames "$KUDARI_BENCH_WORK" "$rows" "$cols"
-    echo "size $rows $cols" > "$KUDARI_BENCH_OUT"
-    clear
-    # The clock of perf, for perf report --time.
-    monotonic() { python3 -c 'import time; print(f"{time.clock_gettime(time.CLOCK_MONOTONIC):.6f}")'; }
-    for load in $KUDARI_BENCH_LOADS; do
-        sleep 1
-        # The CPU time of the threads of the terminal, just outside the time of the load.
-        python3 "$tools/bench.py" cpu "$KUDARI_BENCH_CPU" "$terminal_pid" "$load" start
-        [ -z "${KUDARI_BENCH_PERF:-}" ] || first=$(monotonic)
-        start=$(stamp)
-        case $load in
-            frames) cat "$KUDARI_BENCH_WORK/frames-${rows}x$cols.txt" ;;
-            seq) seq 1 2000000 ;;
-            idle) sleep 10 ;;
-            *) cat "$KUDARI_BENCH_WORK/$load.txt" ;;
-        esac
-        end=$(stamp)
-        [ -z "${KUDARI_BENCH_PERF:-}" ] || echo "$load $first $(monotonic)" >> "${KUDARI_BENCH_OUT%.txt}.perf"
-        python3 "$tools/bench.py" cpu "$KUDARI_BENCH_CPU" "$terminal_pid" "$load" end
-        sleep 1
-        echo "$load $start $end" >> "$KUDARI_BENCH_OUT"
-        clear
-    done
-    echo "done" >> "$KUDARI_BENCH_OUT"
-    exec sleep 100000
+    exec python3 "$tools/bench.py" workload "$KUDARI_BENCH_WORK"
 fi
 
 # As the session of the virtual KWin, which gives it WAYLAND_DISPLAY and DISPLAY: starts each
@@ -185,7 +157,7 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
                     printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nWidth=100\nHeight=100\n' \
                         > "$XDG_CONFIG_HOME/kudarirc"
                     cat "$work/kudarirc-settings" >> "$XDG_CONFIG_HOME/kudarirc"
-                    # The frame times of Qt Quick, with the time of day to match them to the loads,
+                    # The frame times of Qt Quick, on the monotonic clock of the loads,
                     # and in a build with the feature stats its counters ten times a second.
                     # With --perf, perf starts Kudari as its child and samples it: no rights to
                     # trace another process are needed, and only the cycles and the calls in
@@ -195,7 +167,7 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
                         profiler="perf record -q -k monotonic -e cycles:u -F 4999 --call-graph fp --user-callchains -o $work/perf-$terminal-$run.data --"
                     # shellcheck disable=SC2086 # the profiler is words of its own, or none
                     SHELL=$shell QSG_RENDER_TIMING=1 KUDARI_STATS=1 KUDARI_STATS_MS=100 \
-                        QT_MESSAGE_PATTERN='%{time yyyy-MM-ddTHH:mm:ss.zzz} %{category} %{message}' \
+                        QT_MESSAGE_PATTERN='%{time boot} %{category} %{message}' \
                         $profiler "$binary" > "$log" 2>&1 &
                     pid=$!
                     if [ -n "$KUDARI_BENCH_PERF" ]; then
