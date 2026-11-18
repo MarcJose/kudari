@@ -144,7 +144,7 @@ the parser or the scanner shows there in a minute, before a run of `tools/bench.
 
 A build with the feature `stats` counts what Kudari does: how often the PTY thread wakes it,
 refreshes and paints of each terminal, the wait for and the hold of the lock of a terminal,
-the wait in the queue of the Qt thread, and the build, draw and copy of a frame. With
+the wait in the queue of the Qt thread, and the build and draw of a frame. With
 `KUDARI_STATS=1` it writes them to stderr once a second, or every `KUDARI_STATS_MS`
 milliseconds. `tools/bench.sh` sets both, so that the report of a build made with
 `cargo build --release --features stats` shows what Kudari counted during each load. The test

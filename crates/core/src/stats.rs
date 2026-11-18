@@ -35,10 +35,8 @@ pub enum Time {
     Queue,
     /// Building the paints of a frame.
     FrameBuild,
-    /// Drawing the paints of a frame into its image.
+    /// Drawing the paints of a frame into its image, which goes to the screen as it is.
     FrameDraw,
-    /// Copying the image of a frame into the item.
-    FrameCopy,
 }
 
 #[cfg(feature = "stats")]
@@ -124,7 +122,7 @@ mod counting {
     }
 
     pub static COUNTS: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
-    pub static TIMES: [Histogram; 6] = [const { Histogram::new() }; 6];
+    pub static TIMES: [Histogram; 5] = [const { Histogram::new() }; 5];
     /// Paints for each terminal, by its id.
     pub static PAINTS: Mutex<BTreeMap<i32, u64>> = Mutex::new(BTreeMap::new());
     /// Work queued for the Qt thread that has not run yet.
@@ -149,7 +147,6 @@ mod counting {
             Time::Queue => 2,
             Time::FrameBuild => 3,
             Time::FrameDraw => 4,
-            Time::FrameCopy => 5,
         }
     }
 
@@ -347,7 +344,6 @@ pub fn json() -> String {
             "queue": time(Time::Queue),
             "frame_build": time(Time::FrameBuild),
             "frame_draw": time(Time::FrameDraw),
-            "frame_copy": time(Time::FrameCopy),
         })
         .to_string()
     }

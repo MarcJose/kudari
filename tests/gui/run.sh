@@ -642,7 +642,7 @@ counted=$(hook Stats | python3 -c '
 import json, sys
 stats, terminal = json.load(sys.stdin), sys.argv[1]
 needed = [stats["wakeups"], stats["reports"], stats["refreshes"], stats["paints"].get(terminal, 0)]
-needed += [stats[name]["count"] for name in ("lock_wait", "lock_hold", "queue", "frame_build", "frame_draw", "frame_copy")]
+needed += [stats[name]["count"] for name in ("lock_wait", "lock_hold", "queue", "frame_build", "frame_draw")]
 print("yes" if all(needed) else stats)' "$first_terminal")
 check "the counters count the work of a terminal" yes "$counted"
 
