@@ -28,7 +28,12 @@
 # a terminal and in the queue of the Qt thread, and the parts of a frame.
 # --loads picks some of plain, color, unicode, frames, boxes and seq; or partial, a line of
 # status that changes every 16 ms for ten seconds, for the cost of a small change; or idle:
-# ten seconds without output, for the CPU time and the wakeups of a terminal that waits. --set gives Kudari a setting
+# ten seconds without output, for the CPU time and the wakeups of a terminal that waits. Four
+# loads give input through the fake input of KWin and need wayland-scanner and a C compiler:
+# typing, 100 keys 50 ms apart, and burst, 100 keys at once, each echoed at once, for the time
+# from a key to the terminal and in Kudari to the frame that shows it; scroll, 100 turns of the
+# wheel up through a history of 20,000 lines and 100 down, 16 ms apart; and search, the plain
+# text with all matches of a search highlighted, in Kudari alone. --set gives Kudari a setting
 # for the measurement, such as --set Terminal.BlinkingCursor=true, once for each. --scale
 # scales the screen as for a HiDPI display, and --keep keeps the data and the logs of the
 # terminals. --scenarios measures Kudari alone instead of the loads: its start and its
@@ -272,8 +277,8 @@ while [ $# -gt 0 ]; do
             loads=$(echo "$2" | tr ',' ' ')
             for load in $loads; do
                 case $load in
-                    plain | color | unicode | frames | boxes | seq | partial | idle) ;;
-                    *) die "no load $load; there are plain, color, unicode, frames, boxes, seq, partial and idle" ;;
+                    plain | color | unicode | frames | boxes | seq | partial | idle | typing | burst | scroll | search) ;;
+                    *) die "no load $load; there are plain, color, unicode, frames, boxes, seq, partial, idle, typing, burst, scroll and search" ;;
                 esac
             done
             shift 2
@@ -365,6 +370,23 @@ if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
     # Some 400 MB of data and logs, kept only when the measurement fails.
     work=$(mktemp -d "${TMPDIR:-/tmp}/kudari-bench.XXXXXX")
     trap 'rm -rf "$work"; exit 1' INT TERM
+    # The loads that type and scroll do so through the fake input of KWin, which allows a
+    # program that a desktop file names; tests/gui/run.sh uses the same tool.
+    case " $loads " in
+        *" typing "* | *" burst "* | *" scroll "* | *" search "*)
+            for program in wayland-scanner cc; do
+                command -v "$program" > /dev/null || die "the loads typing, burst, scroll and search need $program"
+            done
+            if ! { wayland-scanner client-header "$tools/../tests/gui/fake-input.xml" "$work/fake-input-client.h" &&
+                wayland-scanner private-code "$tools/../tests/gui/fake-input.xml" "$work/fake-input-code.c" &&
+                cc -O1 -I"$work" "$tools/../tests/gui/fake_input.c" "$work/fake-input-code.c" -lwayland-client -lm -o "$work/input"; }; then
+                die "could not build the fake input of tests/gui"
+            fi
+            mkdir -p "$work/data/applications"
+            printf '[Desktop Entry]\nType=Application\nName=Kudari bench input\nExec=%s\nNoDisplay=true\nX-KDE-Wayland-Interfaces=org_kde_kwin_fake_input\n' \
+                "$work/input" > "$work/data/applications/kudari-bench-input.desktop"
+            ;;
+    esac
     echo "Terminals:$terminals; Kudari: $binary; $runs runs; scale $scale"
     # The variables that would change Qt, the drivers or what gets loaded, by name only.
     variables=$(env | grep -oE '^(QT|QSG|QML|MESA|LIBGL|__GL|KWIN|LD)_[A-Za-z0-9_]*=' | tr -d = | sort -u | tr '\n' ' ')
@@ -436,7 +458,8 @@ export KUDARI_BENCH_SCENARIOS="$scenarios" KUDARI_BENCH_PERF="$perf"
 tail -f "$work/progress.log" &
 progress=$!
 trap 'kill "$progress" 2> /dev/null; rm -rf "$XDG_RUNTIME_DIR"' EXIT
-KUDARI_BENCH_ROLE=session kwin_wayland --virtual --xwayland --no-lockscreen --socket=kudari-bench \
+# KWin finds the desktop file of the fake input among its data.
+KUDARI_BENCH_ROLE=session XDG_DATA_HOME="$work/data" kwin_wayland --virtual --xwayland --no-lockscreen --socket=kudari-bench \
     --width 2560 --height 1440 --scale "$scale" --exit-with-session "$tools/bench.sh" > "$work/kwin.log" 2>&1 || true
 sleep 0.5
 if [ -e "$work/failed" ]; then
