@@ -3,6 +3,42 @@
 All notable changes to Kudari. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 After 0.2.0, `tools/release.py` writes each section from the [Conventional Commits](https://www.conventionalcommits.org) since the previous release.
 
+## [0.4.0] - 2026-11-18
+
+Less work for every frame, above all at a scale of 2 and with a blinking or fading cursor,
+and AltGr on Windows types its characters again.
+
+### Fixed
+
+- On Windows, AltGr types its characters in shells of WSL: AltGr and + on a German keyboard
+  typed no tilde, as Kudari sent Escape before it as for Alt. With the link numbers on
+  Ctrl+Alt, AltGr and 7 to 0 type `{ [ ] }` instead of opening a link.
+- A fading cursor fades over its cell with the character in it, rather than into the
+  background of the color scheme.
+
+### Performance
+
+- A terminal shows its image as a texture of its own: no frame is converted, copied or
+  cleared on its way to the screen any more. Taking in output costs 7 to 12 % less CPU time
+  at a scale of 1 and 21 to 43 % less at a scale of 2, where a full screen of colors now
+  draws 58 frames a second instead of 47. Each window keeps 14 MB less memory.
+- The cursor has an image of its own: blinking and fading only change how much of it
+  shows. A blinking cursor costs 1.2 ms of CPU a second instead of 7.1 in 0.3.0, a fading
+  one 12 ms instead of 99.
+- A terminal refreshes once a frame rather than for every piece of output: with seq, 48
+  times a second instead of 3666. A full screen of colors comes in 6 % faster.
+
+### Development
+
+- `tools/bench.sh --scenarios` measures the start, showing the window, a second start,
+  waiting and memory; `--perf` profiles the loads; several builds compare in the same runs
+  with a verdict.
+- A build with the feature `stats` counts what Kudari does, for the bench and the GUI test,
+  which now checks that nothing is painted while nothing happens and waits until Kudari has
+  settled instead of fixed pauses.
+- `cargo bench -p kudari-core` counts instructions, and `tools/bench-compare.py` compares
+  them between two states.
+
 ## [0.3.0] - 2026-11-17
 
 Faster and leaner drawing, a cursor that rests, a safer Windows build, and 137 fixes
