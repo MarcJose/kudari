@@ -39,4 +39,6 @@ pub mod terminal;
 pub mod theme;
 pub mod timing;
 pub mod title;
+#[cfg(test)]
+mod upstream_tests;
 pub mod view;
