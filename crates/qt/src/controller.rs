@@ -15,7 +15,7 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Mutex, OnceLock, PoisonError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use cxx_qt::{CxxQtThread, CxxQtType, Threading};
 use cxx_qt_lib::QString;
@@ -748,6 +748,8 @@ impl qobject::Controller {
 
     /// Periodic update of titles and the monitors.
     fn poll(self: Pin<&mut Self>) {
+        // Output of a terminal whose frame did not come is reported again.
+        terminal::release_held(Duration::from_millis(100));
         let format = self.app.settings().title_format.clone();
         let statuses: Vec<app::Status> = self
             .app
