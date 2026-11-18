@@ -545,6 +545,7 @@ dependencies = [
  "getrandom",
  "libc",
  "polling",
+ "regex-automata",
  "serde_json",
  "windows-sys 0.61.2",
 ]
