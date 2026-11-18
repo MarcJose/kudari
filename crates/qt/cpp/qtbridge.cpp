@@ -196,6 +196,9 @@ void RkImageItem::geometryChange(const QRectF &newGeometry, const QRectF &oldGeo
     QQuickItem::geometryChange(newGeometry, oldGeometry);
     if (newGeometry.size() != oldGeometry.size()) {
         updateContent();
+    } else if (newGeometry.topLeft() != oldGeometry.topLeft()) {
+        // A new place can lie differently between the pixels of the device.
+        update();
     }
 }
 
@@ -313,6 +316,12 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
         fade->appendChildNode(cursor);
         m_contentDirty = true;
     }
+    // The images lie on whole pixels of the device. At a fractional scale, as 125 %, the item can
+    // start or end between two of them; its texture would then be stretched or sampled between
+    // pixels, and the text blurred or shifted by a pixel from some column on.
+    const QPointF corner = mapToScene(QPointF());
+    const QPointF snap(qRound(corner.x() * ratio) / ratio - corner.x(), qRound(corner.y() * ratio) / ratio - corner.y());
+    const QRectF place(snap, QSizeF(size) / ratio);
     const bool alone = !m_contentDirty && m_image.size() == size;
     if (!alone) {
         if (m_image.size() != size) {
@@ -327,8 +336,11 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
             QPainter painter(&m_image);
             paint(&painter);
         }
-        showImage(shown, content, m_image, m_opaque, QRectF(0, 0, width(), height()), size, smooth());
+        showImage(shown, content, m_image, m_opaque, place, size, smooth());
         m_contentDirty = false;
+    } else if (content->rect() != place) {
+        // The item moved by a part of a pixel, with the same image.
+        content->setRect(place);
     }
     const QSize room = (cursorRoom() * ratio).toSize().expandedTo(QSize(1, 1));
     // A new image, or a new node, has to be painted; otherwise the cursor may keep its texture.
@@ -346,9 +358,15 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
     }
     const double opacity = where.isEmpty() ? 0.0 : cursorOpacity();
     fade->setOpacity(opacity);
-    if (!where.isEmpty() && !kept) {
+    if (!where.isEmpty()) {
         const QSize covered = (where.size() * ratio).toSize().boundedTo(room);
-        showImage(shown, cursor, m_cursor, false, QRectF(where.topLeft(), QSizeF(covered) / ratio), covered, smooth());
+        const QRectF at(where.topLeft() + snap, QSizeF(covered) / ratio);
+        if (!kept) {
+            showImage(shown, cursor, m_cursor, false, at, covered, smooth());
+        } else if (cursor->rect() != at) {
+            // The item moved by a part of a pixel, with the same cursor.
+            cursor->setRect(at);
+        }
     } else if (!cursor->texture()) {
         // A node without a texture is not drawn, but it must have one to exist at all.
         showImage(shown, cursor, m_cursor, false, QRectF(), QSize(1, 1), smooth());

@@ -1220,8 +1220,11 @@ check "quitting after the first start ends the program" no "$(kill -0 "$kudari" 
 # At a fractional scale, as 125 %, the cells measure whole pixels of the device: the lines of
 # tables are as thick in every cell, and as far apart. With a cell of 9 logical pixels, 11.25
 # of the device, they used to vary from column to column.
+# A window of 89 % gives the terminal a width that is no whole number of pixels of the device,
+# as 886 logical pixels make 1107.5: its image has to lie on whole pixels all the same, which
+# the pixels below compare.
 mkdir "$work/scaled"
-printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nKeepOpen=true\n[Terminal]\nFontSize=11\n[Security]\nAllowRemoteCommands=true\n' \
+printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nKeepOpen=true\nWidth=89\n[Terminal]\nFontSize=11\n[Security]\nAllowRemoteCommands=true\n' \
     > "$work/scaled/kudarirc"
 # It writes its counters once a second as well, as the bench reads them.
 KUDARI_STATS=1 QT_SCALE_FACTOR=1.25 XDG_CONFIG_HOME="$work/scaled" "$binary" > "$work/scaled.log" 2>&1 &
