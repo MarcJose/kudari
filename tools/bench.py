@@ -45,7 +45,7 @@ WORDS = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod t
 CELLS = "abcdefghijklmnopqrstuvwxyz0123456789#@%&"
 LOADS = (
     "plain", "color", "unicode", "frames", "boxes", "seq", "search", "titles", "osc", "bells", "queries", "combining",
-    "typing", "burst", "scroll", "query", "partial", "idle",
+    "typing", "burst", "scroll", "resize", "query", "partial", "idle",
 )
 DESCRIPTIONS = {
     "plain": "24 MB of plain text",
@@ -63,13 +63,14 @@ DESCRIPTIONS = {
     "typing": "100 keys 50 ms apart, each echoed at once",
     "burst": "100 keys at once, each echoed at once",
     "scroll": "100 turns of the wheel up through a history of 20,000 lines and 100 down, 16 ms apart",
+    "resize": "10 steps of the font larger and 10 smaller with a history of 20,000 lines, 0.5 s apart",
     "query": "200 queries each of the cursor, the device attributes and the background, alone and under output",
     "partial": "a line of status changed every 16 ms for 10 seconds, the rest of the screen kept",
     "idle": "10 seconds without output",
 }
 # Loads that take a fixed time instead of a number of bytes, and how often they change the
 # screen meanwhile.
-FIXED_TIME = {"typing": 100, "burst": 100, "scroll": 200, "query": 0, "partial": 625, "idle": 0}
+FIXED_TIME = {"typing": 100, "burst": 100, "scroll": 200, "resize": 20, "query": 0, "partial": 625, "idle": 0}
 # Text of the load `unicode`: words of wide characters, emoji alone, joined and with a skin
 # tone, and letters with combining marks.
 WIDE = "日本語 中文字 한국어 テキスト 漢字仮名 終端模擬".split()
@@ -84,6 +85,12 @@ BLOCKS = "▏▎▍▌▋▊▉█▀▄▐░▒▓▖▗▘▝"
 QUERIES = 100_000
 BATCH = 1000
 ANSWERED = re.compile(rb"\x1b\[\?[0-9;]*c")
+# The shortcuts of the load resize: a larger font and a smaller one, with Ctrl and = or -, and
+# with Shift as well in kitty; its steps each way, and the seconds between two.
+ZOOM = {"kitty": ((29, 42, 13), (29, 42, 12))}
+ZOOM_KEYS = ((29, 13), (29, 12))
+ZOOM_STEPS = 10
+ZOOM_GAP = 0.5
 # The queries of the load query, each with the pattern of its answer: the place of the cursor
 # (DSR), the device attributes (DA1), and the color of the background (OSC 11), which some
 # terminals do not answer; a query of the device attributes after it tells that apart.
@@ -308,6 +315,16 @@ def queried(reader, writer, busy=None):
     return times
 
 
+def chord(tool, codes):
+    """Presses the keys of a shortcut through the fake input of KWin: the time the last was
+    pressed, or None."""
+    done = subprocess.run([str(tool), "chord", *map(str, codes)], capture_output=True, text=True, check=False)
+    try:
+        return float(done.stdout.split()[0])
+    except (IndexError, ValueError):
+        return None
+
+
 def press(tool, *codes):
     """Presses the keys together and lets them go, through the fake input of KWin."""
     subprocess.run([str(tool), "key", *map(str, codes)], check=False)
@@ -320,7 +337,8 @@ def workload(directory, environment):
     the terminal are switched off, for the answers; the output goes out as it would, so that
     a new line is still a carriage return and a line feed."""
     out, loads = Path(environment["KUDARI_BENCH_OUT"]), environment["KUDARI_BENCH_LOADS"].split()
-    kudari = out.stem.rsplit("-", 1)[0].split("@")[0] == "kudari"
+    name = out.stem.rsplit("-", 1)[0].split("@")[0]
+    kudari = name == "kudari"
     tool = directory / "input"
     scale = float(environment.get("KUDARI_BENCH_SCALE") or 1)
     middle = [str(size / scale / 2) for size in SCREEN]
@@ -353,8 +371,8 @@ def workload(directory, environment):
             continue
         time.sleep(1)
         keys, replies, trips_of = None, None, None
-        if load == "scroll":
-            # A history to scroll through.
+        if load in ("scroll", "resize"):
+            # A history to scroll through, or to wrap anew.
             subprocess.run(["seq", "1", str(HISTORY)], check=False)
             answer(reader, writer)
         elif load == "search":
@@ -384,6 +402,14 @@ def workload(directory, environment):
             write_all(writer, directory / "plain.txt")
         elif load == "queries":
             replies = asked(reader, writer, directory / "queries.txt", QUERIES)
+        elif load == "resize":
+            larger, smaller = ZOOM.get(name, ZOOM_KEYS)
+            keys = []
+            for codes in [larger] * ZOOM_STEPS + [smaller] * ZOOM_STEPS:
+                pressed = chord(tool, codes)
+                time.sleep(ZOOM_GAP)
+                if pressed is not None:
+                    keys.append((pressed, pressed))
         elif load == "query":
             trips_of = {"alone": queried(reader, writer), "busy": queried(reader, writer, directory / f"frames-{rows}x{columns}.txt")}
         elif load == "seq":
@@ -1070,6 +1096,34 @@ def answers(runs, trips, terminals):
     table(["terminal", "query ms", "95% ms"] + [f"{load} ms" for load in ran], rows)
 
 
+def zooming(runs, terminals):
+    """For the load resize: in a terminal that reports its frames, the milliseconds from each
+    shortcut to the first frame after it and the longest gap between two frames meanwhile,
+    over all runs; and for each terminal the shortcuts that went out."""
+    rows = []
+    for terminal in terminals:
+        done = [result["resize"] for _, (_, result, _) in runs[terminal] if "resize" in result and result["resize"].keys]
+        if not done:
+            continue
+        shown, gap = [], []
+        for measured in done:
+            times = sorted(found.time for found in measured.frames)
+            for pressed, _ in measured.keys:
+                later = [moment for moment in times if moment >= pressed]
+                if later:
+                    shown.append(1000 * (later[0] - pressed))
+            gap.extend(gaps(measured.frames))
+        cells = [terminal, str(sum(len(measured.keys) for measured in done))]
+        cells += [f"{percentile(shown, 0.5):.1f}", f"{percentile(shown, 0.95):.1f}", f"{max(shown):.1f}"] if shown else ["-", "-", "-"]
+        cells.append(f"{max(gap):.0f}" if gap else "-")
+        rows.append(cells)
+    if not rows:
+        return
+    print(f"\nresize: {DESCRIPTIONS['resize']}. For Kudari, the milliseconds from each shortcut")
+    print("to the first frame after it, which shows the new size, and the longest gap between frames.")
+    table(["terminal", "shortcuts", "to frame p50", "p95", "max", "longest gap ms"], rows)
+
+
 def latency(runs, terminals):
     """For the loads that type: from each key to the terminal, and in a terminal that reports
     its frames to the first frame after the echo, in milliseconds over all runs."""
@@ -1386,6 +1440,7 @@ def report(directory, order, detail=False):
     print("the highest throughput comes first.")
     throughput(runs, terminals)
     latency(runs, terminals)
+    zooming(runs, terminals)
     replies(runs, terminals)
     asking(runs, terminals)
     answers(runs, taken, terminals)
