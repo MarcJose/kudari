@@ -139,8 +139,9 @@ pub fn repair_view<T>(term: &mut Term<T>) -> bool {
     repaired
 }
 
-/// Takes out spacers of wide characters in column 0, where the lines of the screen, the
-/// cursor of the selection mode and the ends of the selection are; see [`repair_view`].
+/// Takes out spacers of wide characters in column 0 in the lines of the screen, those that
+/// show, the line of the cursor of the selection mode and the ends of the selection; see
+/// [`repair_view`]. A spacer deeper in the history stays until one of these reaches it.
 fn repair_spacers<T>(term: &mut Term<T>) -> bool {
     let (top, bottom) = (term.topmost_line().0, term.bottommost_line().0);
     let mut repaired = false;
@@ -155,7 +156,12 @@ fn repair_spacers<T>(term: &mut Term<T>) -> bool {
             repaired = true;
         }
     };
-    for line in 0..term.screen_lines() as i32 {
+    // The lines that output writes to, and those that show while the view is scrolled back.
+    let (lines, offset) = (term.screen_lines() as i32, term.grid().display_offset() as i32);
+    for line in 0..lines {
+        repair(term, line);
+    }
+    for line in -offset..(lines - offset).min(0) {
         repair(term, line);
     }
     repair(term, term.vi_mode_cursor.point.line.0);
@@ -1911,6 +1917,22 @@ mod tests {
         assert_eq!(
             selected_text(&term, &Options::default()).map(|text| text.trim().to_string()),
             Some("x".to_string())
+        );
+        // One scrolled into the history is taken out once the view shows it.
+        let mut scrolled = term_of(10, "界x\r\x1b[P\r\n\n\n\n\n\n");
+        let line = -(scrolled.grid().history_size() as i32);
+        assert!(
+            line < 0
+                && scrolled.grid()[Line(line)][Column(0)]
+                    .flags
+                    .contains(Flags::WIDE_CHAR_SPACER)
+        );
+        scrolled.scroll_display(Scroll::Top);
+        assert!(repair_view(&mut scrolled));
+        assert!(
+            !scrolled.grid()[Line(line)][Column(0)]
+                .flags
+                .contains(Flags::WIDE_CHAR_SPACER)
         );
         term.selection = None;
         toggle_selection_mode(&mut term);
