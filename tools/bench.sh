@@ -16,7 +16,10 @@
 # the median of the runs, its spread, a 95 % interval of the median, the fastest and the
 # slowest run and the runs far from the others; the CPU time of each terminal during the
 # load and its busiest threads, and the memory after each load; for Kudari, how often and
-# how fast Qt Quick drew meanwhile, and with --detail the times of its frames in detail.
+# how fast Qt Quick drew meanwhile, and with --detail the times of its frames in detail. A
+# build with the feature stats (cargo build --release --features stats) adds what Kudari
+# counted during each load: wakeups, refreshes and paints a second, the waits for the lock of
+# a terminal and in the queue of the Qt thread, and the parts of a frame.
 # --loads picks some of plain, color, frames and seq, or idle: ten seconds without output,
 # for the CPU time and the wakeups of a terminal that waits. --set gives Kudari a setting
 # for the measurement, such as --set Terminal.BlinkingCursor=true, once for each. --scale
@@ -131,8 +134,9 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
                     printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nWidth=100\nHeight=100\n' \
                         > "$XDG_CONFIG_HOME/kudarirc"
                     cat "$work/kudarirc-settings" >> "$XDG_CONFIG_HOME/kudarirc"
-                    # The frame times of Qt Quick, with the time of day to match them to the loads.
-                    SHELL=$shell QSG_RENDER_TIMING=1 \
+                    # The frame times of Qt Quick, with the time of day to match them to the loads,
+                    # and in a build with the feature stats its counters ten times a second.
+                    SHELL=$shell QSG_RENDER_TIMING=1 KUDARI_STATS=1 KUDARI_STATS_MS=100 \
                         QT_MESSAGE_PATTERN='%{time yyyy-MM-ddTHH:mm:ss.zzz} %{category} %{message}' \
                         "$KUDARI_BENCH_BINARY" > "$log" 2>&1 &
                     pid=$!

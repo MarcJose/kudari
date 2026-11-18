@@ -87,6 +87,13 @@ mod counting {
             self.most.store(0, Ordering::Relaxed);
         }
 
+        pub fn buckets(&self) -> Vec<u64> {
+            self.buckets
+                .iter()
+                .map(|bucket| bucket.load(Ordering::Relaxed))
+                .collect()
+        }
+
         pub fn summary(&self) -> super::Summary {
             let buckets: Vec<u64> = self
                 .buckets
@@ -313,10 +320,10 @@ pub fn json() -> String {
                 .map_or(0, |counter| counter.load(Ordering::Relaxed))
         };
         let time = |what| {
-            let summary = counting::TIMES
-                .get(counting::time_index(what))
-                .map_or_else(Summary::default, counting::Histogram::summary);
+            let histogram = counting::TIMES.get(counting::time_index(what));
+            let summary = histogram.map_or_else(Summary::default, counting::Histogram::summary);
             serde_json::json!({
+                "buckets": histogram.map_or_else(Vec::new, counting::Histogram::buckets),
                 "count": summary.count,
                 "total_us": summary.total_micros,
                 "max_us": summary.most_micros,
@@ -346,6 +353,38 @@ pub fn json() -> String {
     }
     #[cfg(not(feature = "stats"))]
     String::from("{}")
+}
+
+/// With `KUDARI_STATS=1` in a build that counts, writes all counters to stderr on a thread of
+/// its own, once a second or every `KUDARI_STATS_MS` milliseconds (10 at least): a line of
+/// `kudari-stats`, the seconds since 1970 and [`json`]. The counters keep counting; a reader,
+/// such as `tools/bench.py`, takes the differences between two lines. Without the feature or
+/// the variable, it does nothing.
+pub fn report_from_environment() {
+    #[cfg(feature = "stats")]
+    {
+        if std::env::var_os("KUDARI_STATS").is_none_or(|value| value != "1") {
+            return;
+        }
+        let every = std::env::var("KUDARI_STATS_MS")
+            .ok()
+            .and_then(|milliseconds| milliseconds.parse::<u64>().ok())
+            .map_or(Duration::from_secs(1), |milliseconds| {
+                Duration::from_millis(milliseconds.max(10))
+            });
+        let _ = std::thread::Builder::new()
+            .name("kudari-stats".to_string())
+            .spawn(move || {
+                loop {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs_f64();
+                    eprintln!("kudari-stats {now:.3} {}", json());
+                    std::thread::sleep(every);
+                }
+            });
+    }
 }
 
 /// Sets every counter back to nothing, but not what waits in the queue, which is still there.
@@ -393,6 +432,8 @@ mod tests {
         assert_eq!(stats["paints"]["7"], 2);
         assert_eq!(stats["paints"]["9"], 1);
         assert_eq!(stats["lock_wait"]["count"], 1);
+        // 3 µs lie in the bucket of 2 to 4, the third.
+        assert_eq!(stats["lock_wait"]["buckets"][2], 1);
         assert_eq!(stats["queue"]["count"], 1);
         assert_eq!(stats["queued"], 0);
         assert_eq!(stats["queued_max"], 1);

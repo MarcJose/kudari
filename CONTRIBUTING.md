@@ -114,6 +114,16 @@ the working tree, runs both in turn and marks what changed: instructions by more
 percent, or times by more than five where nothing could be counted. A change to the drawing,
 the parser or the scanner shows there in a minute, before a run of `tools/bench.sh`.
 
+A build with the feature `stats` counts what Kudari does: how often the PTY thread wakes it,
+refreshes and paints of each terminal, the wait for and the hold of the lock of a terminal,
+the wait in the queue of the Qt thread, and the build, draw and copy of a frame. With
+`KUDARI_STATS=1` it writes them to stderr once a second, or every `KUDARI_STATS_MS`
+milliseconds. `tools/bench.sh` sets both, so that the report of a build made with
+`cargo build --release --features stats` shows what Kudari counted during each load. The test
+build has them as well: the GUI test reads them over D-Bus to check that nothing is painted
+while nothing happens, and waits with them until Kudari has settled. Without the feature,
+nothing is counted.
+
 On Windows, `tools/windows-package.ps1` builds the Windows front end and packs it, as the
 release workflow does. It needs PowerShell 7, Git, Rust, Python, the Visual Studio Build
 Tools with the C++ tools and the Windows SDK, and Qt for MSVC:
