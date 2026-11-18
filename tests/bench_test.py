@@ -284,6 +284,17 @@ class Report(unittest.TestCase):
         self.assertIsNone(measured.backlog)
         self.assertNotIn("A load ends when", self.report("kudari"))
 
+    def test_a_load_of_a_fixed_time_costs_per_change_and_has_no_throughput(self):
+        self.run_of("kudari-1", [], (("partial", 0.0, 10.0),))
+        self.cpu_of("kudari-1", "partial", (1, "main", 0, 625), (2, "QSGRenderThread", 0, 625))
+        text = self.report("kudari")
+        self.assertNotIn("\npartial: a line of status", text)
+        part = text.split("partial: CPU time of the terminal")[1].splitlines()
+        self.assertIn("ms per change", part[1])
+        row = next(line.split() for line in part if line.startswith("kudari "))
+        # 1250 ms of CPU for 625 changes.
+        self.assertEqual(row[1:4], ["1250", "12.5", "2.00"])
+
     def test_without_lines_around_a_load_the_counters_say_nothing(self):
         self.run_of("kudari-1", [self.stats(0.1, 10, {}, [], (0, 0)), self.stats(0.4, 20, {}, [], (0, 0))])
         self.assertNotIn("feature stats", self.report("kudari"))
@@ -544,6 +555,44 @@ class Compare(unittest.TestCase):
         self.assertEqual(self.marks(base, {("throughput", "plain", "parser_ms"): 133.0, ("throughput", "plain", "parser_instructions"): 0.0}), {"parser_ms": False})
 
 
+class Loads(unittest.TestCase):
+    """The data of the loads, from a fixed seed."""
+
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: [path.unlink() for path in self.directory.iterdir()] and self.directory.rmdir())
+
+    def screens(self, text):
+        return [screen for screen in text.split("\x1b[H") if screen]
+
+    def test_the_panels_fill_each_screen_with_lines_blocks_and_braille(self):
+        import re as expressions
+
+        bench.boxes(self.directory, 12, 40)
+        text = (self.directory / "boxes-12x40.txt").read_bytes().decode()
+        screens = self.screens(text)
+        self.assertEqual(len(screens), 300)
+        for screen in screens[:20]:
+            rows = expressions.sub(r"\x1b\[[0-9;]*m", "", screen).split("\r\n")
+            # Every row is as wide as the terminal: nothing wraps or scrolls.
+            self.assertEqual([len(row) for row in rows], [40] * 12)
+        self.assertTrue(any(kind[0] in text for kind in bench.LINES))
+        self.assertTrue(any(chr(0x2800) <= character <= chr(0x28FF) for character in text))
+        self.assertIn(bench.BLOCKS[7], text)
+        # The same again from the seed.
+        first = text
+        (self.directory / "boxes-12x40.txt").unlink()
+        bench.boxes(self.directory, 12, 40)
+        self.assertEqual((self.directory / "boxes-12x40.txt").read_bytes().decode(), first)
+
+    def test_the_unicode_text_holds_wide_characters_emoji_and_marks(self):
+        bench.data(self.directory)
+        text = (self.directory / "unicode.txt").read_text()
+        self.assertEqual(text.count("\n"), 150_000)
+        for piece in ("日本語", "👩‍💻", "👍🏽", "e\u0301"):
+            self.assertIn(piece, text)
+
+
 class Driver(unittest.TestCase):
     """The parts of the driver of the loads that need no terminal under test."""
 
@@ -590,6 +639,17 @@ class Driver(unittest.TestCase):
     def test_without_an_answer_the_wait_ends_after_its_time(self):
         self.terminal(b"")
         self.assertIsNone(bench.answer(self.slave, self.slave, wait=0.2))
+
+    def test_a_line_of_status_changes_on_time_and_leaves_the_rest(self):
+        reader, writer = os.pipe()
+        self.addCleanup(os.close, reader)
+        changes = bench.partial(writer, 60, seconds=0.2, every=0.02)
+        os.close(writer)
+        written = os.read(reader, 1 << 20).decode()
+        # Ten changes in 0.2 s, each saving the cursor, writing the top line and going back.
+        self.assertIn(changes, range(9, 12))
+        self.assertEqual(written.count("\x1b7\x1b[1;1H"), changes)
+        self.assertEqual(written.count("\x1b8"), changes)
 
     def test_a_file_goes_out_whole_in_blocks(self):
         source = Path(tempfile.mkdtemp()) / "load.txt"

@@ -4,7 +4,8 @@
 """The data and the report of tools/bench.sh.
 
     tools/bench.py data DIR                 the text and the colored text
-    tools/bench.py frames DIR ROWS COLUMNS  300 full screens of a terminal of that size
+    tools/bench.py frames DIR ROWS COLUMNS  300 full screens of a terminal of that size, and as
+                                            many of panels with lines, blocks and braille
     tools/bench.py environment DIR [BINARY] what was measured, on what, and how
     tools/bench.py order RUN TERMINAL...    the terminals in the order of a run, with --seed
     tools/bench.py cpu FILE PID LOAD WHEN   adds the CPU time of each thread of PID to FILE
@@ -42,14 +43,30 @@ from typing import NamedTuple
 
 WORDS = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor".split()
 CELLS = "abcdefghijklmnopqrstuvwxyz0123456789#@%&"
-LOADS = ("plain", "color", "frames", "seq", "idle")
+LOADS = ("plain", "color", "unicode", "frames", "boxes", "seq", "partial", "idle")
 DESCRIPTIONS = {
     "plain": "24 MB of plain text",
     "color": "28 MB of text in 256 colors",
+    "unicode": "20 MB of wide characters, emoji and combining marks in 256 colors",
     "frames": "300 full screens with colors of their own in every cell",
+    "boxes": "300 full screens of panels with lines, blocks and braille, as system monitors draw them",
     "seq": "the numbers up to 2,000,000",
+    "partial": "a line of status changed every 16 ms for 10 seconds, the rest of the screen kept",
     "idle": "10 seconds without output",
 }
+# Loads that take a fixed time instead of a number of bytes, and how often they change the
+# screen meanwhile.
+FIXED_TIME = {"partial": 625, "idle": 0}
+# Text of the load `unicode`: words of wide characters, emoji alone, joined and with a skin
+# tone, and letters with combining marks.
+WIDE = "日本語 中文字 한국어 テキスト 漢字仮名 終端模擬".split()
+EMOJI = ["🙂", "👍🏽", "🚀", "👩‍💻", "🏳️‍🌈", "❤️", "🇩🇪", "🧑🏿‍🔬"]
+MARKED = ["e\u0301", "a\u0308", "o\u0302", "n\u0303", "c\u0327", "u\u0308\u0301"]
+# The pieces of the load boxes: lines thin, heavy and double; blocks; and braille.
+LINES = ("─│┌┐└┘├┤┬┴┼", "━┃┏┓┗┛┣┫┳┻╋", "═║╔╗╚╝╠╣╦╩╬")
+BLOCKS = "▏▎▍▌▋▊▉█▀▄▐░▒▓▖▗▘▝"
+# The time between two changes of the load partial, in seconds.
+PARTIAL_EVERY = 0.016
 SEQ_BYTES = sum(len(f"{n}\n") for n in range(1, 2_000_001))
 # The line of a frame in the log of Qt Quick, from each of its render loops: threaded, basic
 # and software. Qt gives whole milliseconds there, cut off. The time in front is the monotonic
@@ -189,6 +206,7 @@ def workload(directory, environment):
     reader, writer = sys.stdin.fileno(), sys.stdout.fileno()
     columns, rows = os.get_terminal_size(writer)
     frames(directory, rows, columns)
+    boxes(directory, rows, columns)
     mode = termios.tcgetattr(reader)
     mode[3] &= ~(termios.ICANON | termios.ECHO)
     mode[6][termios.VMIN], mode[6][termios.VTIME] = 1, 0
@@ -206,11 +224,17 @@ def workload(directory, environment):
     subprocess.run(["clear"], check=False)
     for load in loads:
         time.sleep(1)
+        if load == "partial":
+            # A screen full of text that stays, under the line that changes.
+            os.write(writer, "\r\n".join(" ".join(WORDS)[:columns] for _ in range(rows - 1)).encode())
+            answer(reader, writer)
         # The CPU time of the threads of the terminal, just outside the time of the load.
         cpu(usage, terminal, load, "start")
         start = monotonic()
-        if load == "frames":
-            write_all(writer, directory / f"frames-{rows}x{columns}.txt")
+        if load in ("frames", "boxes"):
+            write_all(writer, directory / f"{load}-{rows}x{columns}.txt")
+        elif load == "partial":
+            partial(writer, columns)
         elif load == "seq":
             # A program of its own, which writes as it always does.
             subprocess.run(["seq", "1", "2000000"], check=False)
@@ -272,6 +296,11 @@ def data(directory):
         for _ in range(200_000):
             words = (f"\x1b[38;5;{rng.randrange(256)}m{rng.choice(WORDS)}" for _ in range(8))
             text.write(" ".join(words) + "\x1b[0m\n")
+    with open(directory / "unicode.txt", "w") as text:
+        for number in range(150_000):
+            pieces = (rng.choice((rng.choice(WIDE), rng.choice(EMOJI), rng.choice(MARKED) + rng.choice(WORDS), rng.choice(WORDS))) for _ in range(6))
+            words = (f"\x1b[38;5;{rng.randrange(256)}m{piece}" for piece in pieces)
+            text.write(f"{number:6d} " + " ".join(words) + "\x1b[0m\n")
 
 
 def frames(directory, rows, columns):
@@ -290,6 +319,73 @@ def frames(directory, rows, columns):
                 )
                 text.write("".join(cells) + ("\r\n" if row < rows - 1 else ""))
             text.write("\x1b[0m")
+
+
+def boxes(directory, rows, columns):
+    """Full screens of four panels, each framed in lines of its own kind, with labels, bars of
+    blocks and graphs of braille in colors, as system monitors draw them."""
+    path = directory / f"boxes-{rows}x{columns}.txt"
+    if path.exists():
+        return
+    rng = random.Random(1)
+    half_rows, half_columns = max(3, rows // 2), max(4, columns // 2)
+    with open(path, "w") as text:
+        for _ in range(300):
+            screen = [[" "] * columns for _ in range(rows)]
+            colors = [["\x1b[0m"] * columns for _ in range(rows)]
+            for top, left in ((0, 0), (0, half_columns), (half_rows, 0), (half_rows, half_columns)):
+                bottom, right = min(rows, top + half_rows) - 1, min(columns, left + half_columns) - 1
+                if bottom - top < 2 or right - left < 3:
+                    continue
+                kind = rng.choice(LINES)
+                color = f"\x1b[0;38;5;{rng.randrange(256)}m"
+                for column in range(left, right + 1):
+                    screen[top][column] = screen[bottom][column] = kind[0]
+                for row in range(top, bottom + 1):
+                    screen[row][left] = screen[row][right] = kind[1]
+                screen[top][left], screen[top][right], screen[bottom][left], screen[bottom][right] = kind[2:6]
+                for row in range(top, bottom + 1):
+                    for column in range(left, right + 1):
+                        if row in (top, bottom) or column in (left, right):
+                            colors[row][column] = color
+                inner = right - left - 1
+                for row in range(top + 1, bottom):
+                    kind_of_row = (row - top) % 3
+                    if kind_of_row == 1:
+                        cells = list((rng.choice(WORDS) + " " + f"{rng.randrange(100)}%").ljust(inner)[:inner])
+                    elif kind_of_row == 2:
+                        filled = rng.randrange(inner + 1)
+                        cells = [BLOCKS[7]] * filled + [rng.choice(BLOCKS)] * min(1, inner - filled) + [" "] * max(0, inner - filled - 1)
+                    else:
+                        cells = [chr(0x2800 + rng.randrange(256)) for _ in range(inner)]
+                    shade = f"\x1b[0;38;5;{rng.randrange(256)};48;5;{rng.randrange(256)}m"
+                    for offset, cell in enumerate(cells):
+                        screen[row][left + 1 + offset] = cell
+                        colors[row][left + 1 + offset] = shade
+            text.write("\x1b[H")
+            for row in range(rows):
+                # A color only where it changes, as a program that draws such a screen sends it.
+                line, shown = [], None
+                for column in range(columns):
+                    if colors[row][column] != shown:
+                        shown = colors[row][column]
+                        line.append(shown)
+                    line.append(screen[row][column])
+                text.write("".join(line) + "\x1b[0m" + ("\r\n" if row < rows - 1 else ""))
+
+
+def partial(writer, columns, seconds=10.0, every=PARTIAL_EVERY):
+    """Changes a line of status at the top every `every` seconds for `seconds`, as a clock or a
+    bar of progress does, and leaves the rest of the screen: the times it changed it."""
+    changes = 0
+    start = monotonic()
+    while (now := monotonic()) - start < seconds:
+        filled = changes % (columns - 20)
+        line = f"{now - start:7.3f} s " + "█" * filled + "░" * (columns - 20 - filled)
+        os.write(writer, f"\x1b7\x1b[1;1H\x1b[7m{line}\x1b[0m\x1b8".encode())
+        changes += 1
+        time.sleep(max(0.0, start + changes * every - monotonic()))
+    return changes
 
 
 def when(stamp):
@@ -371,10 +467,13 @@ def measure(directory, name):
     sizes = {
         "plain": (directory / "plain.txt").stat().st_size,
         "color": (directory / "color.txt").stat().st_size,
-        "frames": (directory / f"frames-{rows}x{columns}.txt").stat().st_size,
         "seq": SEQ_BYTES,
-        "idle": 0,
+        **{load: 0 for load in FIXED_TIME},
     }
+    # Files that runs before these loads did not make.
+    for load, path in (("unicode", "unicode.txt"), ("frames", f"frames-{rows}x{columns}.txt"), ("boxes", f"boxes-{rows}x{columns}.txt")):
+        if (directory / path).exists():
+            sizes[load] = (directory / path).stat().st_size
     drawn, waits, loops, snapshots = [], [], set(), []
     used, woken, memory = threads(directory / f"{name}.cpu")
     log = directory / f"{name}.log"
@@ -742,6 +841,8 @@ def processor(runs, terminals):
             totals = [sum(measured.cpu.values()) for measured in done]
             shares = [sum(measured.cpu.values()) / 10 / measured.seconds for measured in done]
             per_mb = [sum(measured.cpu.values()) / (measured.size / 1e6) for measured in done if measured.size]
+            # A load of a fixed time costs per change of the screen.
+            per_change = [sum(measured.cpu.values()) / FIXED_TIME[load] for measured in done] if FIXED_TIME.get(load) else []
             wakeups = [sum((measured.switches or {}).values()) / measured.seconds for measured in done]
             # Without output, how often a thread wakes up says more than its few milliseconds.
             idle = not per_mb
@@ -753,13 +854,14 @@ def processor(runs, terminals):
             busy = [(group, found) for group, found in values.items() if statistics.median(found) >= 1]
             busiest = sorted(busy, key=lambda item: -statistics.median(item[1]))[:4]
             named = ", ".join(f"{group} {statistics.median(found):.0f}" for group, found in busiest) or "-"
-            cost = f"{statistics.median(per_mb):.1f}" if per_mb else "-"
+            cost = f"{statistics.median(per_change):.2f}" if per_change else f"{statistics.median(per_mb):.1f}" if per_mb else "-"
             rows.append((statistics.median(per_mb) if per_mb else statistics.median(totals), [terminal, f"{statistics.median(totals):.0f}", f"{statistics.median(shares):.1f}" if idle else f"{statistics.median(shares):.0f}", cost, f"{statistics.median(wakeups):.0f}", named]))
         if not rows:
             continue
         print(f"\n{load}: CPU time of the terminal, median of the runs (all its threads, also those that draw)")
-        busiest = "busiest threads, wakeups/s" if load == "idle" else "busiest threads, ms"
-        table(["terminal", "CPU ms", "% of a core", "ms per MB", "wakeups/s", busiest], [row for _, row in sorted(rows, key=lambda row: row[0])])
+        busiest = "busiest threads, wakeups/s" if load in FIXED_TIME else "busiest threads, ms"
+        cost = "ms per change" if FIXED_TIME.get(load) else "ms per MB"
+        table(["terminal", "CPU ms", "% of a core", cost, "wakeups/s", busiest], [row for _, row in sorted(rows, key=lambda row: row[0])])
 
 
 def memory(runs, terminals):
@@ -898,11 +1000,11 @@ def compare(runs, builds):
     for what, value, words, precision in measures:
         rows = []
         for load in LOADS:
-            # A load without output takes its ten seconds in any build.
-            if load == "idle" and what.startswith("seconds"):
+            # A load of a fixed time takes it in any build.
+            if load in FIXED_TIME and what.startswith("seconds"):
                 continue
             for other in builds[1:]:
-                found = [[value(result[load]) for _, (_, result, _) in runs[build] if load in result and (load == "idle" or result[load].size)] for build in (base, other)]
+                found = [[value(result[load]) for _, (_, result, _) in runs[build] if load in result and (load in FIXED_TIME or result[load].size)] for build in (base, other)]
                 found = [[number for number in numbers if number] for numbers in found]
                 if len(found[0]) < 2 or len(found[1]) < 2:
                     continue
@@ -1152,6 +1254,7 @@ def main():
         if len(arguments.rest) != 2 or not all(part.isdigit() for part in arguments.rest):
             parser.error("frames needs the rows and the columns")
         frames(arguments.directory, *map(int, arguments.rest))
+        boxes(arguments.directory, *map(int, arguments.rest))
     elif arguments.action == "scenarios":
         scenarios(arguments.directory)
     elif arguments.action == "workload":
