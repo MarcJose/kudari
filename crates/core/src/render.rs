@@ -116,6 +116,24 @@ pub enum Paint {
     },
 }
 
+impl Paint {
+    /// The paint `dx` and `dy` further, as for an image that starts at the cursor.
+    #[must_use]
+    pub fn moved(mut self, dx: f64, dy: f64) -> Self {
+        match &mut self {
+            Self::Fill(rect, _) | Self::Shade(rect, ..) => {
+                rect.x += dx;
+                rect.y += dy;
+            }
+            Self::Text { x, y, .. } => {
+                *x += dx;
+                *y += dy;
+            }
+        }
+        self
+    }
+}
+
 /// The text of a [`Paint::Text`]: nearly always the one character of a cell, which it keeps
 /// without an allocation of its own, as a frame has one for each cell; a string only for a
 /// cell with combining marks and for the few labels.
@@ -182,6 +200,9 @@ pub struct Scene<'a> {
     pub cursor_hidden: bool,
     /// How far the cursor shows, from 0 to 1, while it fades in and out.
     pub cursor_fade: f64,
+    /// The cursor is drawn apart, by [`cursor_into`], and not in the frame: blinking and fading
+    /// then only change how much of it shows, without a frame.
+    pub cursor_apart: bool,
     /// The links that get numbers, as the view finds them.
     pub hints: &'a [(String, i32, i32)],
     /// The matches of the search to highlight.
@@ -317,6 +338,52 @@ fn underline_rects(geometry: &Geometry, column: i32, line: i32, cells: f64, flag
     } else {
         vec![line_at(y)]
     }
+}
+
+/// The cursor alone, as the frame draws it at full strength, for an item that shows it apart
+/// from the frame: its paints go to `out`, and it gives the cells it covers, which hold all of
+/// them. None when no cursor shows, as the frame would draw none: hidden by the program, or
+/// below the screen while the view is scrolled back.
+pub fn cursor_into<T: EventListener>(
+    term: &Term<T>,
+    options: &Options,
+    scene: &Scene,
+    out: &mut Vec<Paint>,
+) -> Option<Rect> {
+    out.clear();
+    let content = term.renderable_content();
+    let cursor = content.cursor;
+    if !shows(&cursor, content.display_offset, term.screen_lines()) {
+        return None;
+    }
+    let geometry = &scene.geometry;
+    let line = cursor.point.line.0 + content.display_offset as i32;
+    let column = cursor.point.column.0 as i32;
+    let cell = &term.grid()[cursor.point];
+    let flags = cell.flags;
+    let cells = if flags.contains(Flags::WIDE_CHAR) { 2.0 } else { 1.0 };
+    let shape = if scene.focused {
+        cursor.shape
+    } else {
+        CursorShape::HollowBlock
+    };
+    let color = options.cursor_color.unwrap_or(scene.scheme.foreground);
+    for rect in cursor_rects(geometry, column, line, cells, shape) {
+        out.push(Paint::Fill(rect, color));
+    }
+    // The whole cell, with its accents, which the block cursor covers; nothing of a hidden
+    // one, as a program shows a password with SGR 8.
+    if shape == CursorShape::Block && !flags.contains(Flags::HIDDEN) && !cell.c.is_whitespace() {
+        let (x, y) = geometry.baseline(column, line);
+        out.push(Paint::Text {
+            x,
+            y,
+            text: Glyph::of_cell(cell.c, cell.zerowidth()),
+            color: options.cursor_text_color.unwrap_or(scene.scheme.background),
+            font: font_style(flags, cell.c, is_picture(flags, cell.zerowidth())),
+        });
+    }
+    Some(geometry.cell_rect(column, line, cells))
 }
 
 /// The rectangles a cursor of this shape fills.
@@ -536,7 +603,11 @@ pub fn frame_into<T: EventListener>(term: &Term<T>, options: &Options, scene: &S
     let cursor_line = cursor.point.line.0 + offset;
     // A cursor that has faded out entirely leaves the cell as it is.
     let fade = (scene.cursor_fade.clamp(0.0, 1.0) * 255.0) as u8;
-    if shows(&cursor, content.display_offset, term.screen_lines()) && !scene.cursor_hidden && fade > 0 {
+    if !scene.cursor_apart
+        && shows(&cursor, content.display_offset, term.screen_lines())
+        && !scene.cursor_hidden
+        && fade > 0
+    {
         let line = cursor_line;
         let column = cursor.point.column.0 as i32;
         let shape = if scene.focused {
@@ -654,6 +725,7 @@ mod tests {
             focused: true,
             cursor_hidden: false,
             cursor_fade: 1.0,
+            cursor_apart: false,
             hints,
             matches,
         }
@@ -734,6 +806,79 @@ mod tests {
         // No opaque fill in a color mixed with the background of the scheme: the full block
         // is the only fill, in the color of the text.
         assert!(fills(&paints).iter().all(|(_, color)| *color == scheme.foreground));
+    }
+
+    /// The cursor drawn apart: its paints and the cells it covers.
+    fn apart(term: &Term<VoidListener>, focused: bool) -> (Vec<Paint>, Option<Rect>) {
+        let scheme = crate::colors::active();
+        let scene = Scene {
+            focused,
+            ..scene(&scheme, &[], &[])
+        };
+        let mut paints = Vec::new();
+        let cells = cursor_into(term, &Options::default(), &scene, &mut paints);
+        (paints, cells)
+    }
+
+    #[test]
+    fn a_cursor_apart_is_drawn_alone_and_only_there() {
+        let scheme = crate::colors::active();
+        // Back over the x, as a shell does with its line.
+        let term = term_with("ab x\x08");
+        let (paints, cells) = apart(&term, true);
+        let cell = GEOMETRY.cell_rect(3, 0, 1.0);
+        // Moved to an image of its own, the cursor starts at its corner.
+        let moved: Vec<Paint> = paints
+            .iter()
+            .cloned()
+            .map(|paint| paint.moved(-cell.x, -cell.y))
+            .collect();
+        assert_eq!(
+            fills(&moved),
+            vec![(rect(0.0, 0.0, cell.width, cell.height), scheme.foreground)]
+        );
+        assert_eq!(cells, Some(cell));
+        assert_eq!(fills(&paints), vec![(cell, scheme.foreground)]);
+        assert_eq!(texts(&paints), vec![("x", scheme.background, FontStyle::default())]);
+        // The frame leaves it out, and draws the x as it is.
+        let frame_scene = Scene {
+            cursor_apart: true,
+            ..scene(&scheme, &[], &[])
+        };
+        let frame = frame(&term, &Options::default(), &frame_scene);
+        assert!(
+            fills(&frame).iter().all(|(rect, _)| *rect != cell),
+            "{:?}",
+            fills(&frame)
+        );
+        assert!(
+            texts(&frame)
+                .iter()
+                .any(|(text, color, _)| *text == "x" && *color == scheme.foreground)
+        );
+        // Without the focus, a hollow block, without the character.
+        let (paints, _) = apart(&term, false);
+        assert!(fills(&paints).len() > 1 && texts(&paints).is_empty());
+    }
+
+    #[test]
+    fn a_cursor_apart_covers_a_wide_character_and_hides_a_hidden_one() {
+        let (_, cells) = apart(&term_with("日\x08\x08"), true);
+        assert_eq!(cells, Some(GEOMETRY.cell_rect(0, 0, 2.0)));
+        // SGR 8, as a password: the block, but nothing of the character.
+        let (paints, _) = apart(&term_with("\x1b[8ms\x1b[0m\x08"), true);
+        assert_eq!(fills(&paints).len(), 1);
+        assert!(texts(&paints).is_empty());
+    }
+
+    #[test]
+    fn no_cursor_apart_where_the_frame_draws_none() {
+        let mut term = term_with("1\r\n2\r\n3\r\n4\r\n5");
+        assert!(apart(&term, true).1.is_some());
+        term.scroll_display(alacritty_terminal::grid::Scroll::Delta(1));
+        assert_eq!(apart(&term, true).1, None);
+        let hidden = term_with("\x1b[?25l");
+        assert_eq!(apart(&hidden, true).1, None);
     }
 
     #[test]

@@ -163,6 +163,7 @@ fn frame(settings: &Settings) {
             focused: true,
             cursor_hidden: false,
             cursor_fade: 1.0,
+            cursor_apart: false,
             hints: &[],
             matches: &matches,
         };

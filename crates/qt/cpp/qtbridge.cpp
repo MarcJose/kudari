@@ -33,6 +33,7 @@
 #include <QPrinter>
 #include <QQuickWindow>
 #include <QSGImageNode>
+#include <QSGNode>
 #include <QSGTexture>
 #include <QTextDocument>
 // Private, as nothing public names the key of a key event on its first level.
@@ -179,6 +180,41 @@ void RkImageItem::setOpaquePainting(bool opaque)
     m_opaque = opaque;
 }
 
+void RkImageItem::updateContent()
+{
+    m_contentDirty = true;
+    update();
+}
+
+void RkImageItem::updateCursor()
+{
+    update();
+}
+
+void RkImageItem::geometryChange(const QRectF &newGeometry, const QRectF &oldGeometry)
+{
+    QQuickItem::geometryChange(newGeometry, oldGeometry);
+    if (newGeometry.size() != oldGeometry.size()) {
+        updateContent();
+    }
+}
+
+// Gives `node` the image as a new texture, deleting the one it had once, whether or not the
+// node does so itself when another takes its place.
+static void showImage(QQuickWindow *window, QSGImageNode *node, const QImage &image, bool opaque, const QRectF &rect, const QSize &size, bool smooth)
+{
+    QSGTexture *texture =
+        window->createTextureFromImage(image, opaque ? QQuickWindow::TextureIsOpaque : QQuickWindow::TextureHasAlphaChannel);
+    QSGTexture *previous = node->texture();
+    node->setOwnsTexture(false);
+    node->setTexture(texture);
+    node->setOwnsTexture(true);
+    delete previous;
+    node->setRect(rect);
+    node->setSourceRect(QRectF(QPointF(), QSizeF(size)));
+    node->setFiltering(smooth ? QSGTexture::Linear : QSGTexture::Nearest);
+}
+
 QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
 {
     QQuickWindow *shown = window();
@@ -186,41 +222,74 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
     const QSize size = (QSizeF(width(), height()) * ratio).toSize();
     if (!shown || size.isEmpty()) {
         // A terminal in a tab in the background has no size: neither its pixels nor its
-        // texture stay.
+        // textures stay.
         m_image = QImage();
+        m_cursor = QImage();
         delete node;
+        m_contentDirty = true;
         return nullptr;
     }
-    if (m_image.size() != size) {
-        m_image = QImage(size, QImage::Format_ARGB32_Premultiplied);
+    // The frame first, then the cursor over it, which fades through an opacity of its own.
+    QSGImageNode *content = nullptr;
+    QSGOpacityNode *fade = nullptr;
+    QSGImageNode *cursor = nullptr;
+    if (node) {
+        content = static_cast<QSGImageNode *>(node->firstChild());
+        fade = static_cast<QSGOpacityNode *>(content->nextSibling());
+        cursor = static_cast<QSGImageNode *>(fade->firstChild());
+    } else {
+        node = new QSGNode;
+        content = shown->createImageNode();
+        content->setOwnsTexture(true);
+        node->appendChildNode(content);
+        fade = new QSGOpacityNode;
+        node->appendChildNode(fade);
+        cursor = shown->createImageNode();
+        cursor->setOwnsTexture(true);
+        fade->appendChildNode(cursor);
+        m_contentDirty = true;
     }
-    m_image.setDevicePixelRatio(ratio);
-    // An opaque terminal paints its background over all of it first.
-    if (!m_opaque) {
-        m_image.fill(Qt::transparent);
+    const bool alone = !m_contentDirty && m_image.size() == size;
+    if (!alone) {
+        if (m_image.size() != size) {
+            m_image = QImage(size, QImage::Format_ARGB32_Premultiplied);
+        }
+        m_image.setDevicePixelRatio(ratio);
+        // An opaque terminal paints its background over all of it first.
+        if (!m_opaque) {
+            m_image.fill(Qt::transparent);
+        }
+        {
+            QPainter painter(&m_image);
+            paint(&painter);
+        }
+        showImage(shown, content, m_image, m_opaque, QRectF(0, 0, width(), height()), size, smooth());
+        m_contentDirty = false;
     }
+    const QSize room = (cursorRoom() * ratio).toSize().expandedTo(QSize(1, 1));
+    // A new image, or a new node, has to be painted; otherwise the cursor may keep its texture.
+    const bool mayKeep = m_cursor.size() == room && cursor->texture() != nullptr;
+    if (m_cursor.size() != room) {
+        m_cursor = QImage(room, QImage::Format_ARGB32_Premultiplied);
+    }
+    m_cursor.setDevicePixelRatio(ratio);
+    m_cursor.fill(Qt::transparent);
+    QRectF where;
+    bool kept = false;
     {
-        QPainter painter(&m_image);
-        paint(&painter);
+        QPainter painter(&m_cursor);
+        where = paintCursor(&painter, alone, mayKeep, kept);
     }
-    auto *image = static_cast<QSGImageNode *>(node);
-    if (!image) {
-        image = shown->createImageNode();
-        image->setOwnsTexture(true);
+    const double opacity = where.isEmpty() ? 0.0 : cursorOpacity();
+    fade->setOpacity(opacity);
+    if (!where.isEmpty() && !kept) {
+        const QSize covered = (where.size() * ratio).toSize().boundedTo(room);
+        showImage(shown, cursor, m_cursor, false, QRectF(where.topLeft(), QSizeF(covered) / ratio), covered, smooth());
+    } else if (!cursor->texture()) {
+        // A node without a texture is not drawn, but it must have one to exist at all.
+        showImage(shown, cursor, m_cursor, false, QRectF(), QSize(1, 1), smooth());
     }
-    QSGTexture *texture =
-        shown->createTextureFromImage(m_image, m_opaque ? QQuickWindow::TextureIsOpaque : QQuickWindow::TextureHasAlphaChannel);
-    // The node deletes the texture it owns, but whether it does so when another takes its
-    // place differs between the nodes of Qt: this deletes it once, either way.
-    QSGTexture *previous = image->texture();
-    image->setOwnsTexture(false);
-    image->setTexture(texture);
-    image->setOwnsTexture(true);
-    delete previous;
-    image->setRect(QRectF(0, 0, width(), height()));
-    image->setSourceRect(QRectF(QPointF(), QSizeF(size)));
-    image->setFiltering(smooth() ? QSGTexture::Linear : QSGTexture::Nearest);
-    return image;
+    return node;
 }
 
 // Positions on the baseline. One run per font and color spares the text layout that
