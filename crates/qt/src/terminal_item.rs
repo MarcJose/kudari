@@ -599,7 +599,6 @@ impl qobject::TerminalItem {
             drop(term);
             self.as_mut().set_cursor_blinks(blinks);
             self.as_mut().set_selection_mode(selection_mode);
-            self.as_mut().update_matches();
             let total = history + lines;
             self.as_mut().set_scroll_size(lines / total);
             self.as_mut().set_scroll_position((history - offset) / total);
@@ -616,6 +615,8 @@ impl qobject::TerminalItem {
                 self.as_mut().set_search_lines_stale(true);
             }
         }
+        #[cfg(feature = "test-hooks")]
+        slow_refresh();
         self.update();
     }
 
@@ -939,14 +940,6 @@ impl qobject::TerminalItem {
         found
     }
 
-    /// Finds all matches on screen for the "highlight all" option of the search.
-    fn update_matches(mut self: Pin<&mut Self>) {
-        if let Some(backend) = self.as_ref().backend() {
-            let term = backend.lock();
-            self.as_mut().rust_mut().view.update_matches(&term);
-        }
-    }
-
     /// Publishes where the matches lie in the scrollback, for the scrollbar.
     fn update_search_lines(mut self: Pin<&mut Self>) {
         let Some(backend) = self.as_ref().backend() else {
@@ -1254,6 +1247,9 @@ impl qobject::TerminalItem {
                 item.hint_words.clear();
                 item.view.set_hints(Vec::new());
             }
+            // The matches of "highlight all" in the text this frame shows: output that came
+            // since the last refresh would else be painted with the matches of the text before.
+            self.as_mut().rust_mut().view.update_matches(&term);
             let (origin_x, origin_y) = self.as_ref().text_origin(term.columns(), term.screen_lines());
             let scene = render::Scene {
                 geometry: render::Geometry {
@@ -1275,6 +1271,8 @@ impl qobject::TerminalItem {
                 matches: self.view.matches(),
             };
             render::frame_into(&term, &options, &scene, &mut paints);
+            #[cfg(feature = "test-hooks")]
+            note_matches(*self.terminal_id(), &term, self.view.matches());
             fresh_words
         };
         clock.lap(stats::Time::FrameBuild);
@@ -1468,6 +1466,53 @@ static REFERENCE_DRAWING: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "test-hooks")]
 pub fn set_reference_drawing(reference: bool) {
     REFERENCE_DRAWING.store(reference, Ordering::Relaxed);
+}
+
+/// For the GUI test: milliseconds that each refresh waits at its end, so that output comes
+/// between a refresh and the paint of its frame, as on a busy computer where another thread
+/// paints.
+#[cfg(feature = "test-hooks")]
+static REFRESH_DELAY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Lets each refresh that follows wait that many milliseconds at its end.
+#[cfg(feature = "test-hooks")]
+pub fn set_refresh_delay(milliseconds: u64) {
+    REFRESH_DELAY.store(milliseconds, Ordering::Relaxed);
+}
+
+#[cfg(feature = "test-hooks")]
+fn slow_refresh() {
+    let milliseconds = REFRESH_DELAY.load(Ordering::Relaxed);
+    if milliseconds > 0 {
+        std::thread::sleep(Duration::from_millis(milliseconds));
+    }
+}
+
+/// For the GUI test: the text under each match that the last frame of each terminal showed.
+#[cfg(feature = "test-hooks")]
+static MATCHED: std::sync::Mutex<Vec<(i32, String)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(feature = "test-hooks")]
+fn note_matches<T>(terminal: i32, term: &Term<T>, matches: &[alacritty_terminal::term::search::Match]) {
+    let text = matches
+        .iter()
+        .map(|found| view::text_between(term, *found.start(), *found.end()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut matched = MATCHED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    matched.retain(|(other, _)| *other != terminal);
+    matched.push((terminal, text));
+}
+
+/// The text under each match that the last frame of the terminal showed, a line each.
+#[cfg(feature = "test-hooks")]
+pub fn matched_text(terminal: i32) -> String {
+    MATCHED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|(other, _)| *other == terminal)
+        .map_or_else(String::new, |(_, text)| text.clone())
 }
 
 fn reference_drawing() -> bool {

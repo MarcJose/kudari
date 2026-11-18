@@ -595,6 +595,14 @@ marks() { hook Property terminal searchLines | grep -o '[0-9.][0-9.]*' | wc -l; 
 before=$(marks)
 run "seq 1 50; echo gefunden"; sleep 0.6
 check "matches in new output reach the scrollbar" yes "$([ "$(marks)" -gt "$before" ] && echo yes || echo "no: $before $(marks)")"
+# Every highlighted match lies on the word, also after output that came between the refresh
+# that found the matches and the paint: a frame and its matches come from the same text.
+hook SlowRefresh 40
+run "seq 1 30000 | sed 's/^/x gefunden /'"; settle
+hook SlowRefresh 0
+matched=$(hook MatchedText "$(sessions activeTerminalId)")
+astray=$(printf '%s\n' "$matched" | grep -vx gef | head -n 3 | tr '\n' '|')
+check "highlighted matches lie on the word after much output" "yes" "$([ -n "$matched" ] && [ -z "$astray" ] && echo yes || echo "no: ${astray:-none}")"
 input key 1; settle
 for action in edit_select_all edit_copy select-line select-mode select-mode; do hook Trigger "$action"; settle; done
 
