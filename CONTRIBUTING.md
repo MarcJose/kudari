@@ -130,7 +130,10 @@ a few kinds of screen, and smaller cases one by one: the words for the numbers o
 and a color under the mouse, box drawing, keys, a search through a long history, the copy as
 HTML and the wrapping on a resize. It takes seconds and needs no KWin, so a change to one of
 those parts can be measured before and after at once; `-- throughput`, `-- frame`, `-- cases`
-and `-- --runs N` choose. `--bench allocations` counts the allocations of the same frames and
+and `-- --runs N` choose. `-- pty`, only when named and on Unix, runs a real session with its
+PTY instead, to the answer of the terminal after the last byte, while a thread holds the lock
+of the terminal 0, 1, 5 or 10 ms of every frame as drawing does: what holding the lock costs
+the output, without a window. It needs python3 and takes a minute or more. `--bench allocations` counts the allocations of the same frames and
 cases; counting needs an allocator of its own, which would make the times wrong, so it is a
 benchmark of its own. Benchmarks build with thin LTO, so that their times do not depend on
 the other code in them. Compare figures only from the same computer.
