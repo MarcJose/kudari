@@ -45,7 +45,7 @@ WORDS = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod t
 CELLS = "abcdefghijklmnopqrstuvwxyz0123456789#@%&"
 LOADS = (
     "plain", "color", "unicode", "frames", "boxes", "seq", "search", "titles", "osc", "bells", "queries", "combining",
-    "typing", "burst", "scroll", "partial", "idle",
+    "typing", "burst", "scroll", "query", "partial", "idle",
 )
 DESCRIPTIONS = {
     "plain": "24 MB of plain text",
@@ -63,12 +63,13 @@ DESCRIPTIONS = {
     "typing": "100 keys 50 ms apart, each echoed at once",
     "burst": "100 keys at once, each echoed at once",
     "scroll": "100 turns of the wheel up through a history of 20,000 lines and 100 down, 16 ms apart",
+    "query": "200 queries each of the cursor, the device attributes and the background, alone and under output",
     "partial": "a line of status changed every 16 ms for 10 seconds, the rest of the screen kept",
     "idle": "10 seconds without output",
 }
 # Loads that take a fixed time instead of a number of bytes, and how often they change the
 # screen meanwhile.
-FIXED_TIME = {"typing": 100, "burst": 100, "scroll": 200, "partial": 625, "idle": 0}
+FIXED_TIME = {"typing": 100, "burst": 100, "scroll": 200, "query": 0, "partial": 625, "idle": 0}
 # Text of the load `unicode`: words of wide characters, emoji alone, joined and with a skin
 # tone, and letters with combining marks.
 WIDE = "日本語 中文字 한국어 テキスト 漢字仮名 終端模擬".split()
@@ -83,6 +84,15 @@ BLOCKS = "▏▎▍▌▋▊▉█▀▄▐░▒▓▖▗▘▝"
 QUERIES = 100_000
 BATCH = 1000
 ANSWERED = re.compile(rb"\x1b\[\?[0-9;]*c")
+# The queries of the load query, each with the pattern of its answer: the place of the cursor
+# (DSR), the device attributes (DA1), and the color of the background (OSC 11), which some
+# terminals do not answer; a query of the device attributes after it tells that apart.
+ASKING = (
+    ("cursor", b"\x1b[6n", rb"\x1b\[\d+;\d+R"),
+    ("attributes", b"\x1b[c", rb"\x1b\[\?[0-9;]*c"),
+    ("background", b"\x1b]11;?\x07", rb"\x1b\]11;[^\x07\x1b]*(?:\x07|\x1b\\)"),
+)
+ASKED = 200
 # The time between two changes of the load partial, in seconds.
 PARTIAL_EVERY = 0.016
 # The key that the loads typing and burst press, a, as Linux numbers it; how often, and how
@@ -166,6 +176,8 @@ class Load(NamedTuple):
     keys: list | None = None
     # For the load queries: how many answers came.
     replies: int | None = None
+    # For the load query: the seconds of each round trip by query and state, None unanswered.
+    asked: dict | None = None
 
 
 def cpu(path, pid, load, moment):
@@ -251,6 +263,51 @@ def typed(reader, writer, command, count):
     return list(zip(pressed, came))
 
 
+def round_trip(reader, writer, query, pattern, wait=1.0):
+    """Asks once and waits for the answer: its seconds, or None. Behind each query goes one of
+    the device attributes, which every terminal answers: when that answer comes first, the
+    terminal does not answer this query, and the wait ends there."""
+    sentinel = rb"\x1b\[\?[0-9;]*c"
+    guarded = query != b"\x1b[c"
+    termios.tcflush(reader, termios.TCIFLUSH)
+    asked = monotonic()
+    os.write(writer, query + (b"\x1b[c" if guarded else b""))
+    got, answered = b"", None
+    deadline = asked + wait
+    while True:
+        if answered is None and re.search(pattern, got):
+            answered = monotonic()
+        if not guarded and answered is not None:
+            return answered - asked
+        if guarded and re.search(sentinel, got):
+            return None if answered is None else answered - asked
+        left = deadline - monotonic()
+        if left <= 0 or not select.select([reader], [], [], left)[0]:
+            return None if answered is None else answered - asked
+        got += os.read(reader, 256)
+
+
+def queried(reader, writer, busy=None):
+    """The seconds of each round trip of each query of the load query, None for those without
+    an answer; while `busy` is given, a thread writes that file to the terminal over and over."""
+    import threading
+
+    stop = threading.Event()
+    if busy is not None:
+
+        def flood():
+            while not stop.is_set():
+                write_all(writer, busy)
+
+        writing = threading.Thread(target=flood, daemon=True)
+        writing.start()
+    times = {name: [round_trip(reader, writer, query, pattern) for _ in range(ASKED)] for name, query, pattern in ASKING}
+    stop.set()
+    if busy is not None:
+        writing.join()
+    return times
+
+
 def press(tool, *codes):
     """Presses the keys together and lets them go, through the fake input of KWin."""
     subprocess.run([str(tool), "key", *map(str, codes)], check=False)
@@ -295,7 +352,7 @@ def workload(directory, environment):
         if load == "search" and not kudari:
             continue
         time.sleep(1)
-        keys, replies = None, None
+        keys, replies, trips_of = None, None, None
         if load == "scroll":
             # A history to scroll through.
             subprocess.run(["seq", "1", str(HISTORY)], check=False)
@@ -327,6 +384,8 @@ def workload(directory, environment):
             write_all(writer, directory / "plain.txt")
         elif load == "queries":
             replies = asked(reader, writer, directory / "queries.txt", QUERIES)
+        elif load == "query":
+            trips_of = {"alone": queried(reader, writer), "busy": queried(reader, writer, directory / f"frames-{rows}x{columns}.txt")}
         elif load == "seq":
             # A program of its own, which writes as it always does.
             subprocess.run(["seq", "1", "2000000"], check=False)
@@ -347,6 +406,9 @@ def workload(directory, environment):
             note(f"keys {load} " + " ".join(f"{pressed:.6f}:{came:.6f}" for pressed, came in keys))
         if replies is not None:
             note(f"replies {load} {replies}")
+        for state, times in (trips_of or {}).items():
+            for name, taken in times.items():
+                note(f"asked {name} {state} " + " ".join("-" if time is None else f"{time:.6f}" for time in taken))
         if load == "search":
             press(tool, ESCAPE)
         subprocess.run(["clear"], check=False)
@@ -637,9 +699,12 @@ def measure(directory, name):
             waits.append(found)
         elif found := snapshot(line):
             snapshots.append(found)
-    result, typing, answered_queries = {}, {}, {}
+    result, typing, answered_queries, asked_times = {}, {}, {}, {}
     for line in lines[1:]:
         parts = line.split()
+        if parts[0] == "asked" and len(parts) >= 3:
+            asked_times[(parts[1], parts[2])] = [None if part == "-" else float(part) for part in parts[3:]]
+            continue
         if parts[0] == "replies" and len(parts) == 3:
             answered_queries[parts[1]] = int(parts[2])
             continue
@@ -676,6 +741,8 @@ def measure(directory, name):
     for load, count in answered_queries.items():
         if load in result:
             result[load] = result[load]._replace(replies=count)
+    if asked_times and "query" in result:
+        result["query"] = result["query"]._replace(asked=asked_times)
     return f"{columns}x{rows}", result, loops
 
 
@@ -1047,6 +1114,33 @@ def replies(runs, terminals):
         table(["terminal", "fewest", "most", "asked"], rows)
 
 
+def asking(runs, terminals):
+    """For the load query: the round trips of each query, alone and under output, in
+    milliseconds over all runs, and how many got no answer."""
+    rows = []
+    for terminal in terminals:
+        done = [result["query"].asked for _, (_, result, _) in runs[terminal] if "query" in result and result["query"].asked]
+        for name, _, _ in ASKING:
+            cells = [terminal, name]
+            for state in ("alone", "busy"):
+                taken = [time for asked in done for time in asked.get((name, state), [])]
+                answered = [1000 * time for time in taken if time is not None]
+                missing = len(taken) - len(answered)
+                if answered:
+                    cells += [f"{percentile(answered, 0.5):.2f}", f"{percentile(answered, 0.99):.2f}", f"{max(answered):.1f}"]
+                else:
+                    cells += ["-", "-", "-"]
+                cells.append(str(missing))
+            if done:
+                rows.append(cells)
+    if not rows:
+        return
+    print(f"\nquery: {ASKED} round trips of each query, alone and while the frames load goes to the")
+    print("terminal, in milliseconds over all runs: median, 99th percentile and the longest, and how")
+    print("many got no answer, as a terminal that does not answer the background at all.")
+    table(["terminal", "query", "alone p50", "p99", "max", "none", "busy p50", "p99", "max", "none"], rows)
+
+
 def processor(runs, terminals):
     """Per load, the CPU time of each terminal: all of it, as a share of a core, per MB of
     output, and its busiest groups of threads."""
@@ -1293,6 +1387,7 @@ def report(directory, order, detail=False):
     throughput(runs, terminals)
     latency(runs, terminals)
     replies(runs, terminals)
+    asking(runs, terminals)
     answers(runs, taken, terminals)
     processor(runs, terminals)
     memory(runs, terminals)
