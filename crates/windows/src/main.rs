@@ -50,8 +50,10 @@ fn main() {
         }
         _ => {}
     }
+    kudari_core::timing::mark("main");
     win::rk_win_prepare_translucency();
     let mut app = QApplication::new();
+    kudari_core::timing::mark("application");
     if let Some(app) = app.as_mut() {
         app.set_application_version(&cxx_qt_lib::QString::from(env!("CARGO_PKG_VERSION")));
     }
@@ -70,6 +72,7 @@ fn main() {
     if !win::rk_win_claim_instance(&cxx_qt_lib::QString::from(&instance_name())) {
         return;
     }
+    kudari_core::timing::mark("bus");
     start_services();
     agents::listen();
 
@@ -84,6 +87,8 @@ fn main() {
             "qrc:/qt/qml/io/github/marcjose/kudari/windows/qml/Main.qml",
         ));
     }
+    kudari_core::timing::mark("qml");
+    kudari_core::timing::mark("ready");
     let code = app.as_mut().map_or(1, |app| app.exec());
     std::process::exit(code);
 }

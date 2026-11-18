@@ -90,12 +90,22 @@ tools/windows-package.ps1 -Out dist && tests/windows/package.ps1 dist  # the pac
 tests/windows/gui.ps1 path\to\kudari.exe  # the window, on a Windows desktop
 tools/security.sh                                # secrets, dependencies, workflows
 tools/bench.sh                                   # speed of output and drawing, against other terminals
+tools/bench.sh --scenarios                       # start, showing, waiting and memory of Kudari
 cargo bench -p kudari-core --bench core          # scanner, parser and frames alone, without a window
 cargo bench -p kudari-core --bench allocations   # the allocations of the same frames and cases
 tools/bench-compare.py                           # the core benchmark, main against the working tree
 ```
 
 `tools/bench.sh` measures Kudari as a whole in a virtual KWin, next to other terminals.
+`tools/bench.sh --scenarios` measures Kudari alone, in the same virtual KWin, when it is not
+taking in output:
+- how long it takes to start, with the phases it marks itself with `KUDARI_TIMING=1`;
+- how long it takes to show its window;
+- how long a second start and `--version` take;
+- its CPU time, how often it wakes and its frames while it waits: shown, hidden, with a
+  blinking or fading cursor, and with output in a tab in the background;
+- its memory with 1, 5 and 10 tabs.
+
 `cargo bench -p kudari-core --bench core` measures the parts without a window: the scanner of
 the marks and the parser of the emulator over the same loads, and the paints of a frame for
 a few kinds of screen, and smaller cases one by one: the words for the numbers of links, a link
