@@ -769,8 +769,11 @@ run "clear"
 hook ResetStats
 input key 30; settle
 typed=$(paints "$first_terminal")
+# That paint takes only the lines that changed, into the image the frame before left.
+typed_lines=$(hook Stats | python3 -c 'import json, sys; print(json.load(sys.stdin)["line_paints"])')
 input key 14; settle
 check "a typed key paints once" yes "$([ "$typed" -ge 1 ] && [ "$typed" -le 1 ] && echo yes || echo "no: $typed")"
+check "a typed key paints only the lines that changed" 1 "$typed_lines"
 
 # The pixels of a terminal: drawn in runs of glyphs as they always are, against each text drawn
 # on its own; and what the window shows, from the image and the cursor in its scene graph,
@@ -778,7 +781,9 @@ check "a typed key paints once" yes "$([ "$typed" -ge 1 ] && [ "$typed" -le 1 ] 
 paint_check() { # directory, what for
     # The line at a column goes over the text: a fill after glyphs.
     hook SetSetting VerticalLine 3; settle
-    run "clear; sh $work/catalogue"
+    # Text that other text replaces in a frame of its own: a frame that paints only the lines
+    # that changed must clear them first.
+    run "clear; sh $work/catalogue; printf 'WWWWWWWW'; sleep 0.3; printf '\\riiii\\n'"
     settle
     hook PaintTerminals "$1/paint"
     settle

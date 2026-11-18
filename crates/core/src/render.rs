@@ -453,7 +453,22 @@ pub fn frame<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene)
 /// The same as [`frame`] into `out`, which it clears first: a caller that keeps `out` from one
 /// frame to the next allocates it once, not again for every frame.
 pub fn frame_into<T: EventListener>(term: &Term<T>, options: &Options, scene: &Scene, out: &mut Vec<Paint>) {
+    lines_into(term, options, scene, None, out);
+}
+
+/// The paints of only the lines of the screen in `lines`, as [`frame_into`] gives them, for a
+/// frame that paints the lines that changed into the image it had; all lines without them.
+/// A paint that reaches past them, as a glyph or the line at a column does, may: the frame
+/// paints them under a clip.
+pub fn lines_into<T: EventListener>(
+    term: &Term<T>,
+    options: &Options,
+    scene: &Scene,
+    lines: Option<std::ops::Range<i32>>,
+    out: &mut Vec<Paint>,
+) {
     out.clear();
+    let wanted = |line: i32| lines.as_ref().is_none_or(|lines| lines.contains(&line));
     let scheme = scene.scheme;
     let geometry = &scene.geometry;
     let (grid_columns, grid_lines) = (term.columns() as i32, term.screen_lines() as i32);
@@ -495,6 +510,9 @@ pub fn frame_into<T: EventListener>(term: &Term<T>, options: &Options, scene: &S
         }
         let point = cell.point;
         let line = point.line.0 + offset;
+        if !wanted(line) {
+            continue;
+        }
         let column = point.column.0 as i32;
         let (mut foreground, mut back) = cell_colors(cell.cell, palette, scheme, scene.bold_intense);
         if selection.is_some_and(|range| range.contains(point)) {
@@ -647,7 +665,10 @@ pub fn frame_into<T: EventListener>(term: &Term<T>, options: &Options, scene: &S
         }
     }
 
-    for (index, (_, line, column)) in crate::view::visible_hints(scene.hints, options.reverse_url_hints) {
+    for (index, (_, line, column)) in crate::view::visible_hints(scene.hints, options.reverse_url_hints)
+        .into_iter()
+        .filter(|(_, (_, line, _))| wanted(*line))
+    {
         fill(geometry.cell_rect(*column, *line, 1.0), BLACK, paints);
         let (x, y) = geometry.baseline(*column, *line);
         paints.push(Paint::Text {
@@ -671,7 +692,7 @@ pub fn frame_into<T: EventListener>(term: &Term<T>, options: &Options, scene: &S
     if options.line_numbers {
         // At the end of each line, faded like faint text, so they stay out of the way.
         let color = colors::faded(colors::faded(scheme.foreground, scheme.background), scheme.background);
-        for line in 0..grid_lines {
+        for line in (0..grid_lines).filter(|line| wanted(*line)) {
             let number = (line_base + line + 1).to_string();
             let column = (grid_columns - number.len() as i32).max(0);
             let (x, y) = geometry.baseline(column, line);
@@ -760,6 +781,38 @@ mod tests {
             Paint::Text { text, color: drawn, .. } if *drawn == color => Some(text.as_str().to_string()),
             _ => None,
         })
+    }
+
+    #[test]
+    fn the_paints_of_some_lines_are_those_of_the_whole_frame_in_them() {
+        let scheme = crate::colors::active();
+        let term = term_with("one\r\n\x1b[41mtwo\x1b[0m\r\n\x1b[4mthree\x1b[0m\r\nfour");
+        let options = Options {
+            line_numbers: true,
+            ..Options::default()
+        };
+        let scene = scene(&scheme, &[], &[]);
+        let whole = frame(&term, &options, &scene);
+        let mut some = Vec::new();
+        lines_into(&term, &options, &scene, Some(1..3), &mut some);
+        let line_of = |y: f64| ((y - GEOMETRY.origin_y) / GEOMETRY.cell_height).floor() as i32;
+        let within = |paint: &Paint| match paint {
+            Paint::Text { y, .. } => (1..3).contains(&line_of(*y - GEOMETRY.ascent)),
+            Paint::Fill(rect, _) | Paint::Shade(rect, ..) => (1..3).contains(&line_of(rect.y)),
+        };
+        // The same paints in the same order, of the lines asked for alone.
+        assert_eq!(
+            some,
+            whole.iter().filter(|paint| within(paint)).cloned().collect::<Vec<_>>()
+        );
+        // The screen has three lines: "two" at the top, then "three" and "four". Each cell is a
+        // glyph of its own: h is only in "three", f only in "four", w only in "two".
+        let glyphs: Vec<&str> = texts(&some).iter().map(|(text, ..)| *text).collect();
+        assert!(glyphs.contains(&"h") && glyphs.contains(&"f"));
+        assert!(!glyphs.contains(&"w"));
+        // Without lines, all of them.
+        lines_into(&term, &options, &scene, None, &mut some);
+        assert_eq!(some, whole);
     }
 
     #[test]

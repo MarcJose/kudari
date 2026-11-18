@@ -516,6 +516,12 @@ impl View {
         self.hints = hints;
     }
 
+    /// Whether a search highlights all its matches, which new output can add to.
+    #[must_use]
+    pub fn highlighting(&self) -> bool {
+        self.search.is_some()
+    }
+
     /// The matches of the search on the screen, for "Highlight All Matches".
     #[must_use]
     pub fn matches(&self) -> &[Match] {
