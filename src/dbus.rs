@@ -598,6 +598,18 @@ impl TestHooks {
         reply.await.unwrap_or(false)
     }
 
+    /// Paints each terminal that shows anew into `<path>-<terminal>.png`, and again as the
+    /// reference, with a text drawn on its own for each cell, into `<path>-reference-…`; and
+    /// saves what the window shows in its place into `<path>-<terminal>-shown.png`.
+    fn paint_terminals(&self, path: String) {
+        queue(move |_| {
+            kudari_qt::terminal_item::set_reference_drawing(true);
+            kudari_qt::qt::rk_test_paint_terminals(&crate::kde::qs(&format!("{path}-reference")));
+            kudari_qt::terminal_item::set_reference_drawing(false);
+            kudari_qt::qt::rk_test_paint_terminals(&crate::kde::qs(&path));
+        });
+    }
+
     /// Saves an image of the window, to find where the checks have to click.
     fn grab(&self, path: String) {
         queue(move |_| crate::kde::rk_test_grab(&crate::kde::qs(&path)));

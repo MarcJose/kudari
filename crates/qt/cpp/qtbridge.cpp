@@ -215,6 +215,70 @@ static void showImage(QQuickWindow *window, QSGImageNode *node, const QImage &im
     node->setFiltering(smooth ? QSGTexture::Linear : QSGTexture::Nearest);
 }
 
+#ifdef RK_TEST_HOOKS
+// The items of `item` and below that are images of terminals.
+static void imageItems(QQuickItem *item, QList<RkImageItem *> &found)
+{
+    if (auto image = dynamic_cast<RkImageItem *>(item)) {
+        found.append(image);
+    }
+    for (QQuickItem *child : item->childItems()) {
+        imageItems(child, found);
+    }
+}
+
+void rk_test_paint_terminals(const QString &path)
+{
+    for (QWindow *window : QGuiApplication::topLevelWindows()) {
+        auto quick = qobject_cast<QQuickWindow *>(window);
+        if (!quick || !quick->isVisible()) {
+            continue;
+        }
+        QList<RkImageItem *> items;
+        imageItems(quick->contentItem(), items);
+        // What the window shows, from its scene graph, before anything paints anew.
+        const QImage shown = quick->grabWindow();
+        const qreal ratio = quick->effectiveDevicePixelRatio();
+        for (RkImageItem *item : items) {
+            const QSize size = (QSizeF(item->width(), item->height()) * ratio).toSize();
+            if (!item->isVisible() || size.isEmpty()) {
+                continue;
+            }
+            const QString name = QStringLiteral("%1-%2").arg(path).arg(item->property("terminalId").toInt());
+            QImage frame(size, QImage::Format_ARGB32_Premultiplied);
+            frame.setDevicePixelRatio(ratio);
+            frame.fill(Qt::transparent);
+            QPainter painter(&frame);
+            item->paint(&painter);
+            const QSize room = (item->cursorRoom() * ratio).toSize().expandedTo(QSize(1, 1));
+            QImage cursor(room, QImage::Format_ARGB32_Premultiplied);
+            cursor.setDevicePixelRatio(ratio);
+            cursor.fill(Qt::transparent);
+            QRectF where;
+            {
+                QPainter cursorPainter(&cursor);
+                bool kept = false;
+                where = item->paintCursor(&cursorPainter, false, false, kept);
+            }
+            if (!where.isEmpty()) {
+                painter.setOpacity(item->cursorOpacity());
+                const QSize covered = (where.size() * ratio).toSize().boundedTo(room);
+                painter.drawImage(where.topLeft(), cursor, QRectF(QPointF(), QSizeF(covered)));
+            }
+            painter.end();
+            frame.save(name + QStringLiteral(".png"));
+            const QPointF corner = item->mapToScene(QPointF());
+            const QRect place(QPoint(qRound(corner.x() * ratio), qRound(corner.y() * ratio)), size);
+            shown.copy(place).save(name + QStringLiteral("-shown.png"));
+        }
+    }
+}
+#else
+void rk_test_paint_terminals(const QString &)
+{
+}
+#endif
+
 QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
 {
     QQuickWindow *shown = window();

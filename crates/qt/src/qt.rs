@@ -43,6 +43,9 @@ pub mod ffi {
             cell_height: i32,
         );
         fn rk_font_rendering(font: &mut QFont, anti_alias: bool, hinting: bool);
+        /// For the GUI test: paints each terminal that shows anew, and saves what the window
+        /// shows in its place; nothing without the test hooks.
+        fn rk_test_paint_terminals(path: &QString);
         fn rk_raw_font(painter: &QPainter, font: &QFont) -> UniquePtr<QRawFont>;
         /// The glyph of `character` in `font`, or 0 when the font has none.
         fn rk_glyph_index(font: &QRawFont, character: u32) -> u32;
