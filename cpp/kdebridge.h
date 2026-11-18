@@ -7,6 +7,8 @@
 #include <QQuickItem>
 #include <QString>
 
+#include <cstdint>
+
 class QInputMethodEvent;
 class QFont;
 class QPainter;
@@ -61,6 +63,7 @@ void rk_set_blur(bool enabled);
 
 void rk_test_key(const QString &sequence);
 void rk_test_input_method(const QString &preedit, const QString &commit);
+std::int64_t rk_test_quiet_ms();
 QString rk_test_window_state();
 QString rk_test_property(const QString &name, const QString &property);
 void rk_test_grab(const QString &path);

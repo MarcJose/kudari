@@ -62,6 +62,7 @@ pub mod ffi {
         fn rk_set_blur(enabled: bool);
         fn rk_test_key(sequence: &QString);
         fn rk_test_input_method(preedit: &QString, commit: &QString);
+        fn rk_test_quiet_ms() -> i64;
         fn rk_test_window_state() -> QString;
         fn rk_test_property(name: &QString, property: &QString) -> QString;
         fn rk_test_grab(path: &QString);
