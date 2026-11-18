@@ -182,10 +182,12 @@ class Report(unittest.TestCase):
         bench.cpu(path, os.getpid(), "plain", "end")
         memory = [line.split("\t") for line in path.read_text().splitlines() if "\tmemory\t" in line]
         self.assertEqual(len(memory), 1)
-        rss, pss, private = map(int, memory[0][2:])
+        rss, pss, private, peak = map(int, memory[0][2:])
         self.assertGreater(rss, 0)
         # Python shares its libraries with other processes, so not all of it is private.
         self.assertLess(private, rss)
+        # The most it was ever resident is at least what it is now.
+        self.assertGreaterEqual(peak, rss)
 
     def test_without_output_the_wakeups_count_and_no_throughput(self):
         self.run_of("kudari-1", [threaded(0.5 * index, 1) for index in range(4)], (("idle", 0.0, 2.0),))
@@ -210,8 +212,25 @@ class Report(unittest.TestCase):
             self.cpu_of(f"kudari-{run}", "idle", (1, "main", 0, 1), memory=(310 * 1024, 120 * 1024, private + 1024))
         text = self.report("kudari")
         row = next(line.split() for line in text.split("Memory of each terminal")[1].splitlines() if line.startswith("kudari "))
-        self.assertEqual(row, ["kudari", "95", "96", "310", "120"])
+        # Runs before the peak was noted have none.
+        self.assertEqual(row, ["kudari", "95", "96", "310", "120", "-"])
         self.assertIn("after plain  after idle", text)
+
+    def test_the_peak_of_memory_is_the_most_ever_resident(self):
+        for run, peak in (("1", 400 * 1024), ("2", 500 * 1024), ("3", 450 * 1024)):
+            self.run_of(f"kudari-{run}", [], (("bells", 0.0, 0.2),))
+            self.cpu_of(f"kudari-{run}", "bells", (1, "main", 0, 1), memory=(300 * 1024, 110 * 1024, 90 * 1024, peak))
+        text = self.report("kudari")
+        row = next(line.split() for line in text.split("Memory of each terminal")[1].splitlines() if line.startswith("kudari "))
+        self.assertEqual(row[-1], "450")
+
+    def test_the_answers_to_the_queries_are_counted(self):
+        for run, answered in (("1", bench.QUERIES), ("2", bench.QUERIES - 5)):
+            self.monotonic_run(f"kudari-{run}", [], (("queries", 0.0, 1.0, 0.9, True),))
+            with open(self.directory / f"kudari-{run}.txt", "a") as file:
+                file.write(f"replies queries {answered}\n")
+        row = next(line.split() for line in self.report("kudari").split("queries: the answers that came")[1].splitlines() if line.startswith("kudari "))
+        self.assertEqual(row[1:], ["99,995", "100,000", "100,000"])
 
     def stats(self, seconds, wakeups, paints, waits, builds):
         """A line of the counters of a stats build at `seconds` of the run."""
@@ -296,6 +315,18 @@ class Report(unittest.TestCase):
         self.assertEqual(alacritty[4:], ["-", "-", "-", "2"])
         # A load of keys has no throughput, but a cost per key.
         self.assertNotIn("\ntyping: 100 keys 50 ms apart, each echoed at once\n", text)
+
+    def test_a_terminal_that_ended_during_a_load_is_named_with_it(self):
+        self.monotonic_run("alacritty-1", [], (("plain", 0.0, 0.2, 0.2, True),))
+        with open(self.directory / "alacritty-1.txt") as file:
+            lines = file.read().splitlines()
+        # It began titles after plain, and the bench found it gone.
+        lines = lines[:-1] + ["begin titles", "ended"]
+        (self.directory / "alacritty-1.txt").write_text("\n".join(lines) + "\n")
+        text = self.report("alacritty")
+        self.assertIn("alacritty in run 1, during titles", text)
+        # What it did before still counts.
+        self.assertIn("\nplain: 24 MB of plain text", text)
 
     def test_older_runs_on_the_time_of_day_still_read(self):
         self.run_of("kudari-1", [threaded(0.1, 1)])
@@ -685,6 +716,48 @@ class Driver(unittest.TestCase):
         self.assertTrue(all(pressed < bench.monotonic() and came <= bench.monotonic() for pressed, came in paired))
         # The echo goes back to the terminal.
         self.assertEqual(os.read(self.master, 64), b"aaa")
+
+    def test_queries_go_out_in_batches_each_answered_before_the_next(self):
+        source = Path(tempfile.mkdtemp()) / "queries.txt"
+        self.addCleanup(lambda: (source.unlink(), source.parent.rmdir()))
+        source.write_bytes(b"\x1b[c" * 2500)
+        seen = []
+
+        def terminal(limit):
+            asked = 0
+            while asked < 2500:
+                got = os.read(self.master, 65536).count(b"\x1b[c")
+                seen.append(got)
+                # A terminal that answers no more than `limit` of all questions.
+                for _ in range(max(0, min(got, limit - asked))):
+                    os.write(self.master, b"\x1b[?62;22c")
+                asked += got
+                if asked >= limit:
+                    return
+
+        self.threading.Thread(target=terminal, args=(2500,), daemon=True).start()
+        self.assertEqual(bench.asked(self.slave, self.slave, source, 2500, batch=1000), 2500)
+        # No more than a batch went out before its answers came.
+        self.assertLessEqual(max(seen), 1000)
+
+    def test_a_batch_without_its_answers_ends_the_queries(self):
+        source = Path(tempfile.mkdtemp()) / "queries.txt"
+        self.addCleanup(lambda: (source.unlink(), source.parent.rmdir()))
+        source.write_bytes(b"\x1b[c" * 300)
+
+        def terminal():
+            asked = 0
+            while asked < 100:
+                asked += os.read(self.master, 65536).count(b"\x1b[c")
+            # Only the first 100 get an answer.
+            os.write(self.master, b"\x1b[?62;22c" * 100)
+
+        self.threading.Thread(target=terminal, daemon=True).start()
+        original, bench.ANSWER = bench.ANSWER, 0.3
+        try:
+            self.assertEqual(bench.asked(self.slave, self.slave, source, 300, batch=100), 100)
+        finally:
+            bench.ANSWER = original
 
     def test_a_file_goes_out_whole_in_blocks(self):
         source = Path(tempfile.mkdtemp()) / "load.txt"
