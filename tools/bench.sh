@@ -33,7 +33,12 @@
 # typing, 100 keys 50 ms apart, and burst, 100 keys at once, each echoed at once, for the time
 # from a key to the terminal and in Kudari to the frame that shows it; scroll, 100 turns of the
 # wheel up through a history of 20,000 lines and 100 down, 16 ms apart; and search, the plain
-# text with all matches of a search highlighted, in Kudari alone. --set gives Kudari a setting
+# text with all matches of a search highlighted, in Kudari alone. Five loads flood a terminal
+# with what it has to act on beside its text: titles, 300,000 changes of the title; osc,
+# 100,000 lines with a working directory, links, marks of the prompt and copies to the
+# clipboard; bells, 300,000 of them; queries, 100,000 queries of the device attributes in
+# batches of 1,000, each answered before the next, whose answers the report counts; and
+# combining, cells with four combining marks each. --set gives Kudari a setting
 # for the measurement, such as --set Terminal.BlinkingCursor=true, once for each. --scale
 # scales the screen as for a HiDPI display, and --keep keeps the data and the logs of the
 # terminals. --scenarios measures Kudari alone instead of the loads: its start and its
@@ -101,7 +106,8 @@ built() {
 # As the shell of the terminal under test: waits until the window is up, then times each load
 # on the monotonic clock, up to the answer of the terminal to a query of the cursor.
 if [ "${KUDARI_BENCH_ROLE:-}" = workload ]; then
-    exec python3 "$tools/bench.py" workload "$KUDARI_BENCH_WORK"
+    # Its errors go to a file of their own: in the terminal, nobody would see them.
+    exec python3 "$tools/bench.py" workload "$KUDARI_BENCH_WORK" 2>> "${KUDARI_BENCH_OUT%.txt}.driver"
 fi
 
 # As the session of the virtual KWin, which gives it WAYLAND_DISPLAY and DISPLAY: starts each
@@ -219,9 +225,15 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
             tries=0
             until grep -q '^done' "$KUDARI_BENCH_OUT" 2> /dev/null; do
                 tries=$((tries + 1))
+                # A terminal that ends or hangs during a load, as one that a flood of titles
+                # throws off its display, is named in the report with that load; the others
+                # go on.
                 if [ "$tries" -gt 600 ] || ! kill -0 "$pid" 2> /dev/null; then
                     kill "$pid" 2> /dev/null || true
-                    fail "$terminal did not finish its loads; see $log"
+                    [ -s "$KUDARI_BENCH_OUT" ] || fail "$terminal did not start its loads; see $log and ${KUDARI_BENCH_OUT%.txt}.driver"
+                    say "$title: $terminal ended during a load; see $log"
+                    echo "ended" >> "$KUDARI_BENCH_OUT"
+                    break
                 fi
                 sleep 0.5
             done
@@ -278,7 +290,8 @@ while [ $# -gt 0 ]; do
             for load in $loads; do
                 case $load in
                     plain | color | unicode | frames | boxes | seq | partial | idle | typing | burst | scroll | search) ;;
-                    *) die "no load $load; there are plain, color, unicode, frames, boxes, seq, partial, idle, typing, burst, scroll and search" ;;
+                    titles | osc | bells | queries | combining) ;;
+                    *) die "no load $load; there are plain, color, unicode, frames, boxes, seq, partial, idle, typing, burst, scroll, search, titles, osc, bells, queries and combining" ;;
                 esac
             done
             shift 2

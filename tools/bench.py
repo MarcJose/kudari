@@ -43,7 +43,10 @@ from typing import NamedTuple
 
 WORDS = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor".split()
 CELLS = "abcdefghijklmnopqrstuvwxyz0123456789#@%&"
-LOADS = ("plain", "color", "unicode", "frames", "boxes", "seq", "search", "typing", "burst", "scroll", "partial", "idle")
+LOADS = (
+    "plain", "color", "unicode", "frames", "boxes", "seq", "search", "titles", "osc", "bells", "queries", "combining",
+    "typing", "burst", "scroll", "partial", "idle",
+)
 DESCRIPTIONS = {
     "plain": "24 MB of plain text",
     "color": "28 MB of text in 256 colors",
@@ -52,6 +55,11 @@ DESCRIPTIONS = {
     "boxes": "300 full screens of panels with lines, blocks and braille, as system monitors draw them",
     "seq": "the numbers up to 2,000,000",
     "search": "the plain text with all matches of a search for a word in it highlighted, in Kudari alone",
+    "titles": "300,000 changes of the title",
+    "osc": "100,000 lines with a working directory, links, marks of the prompt and copies to the clipboard",
+    "bells": "300,000 bells",
+    "queries": "100,000 queries of the device attributes, in batches of 1,000 each answered before the next",
+    "combining": "20,000 lines in which every cell carries four combining marks",
     "typing": "100 keys 50 ms apart, each echoed at once",
     "burst": "100 keys at once, each echoed at once",
     "scroll": "100 turns of the wheel up through a history of 20,000 lines and 100 down, 16 ms apart",
@@ -69,6 +77,12 @@ MARKED = ["e\u0301", "a\u0308", "o\u0302", "n\u0303", "c\u0327", "u\u0308\u0301"
 # The pieces of the load boxes: lines thin, heavy and double; blocks; and braille.
 LINES = ("─│┌┐└┘├┤┬┴┼", "━┃┏┓┗┛┣┫┳┻╋", "═║╔╗╚╝╠╣╦╩╬")
 BLOCKS = "▏▎▍▌▋▊▉█▀▄▐░▒▓▖▗▘▝"
+# The queries of the load queries, how many go out before their answers are read, and the
+# answer to one: ESC [ ? attributes c. A terminal may give no answer to more questions than
+# it keeps waiting, as Kudari beyond 4096, as from a slow terminal.
+QUERIES = 100_000
+BATCH = 1000
+ANSWERED = re.compile(rb"\x1b\[\?[0-9;]*c")
 # The time between two changes of the load partial, in seconds.
 PARTIAL_EVERY = 0.016
 # The key that the loads typing and burst press, a, as Linux numbers it; how often, and how
@@ -150,6 +164,8 @@ class Load(NamedTuple):
     answered: bool = True
     # For the loads that type: each key as the time it was pressed and the time it came.
     keys: list | None = None
+    # For the load queries: how many answers came.
+    replies: int | None = None
 
 
 def cpu(path, pid, load, moment):
@@ -171,7 +187,9 @@ def cpu(path, pid, load, moment):
         rollup = content(f"/proc/{pid}/smaps_rollup") or ""
         sizes = {key: int(value) for key, value in re.findall(r"^(\w+):\s+(\d+) kB", rollup, re.M)}
         private = sizes.get("Private_Clean", 0) + sizes.get("Private_Dirty", 0)
-        lines.append(f"{load}\tmemory\t{sizes.get('Rss', 0)}\t{sizes.get('Pss', 0)}\t{private}\n")
+        # The most it ever held, which a flood can drive up for a moment.
+        peak = re.search(r"^VmHWM:\s+(\d+) kB", status, re.M) if (status := content(f"/proc/{pid}/status")) else None
+        lines.append(f"{load}\tmemory\t{sizes.get('Rss', 0)}\t{sizes.get('Pss', 0)}\t{private}\t{peak[1] if peak else 0}\n")
     with open(path, "a") as file:
         file.writelines(lines)
 
@@ -277,7 +295,7 @@ def workload(directory, environment):
         if load == "search" and not kudari:
             continue
         time.sleep(1)
-        keys = None
+        keys, replies = None, None
         if load == "scroll":
             # A history to scroll through.
             subprocess.run(["seq", "1", str(HISTORY)], check=False)
@@ -290,6 +308,8 @@ def workload(directory, environment):
             # A screen full of text that stays, under the line that changes.
             os.write(writer, "\r\n".join(" ".join(WORDS)[:columns] for _ in range(rows - 1)).encode())
             answer(reader, writer)
+        # So that the report can name the load during which a terminal ended.
+        note(f"begin {load}")
         # The CPU time of the threads of the terminal, just outside the time of the load.
         cpu(usage, terminal, load, "start")
         start = monotonic()
@@ -305,6 +325,8 @@ def workload(directory, environment):
                 subprocess.run([str(tool), "scroll", *middle, str(value), str(TURNS), str(TURN_GAP)], check=False)
         elif load == "search":
             write_all(writer, directory / "plain.txt")
+        elif load == "queries":
+            replies = asked(reader, writer, directory / "queries.txt", QUERIES)
         elif load == "seq":
             # A program of its own, which writes as it always does.
             subprocess.run(["seq", "1", "2000000"], check=False)
@@ -323,6 +345,8 @@ def workload(directory, environment):
         note(f"{load} {start:.6f} {end:.6f} {written:.6f} {'answered' if answered is not None else 'unanswered'}")
         if keys is not None:
             note(f"keys {load} " + " ".join(f"{pressed:.6f}:{came:.6f}" for pressed, came in keys))
+        if replies is not None:
+            note(f"replies {load} {replies}")
         if load == "search":
             press(tool, ESCAPE)
         subprocess.run(["clear"], check=False)
@@ -341,7 +365,7 @@ def threads(path):
     for line in path.read_text().splitlines():
         fields = line.split("\t")
         if fields[1] == "memory":
-            memory[fields[0]] = tuple(int(field) for field in fields[2:5])
+            memory[fields[0]] = tuple(int(field) for field in fields[2:6])
             continue
         load, moment, tid, name, nanoseconds, voluntary, other = fields
         taken.setdefault((load, moment), {})[tid] = (name, int(nanoseconds), int(voluntary) + int(other))
@@ -370,6 +394,7 @@ def data(directory):
         for _ in range(200_000):
             words = (f"\x1b[38;5;{rng.randrange(256)}m{rng.choice(WORDS)}" for _ in range(8))
             text.write(" ".join(words) + "\x1b[0m\n")
+    floods(directory, rng)
     with open(directory / "unicode.txt", "w") as text:
         for number in range(150_000):
             pieces = (rng.choice((rng.choice(WIDE), rng.choice(EMOJI), rng.choice(MARKED) + rng.choice(WORDS), rng.choice(WORDS))) for _ in range(6))
@@ -393,6 +418,56 @@ def frames(directory, rows, columns):
                 )
                 text.write("".join(cells) + ("\r\n" if row < rows - 1 else ""))
             text.write("\x1b[0m")
+
+
+def floods(directory, rng):
+    """The loads that flood a terminal with what it has to act on beside its text: titles, other
+    operating system commands, bells, queries, and marks that combine with the letters."""
+    with open(directory / "titles.txt", "w") as text:
+        for number in range(300_000):
+            text.write(f"\x1b]0;title {number} {rng.choice(WORDS)}\x07")
+            if number % 100 == 99:
+                text.write(f"{number}\n")
+    with open(directory / "osc.txt", "w") as text:
+        for number in range(100_000):
+            word = rng.choice(WORDS)
+            text.write(
+                f"\x1b]133;A\x07$ \x1b]133;B\x07ls {word}\x1b]133;C\x07\x1b]7;file://host/home/{word}/{number}\x07"
+                f"\x1b]8;;https://example.org/{word}/{number}\x07{word}\x1b]8;;\x07 {number}"
+                + (f"\x1b]52;c;{word.encode().hex()}\x07" if number % 10 == 0 else "")
+                + "\x1b]133;D;0\x07\n"
+            )
+    with open(directory / "bells.txt", "w") as text:
+        text.write("\x07" * 300_000)
+    with open(directory / "queries.txt", "w") as text:
+        text.write("\x1b[c" * QUERIES)
+    marks = [chr(code) for code in range(0x0300, 0x0370)]
+    with open(directory / "combining.txt", "w") as text:
+        for _ in range(20_000):
+            cells = (rng.choice("aeiouxyz") + "".join(rng.choice(marks) for _ in range(4)) for _ in range(60))
+            text.write("".join(cells) + "\n")
+
+
+def asked(reader, writer, path, count, batch=BATCH):
+    """Writes the queries of the file in batches and reads the answers to each batch before
+    the next, as a program that asks does: how many came. A batch without all its answers
+    within the wait ends the load."""
+    queries = path.read_bytes()
+    size = len(queries) // count
+    answers = 0
+    for first in range(0, count, batch):
+        part = queries[first * size : min(count, first + batch) * size]
+        os.write(writer, part)
+        expected = answers + len(part) // size
+        got = b""
+        while answers < expected:
+            if not select.select([reader], [], [], ANSWER)[0]:
+                return answers
+            got += os.read(reader, 65536)
+            found = ANSWERED.findall(got)
+            answers += len(found)
+            got = got[got.rfind(b"c") + 1 :] if found else got[-64:]
+    return answers
 
 
 def boxes(directory, rows, columns):
@@ -546,7 +621,9 @@ def measure(directory, name):
         **{load: 0 for load in FIXED_TIME},
     }
     # Files that runs before these loads did not make.
-    for load, path in (("unicode", "unicode.txt"), ("frames", f"frames-{rows}x{columns}.txt"), ("boxes", f"boxes-{rows}x{columns}.txt")):
+    files = {load: f"{load}.txt" for load in ("unicode", "titles", "osc", "bells", "queries", "combining")}
+    files.update({load: f"{load}-{rows}x{columns}.txt" for load in ("frames", "boxes")})
+    for load, path in files.items():
         if (directory / path).exists():
             sizes[load] = (directory / path).stat().st_size
     drawn, waits, loops, snapshots = [], [], set(), []
@@ -560,9 +637,12 @@ def measure(directory, name):
             waits.append(found)
         elif found := snapshot(line):
             snapshots.append(found)
-    result, typing = {}, {}
+    result, typing, answered_queries = {}, {}, {}
     for line in lines[1:]:
         parts = line.split()
+        if parts[0] == "replies" and len(parts) == 3:
+            answered_queries[parts[1]] = int(parts[2])
+            continue
         if parts[0] == "keys" and len(parts) >= 2:
             typing[parts[1]] = [tuple(float(moment) for moment in key.split(":")) for key in parts[2:]]
             continue
@@ -579,7 +659,7 @@ def measure(directory, name):
         blocked = [wait for moment, wait in waits if start <= moment <= end + TAIL]
         result[load] = Load(
             end - start,
-            sizes[load],
+            sizes.get(load, 0),
             frames_meanwhile,
             blocked,
             end - start + TAIL,
@@ -593,7 +673,19 @@ def measure(directory, name):
     for load, keys in typing.items():
         if load in result:
             result[load] = result[load]._replace(keys=keys)
+    for load, count in answered_queries.items():
+        if load in result:
+            result[load] = result[load]._replace(replies=count)
     return f"{columns}x{rows}", result, loops
+
+
+def ended(directory, name):
+    """The load during which the terminal of a run ended or hung, or None."""
+    lines = (directory / f"{name}.txt").read_text().splitlines()
+    if "ended" not in lines:
+        return None
+    begun = [line.split()[1] for line in lines if line.startswith("begin ")]
+    return begun[-1] if begun else "?"
 
 
 def trips(directory, name):
@@ -943,6 +1035,18 @@ def latency(runs, terminals):
         table(["terminal", "to PTY p50", "p95", "p99", "to frame p50", "p95", "frames/key", "lost"], [row for _, row in sorted(rows, key=lambda row: row[0])])
 
 
+def replies(runs, terminals):
+    """For the load queries: how many of its queries each terminal answered, over the runs."""
+    rows = []
+    for terminal in terminals:
+        counts = [result["queries"].replies for _, (_, result, _) in runs[terminal] if "queries" in result and result["queries"].replies is not None]
+        if counts:
+            rows.append([terminal, f"{min(counts):,}", f"{max(counts):,}", f"{QUERIES:,}"])
+    if rows:
+        print("\nqueries: the answers that came, fewest and most over the runs, of the queries asked.")
+        table(["terminal", "fewest", "most", "asked"], rows)
+
+
 def processor(runs, terminals):
     """Per load, the CPU time of each terminal: all of it, as a share of a core, per MB of
     output, and its busiest groups of threads."""
@@ -994,10 +1098,13 @@ def memory(runs, terminals):
     for terminal, after in held.items():
         last = after[[load for load in loads if load in after][-1]]
         cells = [f"{statistics.median(found[2] for found in after[load]) / 1024:.0f}" if load in after else "-" for load in loads]
-        rows.append([terminal] + cells + [f"{statistics.median(found[0] for found in last) / 1024:.0f}", f"{statistics.median(found[1] for found in last) / 1024:.0f}"])
+        peaks = [found[3] for found in last if len(found) > 3 and found[3]]
+        peak = f"{statistics.median(peaks) / 1024:.0f}" if peaks else "-"
+        rows.append([terminal] + cells + [f"{statistics.median(found[0] for found in last) / 1024:.0f}", f"{statistics.median(found[1] for found in last) / 1024:.0f}", peak])
     print("\nMemory of each terminal in MB, median of the runs: private after each load (the history")
-    print("fills from one load to the next), and resident (RSS) and proportional (PSS) after the last.")
-    table(["terminal"] + [f"after {load}" for load in loads] + ["RSS", "PSS"], rows)
+    print("fills from one load to the next), resident (RSS) and proportional (PSS) after the last, and")
+    print("the most it was ever resident (peak), which a flood can drive up for a moment.")
+    table(["terminal"] + [f"after {load}" for load in loads] + ["RSS", "PSS", "peak"], rows)
 
 
 def drawing(terminal, measured, detail):
@@ -1185,6 +1292,7 @@ def report(directory, order, detail=False):
     print("the highest throughput comes first.")
     throughput(runs, terminals)
     latency(runs, terminals)
+    replies(runs, terminals)
     answers(runs, taken, terminals)
     processor(runs, terminals)
     memory(runs, terminals)
@@ -1200,6 +1308,12 @@ def report(directory, order, detail=False):
     if len(builds) > 1:
         compare(runs, builds)
     profiles(directory)
+    gone = [(path.stem, load) for path in sorted(directory.glob("*-*.txt")) if path.stem.rsplit("-", 1)[1].isdigit() and (load := ended(directory, path.stem))]
+    if gone:
+        print("\nTerminals that ended or hung during a load, which then and after counts for nothing:")
+        for name, load in gone:
+            terminal, run = name.rsplit("-", 1)
+            print(f"{terminal} in run {run}, during {load}")
 
 # The scenarios of `tools/bench.sh --scenarios` that wait, in the order of the report, with
 # what each of them shows.
