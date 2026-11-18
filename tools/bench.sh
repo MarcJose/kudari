@@ -26,8 +26,14 @@
 # build with the feature stats (cargo build --release --features stats) adds what Kudari
 # counted during each load: wakeups, refreshes and paints a second, the waits for the lock of
 # a terminal and in the queue of the Qt thread, and the parts of a frame.
-# --loads picks some of plain, color, frames and seq, or idle: ten seconds without output,
-# for the CPU time and the wakeups of a terminal that waits. --set gives Kudari a setting
+# --loads picks some of plain, color, unicode, frames, boxes and seq; or partial, a line of
+# status that changes every 16 ms for ten seconds, for the cost of a small change; or idle:
+# ten seconds without output, for the CPU time and the wakeups of a terminal that waits. Four
+# loads give input through the fake input of KWin and need wayland-scanner and a C compiler:
+# typing, 100 keys 50 ms apart, and burst, 100 keys at once, each echoed at once, for the time
+# from a key to the terminal and in Kudari to the frame that shows it; scroll, 100 turns of the
+# wheel up through a history of 20,000 lines and 100 down, 16 ms apart; and search, the plain
+# text with all matches of a search highlighted, in Kudari alone. --set gives Kudari a setting
 # for the measurement, such as --set Terminal.BlinkingCursor=true, once for each. --scale
 # scales the screen as for a HiDPI display, and --keep keeps the data and the logs of the
 # terminals. --scenarios measures Kudari alone instead of the loads: its start and its
@@ -46,9 +52,15 @@
 #
 # All of them run full screen in a virtual KWin of 2560x1440, xterm through Xwayland, on a
 # D-Bus and with settings of their own, so the desktop and its settings stay out of it. The
-# loads are plain text, text in 256 colors, 300 full screens with colors of their own in
-# every cell, as a busy program draws them, and the numbers up to 2,000,000. Each terminal
-# keeps its own font, so the number of cells differs between them. The graphics card of the
+# loads are plain text, text in 256 colors, wide characters, emoji and combining marks, 300
+# full screens with colors of their own in every cell, as a busy program draws them, 300 of
+# panels framed in lines with bars of blocks and graphs of braille, as system monitors draw
+# them, and the numbers up to 2,000,000. Kudari draws lines and blocks itself, and braille
+# with the font unless --set Terminal.FontBrailleCharacters=false. A load is timed
+# on the monotonic clock from its first byte to the answer of the terminal to a query of the
+# cursor (DSR) after its last, when the terminal has read and parsed all of it; the report
+# gives that query alone and how long each terminal still worked after the last byte. Each
+# terminal keeps its own font, so the number of cells differs between them. The graphics card of the
 # computer draws, so compare only runs on the same computer. Needs kwin_wayland with
 # Xwayland, qdbus6, dbus-run-session and python3, and kscreen-doctor for --scale.
 set -eu
@@ -86,41 +98,10 @@ built() {
     fi
     named "$name=$store/kudari"
 }
-stamp() { date +%Y-%m-%dT%H:%M:%S.%3N; }
-
-# As the shell of the terminal under test: waits until the window is up, then times each load.
+# As the shell of the terminal under test: waits until the window is up, then times each load
+# on the monotonic clock, up to the answer of the terminal to a query of the cursor.
 if [ "${KUDARI_BENCH_ROLE:-}" = workload ]; then
-    while [ ! -e "$KUDARI_BENCH_WORK/go" ]; do sleep 0.2; done
-    terminal_pid=$(cat "$KUDARI_BENCH_WORK/pid")
-    sleep 1
-    size=$(stty size)
-    rows=${size% *} cols=${size#* }
-    python3 "$tools/bench.py" frames "$KUDARI_BENCH_WORK" "$rows" "$cols"
-    echo "size $rows $cols" > "$KUDARI_BENCH_OUT"
-    clear
-    # The clock of perf, for perf report --time.
-    monotonic() { python3 -c 'import time; print(f"{time.clock_gettime(time.CLOCK_MONOTONIC):.6f}")'; }
-    for load in $KUDARI_BENCH_LOADS; do
-        sleep 1
-        # The CPU time of the threads of the terminal, just outside the time of the load.
-        python3 "$tools/bench.py" cpu "$KUDARI_BENCH_CPU" "$terminal_pid" "$load" start
-        [ -z "${KUDARI_BENCH_PERF:-}" ] || first=$(monotonic)
-        start=$(stamp)
-        case $load in
-            frames) cat "$KUDARI_BENCH_WORK/frames-${rows}x$cols.txt" ;;
-            seq) seq 1 2000000 ;;
-            idle) sleep 10 ;;
-            *) cat "$KUDARI_BENCH_WORK/$load.txt" ;;
-        esac
-        end=$(stamp)
-        [ -z "${KUDARI_BENCH_PERF:-}" ] || echo "$load $first $(monotonic)" >> "${KUDARI_BENCH_OUT%.txt}.perf"
-        python3 "$tools/bench.py" cpu "$KUDARI_BENCH_CPU" "$terminal_pid" "$load" end
-        sleep 1
-        echo "$load $start $end" >> "$KUDARI_BENCH_OUT"
-        clear
-    done
-    echo "done" >> "$KUDARI_BENCH_OUT"
-    exec sleep 100000
+    exec python3 "$tools/bench.py" workload "$KUDARI_BENCH_WORK"
 fi
 
 # As the session of the virtual KWin, which gives it WAYLAND_DISPLAY and DISPLAY: starts each
@@ -185,7 +166,7 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
                     printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nWidth=100\nHeight=100\n' \
                         > "$XDG_CONFIG_HOME/kudarirc"
                     cat "$work/kudarirc-settings" >> "$XDG_CONFIG_HOME/kudarirc"
-                    # The frame times of Qt Quick, with the time of day to match them to the loads,
+                    # The frame times of Qt Quick, on the monotonic clock of the loads,
                     # and in a build with the feature stats its counters ten times a second.
                     # With --perf, perf starts Kudari as its child and samples it: no rights to
                     # trace another process are needed, and only the cycles and the calls in
@@ -195,7 +176,7 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
                         profiler="perf record -q -k monotonic -e cycles:u -F 4999 --call-graph fp --user-callchains -o $work/perf-$terminal-$run.data --"
                     # shellcheck disable=SC2086 # the profiler is words of its own, or none
                     SHELL=$shell QSG_RENDER_TIMING=1 KUDARI_STATS=1 KUDARI_STATS_MS=100 \
-                        QT_MESSAGE_PATTERN='%{time yyyy-MM-ddTHH:mm:ss.zzz} %{category} %{message}' \
+                        QT_MESSAGE_PATTERN='%{time boot} %{category} %{message}' \
                         $profiler "$binary" > "$log" 2>&1 &
                     pid=$!
                     if [ -n "$KUDARI_BENCH_PERF" ]; then
@@ -264,7 +245,7 @@ variants=${KUDARI_BENCH_VARIANTS:-}
 revisions=
 runs=5
 scale=1
-loads="plain color frames seq"
+loads="plain color unicode frames boxes seq"
 keep=
 keep_env=
 warmup=1
@@ -295,7 +276,10 @@ while [ $# -gt 0 ]; do
         --loads)
             loads=$(echo "$2" | tr ',' ' ')
             for load in $loads; do
-                case $load in plain | color | frames | seq | idle) ;; *) die "no load $load; there are plain, color, frames, seq and idle" ;; esac
+                case $load in
+                    plain | color | unicode | frames | boxes | seq | partial | idle | typing | burst | scroll | search) ;;
+                    *) die "no load $load; there are plain, color, unicode, frames, boxes, seq, partial, idle, typing, burst, scroll and search" ;;
+                esac
             done
             shift 2
             ;;
@@ -386,6 +370,23 @@ if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
     # Some 400 MB of data and logs, kept only when the measurement fails.
     work=$(mktemp -d "${TMPDIR:-/tmp}/kudari-bench.XXXXXX")
     trap 'rm -rf "$work"; exit 1' INT TERM
+    # The loads that type and scroll do so through the fake input of KWin, which allows a
+    # program that a desktop file names; tests/gui/run.sh uses the same tool.
+    case " $loads " in
+        *" typing "* | *" burst "* | *" scroll "* | *" search "*)
+            for program in wayland-scanner cc; do
+                command -v "$program" > /dev/null || die "the loads typing, burst, scroll and search need $program"
+            done
+            if ! { wayland-scanner client-header "$tools/../tests/gui/fake-input.xml" "$work/fake-input-client.h" &&
+                wayland-scanner private-code "$tools/../tests/gui/fake-input.xml" "$work/fake-input-code.c" &&
+                cc -O1 -I"$work" "$tools/../tests/gui/fake_input.c" "$work/fake-input-code.c" -lwayland-client -lm -o "$work/input"; }; then
+                die "could not build the fake input of tests/gui"
+            fi
+            mkdir -p "$work/data/applications"
+            printf '[Desktop Entry]\nType=Application\nName=Kudari bench input\nExec=%s\nNoDisplay=true\nX-KDE-Wayland-Interfaces=org_kde_kwin_fake_input\n' \
+                "$work/input" > "$work/data/applications/kudari-bench-input.desktop"
+            ;;
+    esac
     echo "Terminals:$terminals; Kudari: $binary; $runs runs; scale $scale"
     # The variables that would change Qt, the drivers or what gets loaded, by name only.
     variables=$(env | grep -oE '^(QT|QSG|QML|MESA|LIBGL|__GL|KWIN|LD)_[A-Za-z0-9_]*=' | tr -d = | sort -u | tr '\n' ' ')
@@ -457,7 +458,8 @@ export KUDARI_BENCH_SCENARIOS="$scenarios" KUDARI_BENCH_PERF="$perf"
 tail -f "$work/progress.log" &
 progress=$!
 trap 'kill "$progress" 2> /dev/null; rm -rf "$XDG_RUNTIME_DIR"' EXIT
-KUDARI_BENCH_ROLE=session kwin_wayland --virtual --xwayland --no-lockscreen --socket=kudari-bench \
+# KWin finds the desktop file of the fake input among its data.
+KUDARI_BENCH_ROLE=session XDG_DATA_HOME="$work/data" kwin_wayland --virtual --xwayland --no-lockscreen --socket=kudari-bench \
     --width 2560 --height 1440 --scale "$scale" --exit-with-session "$tools/bench.sh" > "$work/kwin.log" 2>&1 || true
 sleep 0.5
 if [ -e "$work/failed" ]; then

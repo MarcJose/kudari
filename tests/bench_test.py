@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -235,6 +236,83 @@ class Report(unittest.TestCase):
         # waits need the two in the bucket up to 1024 µs; ten frames built in 1500 µs.
         self.assertEqual(row[:5], ["plain", "100", "50", "100", "1024"])
         self.assertEqual(row[7], "150")
+
+    def monotonic_run(self, name, log_lines, loads, trips=(), wall=None, keys=None):
+        """A run as the driver writes it now: seconds on the monotonic clock, from 1000 on, and
+        for each load the last byte written and whether the terminal answered."""
+        lines = ["size 40 100"]
+        if wall is not None:
+            lines.append(f"clock 1000.000000 {wall:.6f}")
+        lines.append("round-trips " + " ".join(f"{taken:.6f}" for taken in trips))
+        for load, start, end, written, answered in loads:
+            lines.append(f"{load} {1000 + start:.6f} {1000 + end:.6f} {1000 + written:.6f} {'answered' if answered else 'unanswered'}")
+            if keys and load in keys:
+                lines.append(f"keys {load} " + " ".join(f"{1000 + pressed:.6f}:{1000 + came:.6f}" for pressed, came in keys[load]))
+        (self.directory / f"{name}.txt").write_text("\n".join(lines + ["done"]) + "\n")
+        (self.directory / f"{name}.log").write_text("\n".join(log_lines) + "\n")
+
+    def test_a_load_on_the_monotonic_clock_ends_with_the_answer_of_the_terminal(self):
+        # Qt pads the seconds of %{time boot} with spaces; 12 frames up to 50 ms after the end.
+        frame = "  {:.3f} qt.scenegraph.time.renderloop [render thread 0x1] syncAndRender: frame rendered in 3ms, sync=1, render=1, swap=1"
+        self.monotonic_run("kudari-1", [frame.format(1000 + 0.02 * index) for index in range(12)], (("plain", 0.0, 0.2, 0.15, True),), trips=(0.001, 0.002, 0.003))
+        measured = bench.measure(self.directory, "kudari-1")[1]["plain"]
+        self.assertAlmostEqual(measured.seconds, 0.2)
+        self.assertAlmostEqual(measured.backlog, 0.05)
+        self.assertEqual(len(measured.frames), 12)
+        text = self.report("kudari")
+        self.assertEqual(self.frames_row(text, "plain")[1], "48.0")
+        row = next(line.split() for line in text.split("A load ends when the terminal answers")[1].splitlines() if line.startswith("kudari "))
+        # The query alone: 2 ms in the median, 3 ms at 95 %; plain: 50 ms after the last byte.
+        self.assertEqual(row[:5], ["kudari", "2.00", "3.00", "50.0", "(50.0)"])
+
+    def test_a_terminal_that_does_not_answer_ends_with_its_last_byte_and_is_named(self):
+        self.monotonic_run("alacritty-1", [], (("plain", 0.0, 0.15, 0.15, False),))
+        self.monotonic_run("alacritty-2", [], (("plain", 0.0, 0.25, 0.15, True),))
+        row = next(line for line in self.report("alacritty").split("A load ends when")[1].splitlines() if line.startswith("alacritty "))
+        self.assertIn("100.0 (100.0) 1 unanswered", row)
+
+    def test_the_counters_on_the_time_of_day_match_the_loads_on_the_monotonic_clock(self):
+        # The wall clock was 5000 s ahead of the monotonic one when the driver began.
+        wall = 1000 + 5000
+        line = lambda seconds, wakeups: self.stats(0, wakeups, {}, [], (0, 0)).replace(f"{bench.when(stamp(0)):.3f}", f"{wall + seconds:.3f}")
+        self.monotonic_run("kudari-1", [line(-0.1, 10), line(0.3, 50)], (("plain", 0.0, 0.2, 0.2, True),), wall=wall)
+        counted = bench.measure(self.directory, "kudari-1")[1]["plain"].counters
+        self.assertEqual(counted["wakeups"], 40)
+        self.assertAlmostEqual(counted["seconds"], 0.4)
+
+    def test_typing_gives_the_time_from_each_key_to_the_terminal_and_to_its_frame(self):
+        frame = "{:.3f} qt.scenegraph.time.renderloop [render thread 0x1] syncAndRender: frame rendered in 3ms, sync=1, render=1, swap=1"
+        # Keys 0.1 s apart, each at the terminal 1 ms after its press and drawn 8 ms after it.
+        keys = [(0.1 * index, 0.1 * index + 0.001) for index in range(100)]
+        frames = [frame.format(1000 + pressed + 0.008) for pressed, _ in keys]
+        self.monotonic_run("kudari-1", frames, (("typing", 0.0, 10.0, 10.0, True),), keys={"typing": keys})
+        self.monotonic_run("alacritty-1", [], (("typing", 0.0, 10.0, 10.0, True),), keys={"typing": keys[:98]})
+        text = self.report("kudari", "alacritty")
+        part = text.split("typing: 100 keys")[1].splitlines()
+        kudari = next(line.split() for line in part if line.startswith("kudari "))
+        self.assertEqual(kudari[1:], ["1.00", "1.00", "1.00", "8.0", "8.0", "1.00", "0"])
+        alacritty = next(line.split() for line in part if line.startswith("alacritty "))
+        # Without frames in its log; two keys never came.
+        self.assertEqual(alacritty[4:], ["-", "-", "-", "2"])
+        # A load of keys has no throughput, but a cost per key.
+        self.assertNotIn("\ntyping: 100 keys 50 ms apart, each echoed at once\n", text)
+
+    def test_older_runs_on_the_time_of_day_still_read(self):
+        self.run_of("kudari-1", [threaded(0.1, 1)])
+        measured = bench.measure(self.directory, "kudari-1")[1]["plain"]
+        self.assertIsNone(measured.backlog)
+        self.assertNotIn("A load ends when", self.report("kudari"))
+
+    def test_a_load_of_a_fixed_time_costs_per_change_and_has_no_throughput(self):
+        self.run_of("kudari-1", [], (("partial", 0.0, 10.0),))
+        self.cpu_of("kudari-1", "partial", (1, "main", 0, 625), (2, "QSGRenderThread", 0, 625))
+        text = self.report("kudari")
+        self.assertNotIn("\npartial: a line of status", text)
+        part = text.split("partial: CPU time of the terminal")[1].splitlines()
+        self.assertIn("ms per change", part[1])
+        row = next(line.split() for line in part if line.startswith("kudari "))
+        # 1250 ms of CPU for 625 changes.
+        self.assertEqual(row[1:4], ["1250", "12.5", "2.00"])
 
     def test_without_lines_around_a_load_the_counters_say_nothing(self):
         self.run_of("kudari-1", [self.stats(0.1, 10, {}, [], (0, 0)), self.stats(0.4, 20, {}, [], (0, 0))])
@@ -494,6 +572,138 @@ class Compare(unittest.TestCase):
         base = {("throughput", "plain", "parser_ms"): 130.0, ("throughput", "plain", "parser_instructions"): 0.0}
         self.assertEqual(self.marks(base, {("throughput", "plain", "parser_ms"): 140.0, ("throughput", "plain", "parser_instructions"): 0.0}), {"parser_ms": True})
         self.assertEqual(self.marks(base, {("throughput", "plain", "parser_ms"): 133.0, ("throughput", "plain", "parser_instructions"): 0.0}), {"parser_ms": False})
+
+
+class Loads(unittest.TestCase):
+    """The data of the loads, from a fixed seed."""
+
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: [path.unlink() for path in self.directory.iterdir()] and self.directory.rmdir())
+
+    def screens(self, text):
+        return [screen for screen in text.split("\x1b[H") if screen]
+
+    def test_the_panels_fill_each_screen_with_lines_blocks_and_braille(self):
+        import re as expressions
+
+        bench.boxes(self.directory, 12, 40)
+        text = (self.directory / "boxes-12x40.txt").read_bytes().decode()
+        screens = self.screens(text)
+        self.assertEqual(len(screens), 300)
+        for screen in screens[:20]:
+            rows = expressions.sub(r"\x1b\[[0-9;]*m", "", screen).split("\r\n")
+            # Every row is as wide as the terminal: nothing wraps or scrolls.
+            self.assertEqual([len(row) for row in rows], [40] * 12)
+        self.assertTrue(any(kind[0] in text for kind in bench.LINES))
+        self.assertTrue(any(chr(0x2800) <= character <= chr(0x28FF) for character in text))
+        self.assertIn(bench.BLOCKS[7], text)
+        # The same again from the seed.
+        first = text
+        (self.directory / "boxes-12x40.txt").unlink()
+        bench.boxes(self.directory, 12, 40)
+        self.assertEqual((self.directory / "boxes-12x40.txt").read_bytes().decode(), first)
+
+    def test_the_unicode_text_holds_wide_characters_emoji_and_marks(self):
+        bench.data(self.directory)
+        text = (self.directory / "unicode.txt").read_text()
+        self.assertEqual(text.count("\n"), 150_000)
+        for piece in ("日本語", "👩‍💻", "👍🏽", "e\u0301"):
+            self.assertIn(piece, text)
+
+
+class Driver(unittest.TestCase):
+    """The parts of the driver of the loads that need no terminal under test."""
+
+    def setUp(self):
+        import pty
+        import termios
+        import threading
+
+        self.master, self.slave = pty.openpty()
+        self.addCleanup(os.close, self.master)
+        self.addCleanup(os.close, self.slave)
+        mode = termios.tcgetattr(self.slave)
+        mode[3] &= ~(termios.ICANON | termios.ECHO)
+        termios.tcsetattr(self.slave, termios.TCSANOW, mode)
+        self.threading = threading
+
+    def terminal(self, reply, after=0.0):
+        """Reads the query on the side of the terminal and answers it with `reply`, `after`
+        seconds later."""
+
+        def serve():
+            seen = b""
+            while b"\x1b[6n" not in seen:
+                seen += os.read(self.master, 64)
+            time.sleep(after)
+            if reply:
+                os.write(self.master, reply)
+
+        thread = self.threading.Thread(target=serve, daemon=True)
+        thread.start()
+        return thread
+
+    def test_the_answer_to_a_query_of_the_cursor_ends_the_wait(self):
+        # An answer that came too late for a query before does not count for this one.
+        os.write(self.master, b"\x1b[1;1R")
+        time.sleep(0.1)
+        self.terminal(b"\x1b[12;40R", after=0.3)
+        before = bench.monotonic()
+        answered = bench.answer(self.slave, self.slave, wait=5)
+        self.assertIsNotNone(answered)
+        self.assertGreaterEqual(answered - before, 0.25)
+        self.assertLess(answered - before, 5)
+
+    def test_without_an_answer_the_wait_ends_after_its_time(self):
+        self.terminal(b"")
+        self.assertIsNone(bench.answer(self.slave, self.slave, wait=0.2))
+
+    def test_a_line_of_status_changes_on_time_and_leaves_the_rest(self):
+        reader, writer = os.pipe()
+        self.addCleanup(os.close, reader)
+        changes = bench.partial(writer, 60, seconds=0.2, every=0.02)
+        os.close(writer)
+        written = os.read(reader, 1 << 20).decode()
+        # Ten changes in 0.2 s, each saving the cursor, writing the top line and going back.
+        self.assertIn(changes, range(9, 12))
+        self.assertEqual(written.count("\x1b7\x1b[1;1H"), changes)
+        self.assertEqual(written.count("\x1b8"), changes)
+
+    def test_each_key_that_comes_is_echoed_and_paired_with_its_press(self):
+        import sys as system
+
+        def keys():
+            for _ in range(3):
+                time.sleep(0.05)
+                os.write(self.master, b"a")
+
+        self.threading.Thread(target=keys, daemon=True).start()
+        presses = "import time\nfor _ in range(3):\n    print(time.clock_gettime(time.CLOCK_MONOTONIC), flush=True)\n    time.sleep(0.05)\n"
+        paired = bench.typed(self.slave, self.slave, [system.executable, "-c", presses], 3)
+        self.assertEqual(len(paired), 3)
+        self.assertTrue(all(pressed < bench.monotonic() and came <= bench.monotonic() for pressed, came in paired))
+        # The echo goes back to the terminal.
+        self.assertEqual(os.read(self.master, 64), b"aaa")
+
+    def test_a_file_goes_out_whole_in_blocks(self):
+        source = Path(tempfile.mkdtemp()) / "load.txt"
+        self.addCleanup(lambda: (source.unlink(), source.parent.rmdir()))
+        source.write_bytes(bytes(range(256)) * (bench.BLOCK // 128 + 3))
+        reader, writer = os.pipe()
+        got = bytearray()
+
+        def drain():
+            while chunk := os.read(reader, 65536):
+                got.extend(chunk)
+
+        thread = self.threading.Thread(target=drain)
+        thread.start()
+        bench.write_all(writer, source)
+        os.close(writer)
+        thread.join()
+        os.close(reader)
+        self.assertEqual(bytes(got), source.read_bytes())
 
 
 if __name__ == "__main__":

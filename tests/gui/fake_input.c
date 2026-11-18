@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de>
 // SPDX-License-Identifier: MIT
 
-// Sends pointer and key events through KWin's fake input protocol, for tests/gui/run.sh.
+// Sends pointer and key events through KWin's fake input protocol, for tests/gui/run.sh and
+// for the loads of tools/bench.sh that type and scroll.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <wayland-client.h>
 #include "fake-input-client.h"
@@ -23,6 +25,14 @@ static void global_remove(void *d, struct wl_registry *r, uint32_t n)
     (void)n;
 }
 static const struct wl_registry_listener listener = {global, global_remove};
+
+// Seconds on the monotonic clock, which the bench times its loads on.
+static double now(void)
+{
+    struct timespec moment;
+    clock_gettime(CLOCK_MONOTONIC, &moment);
+    return (double)moment.tv_sec + (double)moment.tv_nsec / 1e9;
+}
 
 int main(int argc, char **argv)
 {
@@ -72,6 +82,30 @@ int main(int argc, char **argv)
         for (int i = 0; i < times; ++i) {
             org_kde_kwin_fake_input_axis(fake, axis, wl_fixed_from_double(atof(argv[4])));
             wl_display_roundtrip(display); usleep(100000);
+        }
+    } else if (!strcmp(cmd, "type") && argc > 4) {
+        // type CODE COUNT GAP: presses and lets go of a key COUNT times, GAP milliseconds
+        // apart, and prints the time of each press once KWin has passed it on.
+        int code = atoi(argv[2]), count = atoi(argv[3]), gap = atoi(argv[4]);
+        for (int i = 0; i < count; ++i) {
+            org_kde_kwin_fake_input_keyboard_key(fake, code, 1);
+            wl_display_roundtrip(display);
+            printf("%.6f\n", now());
+            fflush(stdout);
+            org_kde_kwin_fake_input_keyboard_key(fake, code, 0);
+            wl_display_roundtrip(display);
+            if (gap > 0)
+                usleep(gap * 1000);
+        }
+    } else if (!strcmp(cmd, "scroll") && argc > 6) {
+        // scroll X Y VALUE COUNT GAP: COUNT turns of the vertical wheel, GAP milliseconds apart.
+        int count = atoi(argv[5]), gap = atoi(argv[6]);
+        org_kde_kwin_fake_input_pointer_motion_absolute(fake, wl_fixed_from_double(atof(argv[2])), wl_fixed_from_double(atof(argv[3])));
+        wl_display_roundtrip(display);
+        for (int i = 0; i < count; ++i) {
+            org_kde_kwin_fake_input_axis(fake, 0, wl_fixed_from_double(atof(argv[4])));
+            wl_display_roundtrip(display);
+            usleep(gap * 1000);
         }
     } else if (!strcmp(cmd, "keydown")) {
         org_kde_kwin_fake_input_keyboard_key(fake, atoi(argv[2]), 1);
