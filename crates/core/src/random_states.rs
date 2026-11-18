@@ -11,10 +11,12 @@
 //! reach two faults of the emulator that are still open, which `upstream_tests` keeps.
 //!
 //! `cargo test` runs a few cases with fixed seeds. More run with the following, and
-//! `KUDARI_RANDOM_TRACE=1` shows the steps of a case that fails:
+//! `KUDARI_RANDOM_TRACE=1` writes the steps of a case to stderr, a line each, which
+//! `KUDARI_RANDOM_REPLAY=file` runs again, also with lines left out:
 //!
 //!     KUDARI_RANDOM_CASES=1000 KUDARI_RANDOM_SEED=7 cargo test -p kudari-core --lib random -- --ignored
 
+use std::fmt::Write as _;
 use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
@@ -167,97 +169,181 @@ fn read_all(term: &Term<VoidListener>, view: &mut View, random: &mut Random) {
     view.update_matches(term);
 }
 
-/// One case: `steps` random steps from `seed`. With `KUDARI_RANDOM_TRACE=1`, each step goes
-/// to stderr, to find the one that fails.
-fn case(seed: u64, steps: usize) {
-    let trace = std::env::var_os("KUDARI_RANDOM_TRACE").is_some_and(|value| value == "1");
-    let mut random = Random::new(seed);
-    let mut term = Term::new(Config::default(), &TermSize::new(40, 10), VoidListener);
-    let mut processor = Processor::<StdSyncHandler>::new();
-    let mut scanner = Scanner::default();
-    let marks = Mutex::new(Marks::default());
-    let mut view = View::default();
-    for step in 0..steps {
+/// A step of a case. Its line, from [`Step::line`], reads back with [`Step::parse`], so that a
+/// case written with `KUDARI_RANDOM_TRACE=1` can run again with `KUDARI_RANDOM_REPLAY`, with
+/// steps left out to find the few that fail.
+/// Where a step scrolls the view to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Place {
+    Top,
+    Bottom,
+    By(i32),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Step {
+    /// Output, in pieces of this many bytes.
+    Output(usize, Vec<u8>),
+    Resize(usize, usize),
+    Scroll(Place),
+    SelectionMode,
+    SelectAll(bool),
+    History(usize),
+    Clear(usize),
+    Find(bool, String),
+}
+
+impl Step {
+    fn random(random: &mut Random) -> Self {
         match random.below(20) {
             0..=10 => {
-                let mut bytes = output(&mut random);
-                if trace {
-                    eprintln!("{seed} {step}: output {:?}", String::from_utf8_lossy(&bytes));
-                }
-                // In pieces, as the PTY reads them, so that sequences are cut.
-                for piece in bytes.chunks_mut(1 + random.below(16)) {
-                    scanner.scan(piece, &marks, &|| true);
-                    processor.advance(&mut term, piece);
-                }
+                let bytes = output(random);
+                Self::Output(1 + random.below(16), bytes)
             }
-            11 | 12 => {
-                let columns = MIN_COLUMNS + random.below(120);
-                let lines = 1 + random.below(40);
-                if trace {
-                    eprintln!("{seed} {step}: resize to {columns}x{lines}");
-                }
-                term.resize(TermSize::new(columns, lines));
-            }
-            13 | 14 => {
-                let scroll = match random.below(4) {
-                    0 => Scroll::Top,
-                    1 => Scroll::Bottom,
-                    _ => Scroll::Delta(random.below(80) as i32 - 40),
-                };
-                if trace {
-                    eprintln!("{seed} {step}: scroll {scroll:?}");
-                }
-                term.scroll_display(scroll);
-            }
-            15 => {
-                if trace {
-                    eprintln!("{seed} {step}: selection mode");
-                }
-                std::hint::black_box(view::toggle_selection_mode(&mut term));
-            }
-            16 => {
-                if trace {
-                    eprintln!("{seed} {step}: select all or nothing");
-                }
-                if random.below(2) == 0 {
-                    view::select_all(&mut term);
-                } else {
-                    term.selection = None;
-                }
-            }
-            17 => {
-                let config = Config {
-                    scrolling_history: random.below(300),
-                    ..Config::default()
-                };
-                if trace {
-                    eprintln!("{seed} {step}: history {}", config.scrolling_history);
-                }
-                term.set_options(config);
-            }
-            18 => {
-                if trace {
-                    eprintln!("{seed} {step}: clear the screen");
-                }
-                term.clear_screen(match random.below(4) {
-                    0 => ClearMode::All,
-                    1 => ClearMode::Saved,
-                    2 => ClearMode::Above,
-                    _ => ClearMode::Below,
-                });
-            }
+            11 | 12 => Self::Resize(MIN_COLUMNS + random.below(120), 1 + random.below(40)),
+            13 | 14 => Self::Scroll(match random.below(4) {
+                0 => Place::Top,
+                1 => Place::Bottom,
+                _ => Place::By(random.below(80) as i32 - 40),
+            }),
+            15 => Self::SelectionMode,
+            16 => Self::SelectAll(random.below(2) == 0),
+            17 => Self::History(random.below(300)),
+            18 => Self::Clear(random.below(4)),
             _ => {
                 let patterns = ["o", "[a-z]+", "日", "x{2,}", "(", ""];
                 let pattern = patterns[random.below(patterns.len())];
-                if trace {
-                    eprintln!("{seed} {step}: find {pattern:?}");
-                }
-                std::hint::black_box(view.find(&mut term, pattern, random.below(2) == 0, false, true, true));
+                Self::Find(random.below(2) == 0, pattern.to_string())
             }
         }
-        // As each lock of a terminal in Kudari does.
-        view::repair_view(&mut term);
-        read_all(&term, &mut view, &mut random);
+    }
+
+    fn line(&self) -> String {
+        let hex = |bytes: &[u8]| {
+            bytes.iter().fold(String::new(), |mut text, byte| {
+                let _ = write!(text, "{byte:02x}");
+                text
+            })
+        };
+        match self {
+            Self::Output(piece, bytes) => format!("output {piece} {}", hex(bytes)),
+            Self::Resize(columns, lines) => format!("resize {columns} {lines}"),
+            Self::Scroll(Place::Top) => "scroll top".to_string(),
+            Self::Scroll(Place::Bottom) => "scroll bottom".to_string(),
+            Self::Scroll(Place::By(lines)) => format!("scroll {lines}"),
+            Self::SelectionMode => "selection-mode".to_string(),
+            Self::SelectAll(all) => format!("select {}", if *all { "all" } else { "none" }),
+            Self::History(lines) => format!("history {lines}"),
+            Self::Clear(mode) => format!("clear {mode}"),
+            Self::Find(backwards, pattern) => format!("find {} {}", u8::from(*backwards), hex(pattern.as_bytes())),
+        }
+    }
+
+    fn parse(line: &str) -> Option<Self> {
+        let unhex = |text: &str| -> Option<Vec<u8>> {
+            (0..text.len())
+                .step_by(2)
+                .map(|at| u8::from_str_radix(text.get(at..at + 2)?, 16).ok())
+                .collect()
+        };
+        let mut words = line.split_whitespace();
+        let number = |word: Option<&str>| word.and_then(|word| word.parse::<usize>().ok());
+        Some(match words.next()? {
+            "output" => Self::Output(number(words.next())?, unhex(words.next().unwrap_or(""))?),
+            "resize" => Self::Resize(number(words.next())?, number(words.next())?),
+            "scroll" => Self::Scroll(match words.next()? {
+                "top" => Place::Top,
+                "bottom" => Place::Bottom,
+                lines => Place::By(lines.parse().ok()?),
+            }),
+            "selection-mode" => Self::SelectionMode,
+            "select" => Self::SelectAll(words.next()? == "all"),
+            "history" => Self::History(number(words.next())?),
+            "clear" => Self::Clear(number(words.next())?),
+            "find" => Self::Find(
+                words.next()? == "1",
+                String::from_utf8(unhex(words.next().unwrap_or(""))?).ok()?,
+            ),
+            _ => return None,
+        })
+    }
+}
+
+/// A terminal and what goes with it in Kudari, which the steps act on.
+struct State {
+    term: Term<VoidListener>,
+    processor: Processor<StdSyncHandler>,
+    scanner: Scanner,
+    marks: Mutex<Marks>,
+    view: View,
+}
+
+impl State {
+    fn new() -> Self {
+        Self {
+            term: Term::new(Config::default(), &TermSize::new(40, 10), VoidListener),
+            processor: Processor::new(),
+            scanner: Scanner::default(),
+            marks: Mutex::new(Marks::default()),
+            view: View::default(),
+        }
+    }
+
+    /// Takes `step`, repairs the view as each lock of a terminal in Kudari does, and reads
+    /// everything, with `reading` choosing where.
+    fn take(&mut self, step: &Step, reading: u64) {
+        let term = &mut self.term;
+        match step {
+            Step::Output(piece, bytes) => {
+                let mut bytes = bytes.clone();
+                // In pieces, as the PTY reads them, so that sequences are cut.
+                for part in bytes.chunks_mut((*piece).max(1)) {
+                    self.scanner.scan(part, &self.marks, &|| true);
+                    self.processor.advance(term, part);
+                }
+            }
+            Step::Resize(columns, lines) => term.resize(TermSize::new(*columns, *lines)),
+            Step::Scroll(place) => term.scroll_display(match place {
+                Place::Top => Scroll::Top,
+                Place::Bottom => Scroll::Bottom,
+                Place::By(lines) => Scroll::Delta(*lines),
+            }),
+            Step::SelectionMode => {
+                std::hint::black_box(view::toggle_selection_mode(term));
+            }
+            Step::SelectAll(true) => view::select_all(term),
+            Step::SelectAll(false) => term.selection = None,
+            Step::History(lines) => term.set_options(Config {
+                scrolling_history: *lines,
+                ..Config::default()
+            }),
+            Step::Clear(mode) => term.clear_screen(match mode {
+                0 => ClearMode::All,
+                1 => ClearMode::Saved,
+                2 => ClearMode::Above,
+                _ => ClearMode::Below,
+            }),
+            Step::Find(backwards, pattern) => {
+                std::hint::black_box(self.view.find(term, pattern, *backwards, false, true, true));
+            }
+        }
+        view::repair_view(term);
+        read_all(term, &mut self.view, &mut Random::new(reading));
+    }
+}
+
+/// One case: `steps` random steps from `seed`. With `KUDARI_RANDOM_TRACE=1`, each step goes
+/// to stderr as a line that `KUDARI_RANDOM_REPLAY` reads.
+fn case(seed: u64, steps: usize) {
+    let trace = std::env::var_os("KUDARI_RANDOM_TRACE").is_some_and(|value| value == "1");
+    let mut random = Random::new(seed);
+    let mut state = State::new();
+    for number in 0..steps {
+        let step = Step::random(&mut random);
+        if trace {
+            eprintln!("{}", step.line());
+        }
+        state.take(&step, number as u64);
     }
 }
 
@@ -284,6 +370,44 @@ fn run(first: u64, cases: u64, steps: usize, limit: Duration) -> Vec<String> {
 fn random_output_and_steps_of_the_user_do_no_harm() {
     let failed = run(1, 24, 120, Duration::from_secs(10));
     assert!(failed.is_empty(), "{failed:#?}");
+}
+
+#[test]
+#[ignore = "the steps of KUDARI_RANDOM_REPLAY, one a line, as KUDARI_RANDOM_TRACE writes them"]
+fn a_case_runs_again_from_its_steps() {
+    let Some(path) = std::env::var_os("KUDARI_RANDOM_REPLAY") else {
+        return;
+    };
+    let steps: Vec<Step> = std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(Step::parse)
+        .collect();
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut state = State::new();
+        for (number, step) in steps.iter().enumerate() {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| state.take(step, number as u64)));
+            if result.is_err() {
+                let _ = sender.send(format!("step {number} panicked: {}", step.line()));
+                return;
+            }
+        }
+        let _ = sender.send(String::new());
+    });
+    let failed = receiver
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap_or_else(|_| "it took longer than 10 s".to_string());
+    assert!(failed.is_empty(), "{failed}");
+}
+
+#[test]
+fn a_step_reads_back_from_its_line() {
+    let mut random = Random::new(3);
+    for _ in 0..500 {
+        let step = Step::random(&mut random);
+        assert_eq!(Step::parse(&step.line()), Some(step));
+    }
 }
 
 #[test]
