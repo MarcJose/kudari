@@ -97,6 +97,19 @@ int main(int argc, char **argv)
             if (gap > 0)
                 usleep(gap * 1000);
         }
+    } else if (!strcmp(cmd, "chord") && argc > 2) {
+        // chord CODE...: presses the keys one after the other without a pause, as a shortcut,
+        // prints the time once KWin has passed on the last, and lets them go.
+        for (int i = 2; i < argc; ++i) {
+            org_kde_kwin_fake_input_keyboard_key(fake, atoi(argv[i]), 1);
+            wl_display_roundtrip(display);
+        }
+        printf("%.6f\n", now());
+        fflush(stdout);
+        for (int i = argc - 1; i >= 2; --i) {
+            org_kde_kwin_fake_input_keyboard_key(fake, atoi(argv[i]), 0);
+            wl_display_roundtrip(display);
+        }
     } else if (!strcmp(cmd, "scroll") && argc > 6) {
         // scroll X Y VALUE COUNT GAP: COUNT turns of the vertical wheel, GAP milliseconds apart.
         int count = atoi(argv[5]), gap = atoi(argv[6]);

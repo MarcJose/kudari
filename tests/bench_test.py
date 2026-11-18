@@ -341,6 +341,16 @@ class Report(unittest.TestCase):
         # The background under output: one of four got no answer.
         self.assertEqual(rows[2][1:], ["background", "1.00", "1.00", "1.0", "0", "4.00", "8.00", "8.0", "1"])
 
+    def test_a_resize_gives_the_time_from_each_shortcut_to_its_frame(self):
+        frame = "{:.3f} qt.scenegraph.time.renderloop [render thread 0x1] syncAndRender: frame rendered in 3ms, sync=1, render=1, swap=1"
+        # 20 shortcuts 0.5 s apart, each drawn 30 ms after it; the frames 470 ms apart between.
+        presses = [0.5 * index for index in range(20)]
+        frames = [frame.format(1000 + pressed + 0.03) for pressed in presses]
+        self.monotonic_run("kudari-1", frames, (("resize", 0.0, 10.0, 10.0, True),), keys={"resize": [(pressed, pressed) for pressed in presses]})
+        part = self.report("kudari").split("resize: 10 steps")[1].splitlines()
+        row = next(line.split() for line in part if line.startswith("kudari "))
+        self.assertEqual(row[1:], ["20", "30.0", "30.0", "30.0", "500"])
+
     def test_older_runs_on_the_time_of_day_still_read(self):
         self.run_of("kudari-1", [threaded(0.1, 1)])
         measured = bench.measure(self.directory, "kudari-1")[1]["plain"]
