@@ -67,6 +67,9 @@ fn main() {
                 cc.include(include);
             }
             cc.file("cpp/qtbridge.cpp");
+            if std::env::var_os("CARGO_FEATURE_TEST_HOOKS").is_some() {
+                cc.define("RK_TEST_HOOKS", None);
+            }
         })
     };
     builder.build().export();
