@@ -122,26 +122,62 @@ const MOST_MATCHES: usize = 100_000;
 /// a match that reaches `end`, before a start past it, at a match before its start, which
 /// means the search went around, and where the search would not move on.
 fn matches_between<T>(term: &Term<T>, regex: &mut RegexSearch, start: Point, end: Point, most: usize) -> Vec<Match> {
+    let end = search_end(term, end);
     let mut found = Vec::new();
     let mut point = start;
     while found.len() < most && point <= end {
         let Some(next) = term.regex_search_right(regex, point, end) else {
             break;
         };
-        if *next.start() < point {
+        // A match of a wide character that wrapped starts on the spacer before it.
+        let earliest = if point.column == Column(0) && after_wrap(term, point.line) {
+            Point::new(Line(point.line.0 - 1), term.last_column())
+        } else {
+            point
+        };
+        if *next.start() < earliest {
             break;
         }
         let after = *next.end();
         found.push(next);
         let following = after.add(term, Boundary::None, 1);
-        // A match of nothing, as of an empty pattern, ends before it starts: the next search
-        // would start where this one did.
+        // A match of nothing ends before it starts: the next search would start where this one
+        // did.
         if after >= end || following <= point {
             break;
         }
         point = following;
     }
     found
+}
+
+/// The end for a search of `alacritty_terminal` that stops at `end`.
+///
+/// That search looks for the end of its range before it steps over the second half of a wide
+/// character, and from the spacer at the end of a line that a wide character wrapped from over
+/// the first cell of the next line too. An end that it steps over it never reaches: it goes on
+/// around the grid forever. The end moves on to the cell the search stops at, which takes no
+/// further text into the range.
+fn search_end<T>(term: &Term<T>, mut end: Point) -> Point {
+    let grid = term.grid();
+    let last = term.last_column();
+    if grid[end].flags.contains(Flags::LEADING_WIDE_CHAR_SPACER) && end.line < term.bottommost_line() {
+        end = Point::new(end.line + 1, Column(0));
+    }
+    if (end.column == Column(0) && after_wrap(term, end.line))
+        || (grid[end].flags.contains(Flags::WIDE_CHAR) && end.column < last)
+    {
+        end.column += 1;
+    }
+    end
+}
+
+/// Whether a wide character wrapped from the line before `line` into it.
+fn after_wrap<T>(term: &Term<T>, line: Line) -> bool {
+    line > term.topmost_line()
+        && term.grid()[Line(line.0 - 1)][term.last_column()]
+            .flags
+            .contains(Flags::LEADING_WIDE_CHAR_SPACER)
 }
 
 /// Puts the view of `term` back where it can be, where `alacritty_terminal` can leave it
@@ -2706,6 +2742,60 @@ mod tests {
         });
         let done = receiver.recv_timeout(std::time::Duration::from_secs(5));
         assert_eq!(done, Ok((true, 1, true, Some(1))));
+    }
+
+    #[test]
+    fn a_wide_character_that_wrapped_and_went_ends_the_search() {
+        // The character wrapped into the next line, which was erased after: the spacer at the end
+        // of the line stays without it. The search used to skip the end of its range there.
+        let mut term = term_of(10, "abcdefghi日\x1b[2K\x1b[2;1H");
+        assert!(
+            term.grid()[Line(0)][Column(9)]
+                .flags
+                .contains(Flags::LEADING_WIDE_CHAR_SPACER)
+        );
+        assert!(!term.grid()[Line(1)][Column(0)].flags.contains(Flags::WIDE_CHAR));
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut view = View::default();
+            let found = (
+                view.find(&mut term, "x", false, false, false, true),
+                view.find(&mut term, "a", false, false, false, true),
+            );
+            let _ = sender.send(found);
+        });
+        assert_eq!(
+            receiver.recv_timeout(std::time::Duration::from_secs(5)),
+            Ok((false, true))
+        );
+    }
+
+    #[test]
+    fn a_search_ends_on_a_wide_character_that_it_steps_over() {
+        // The wide character wrapped into the second line; the search stepped from the spacer
+        // at the end of the first line over it, past an end on it, and went on around the grid.
+        let term = term_of(10, "abcdefghi日\r\n\x1b[2;5H界");
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let point = |line, column| Point::new(Line(line), Column(column));
+            let count = |pattern: &str, start: Point, end: Point| {
+                let mut regex = RegexSearch::new(pattern).unwrap();
+                matches_between(&term, &mut regex, start, end, 10).len()
+            };
+            let _ = sender.send([
+                // Up to the wrapped character, up to the spacer before it, and on it alone.
+                count("x", point(0, 0), point(1, 0)),
+                count("日", point(0, 0), point(1, 0)),
+                count("日", point(0, 0), point(0, 9)),
+                count("日", point(1, 0), point(1, 0)),
+                count("日", point(0, 9), point(0, 9)),
+                // On a wide character of its own, alone.
+                count("界", point(1, 4), point(1, 4)),
+                count("[a-z]", point(0, 0), point(1, 0)),
+            ]);
+        });
+        let found = receiver.recv_timeout(std::time::Duration::from_secs(5));
+        assert_eq!(found, Ok([0, 1, 1, 1, 1, 1, 9]));
     }
 
     #[test]
