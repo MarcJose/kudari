@@ -79,6 +79,14 @@ public:
     void updateContent();
     /// Paints only the cursor again, or only shows more or less of it.
     void updateCursor();
+    /// Paints the lines that changed again, into the image as it is; see `paintLines`.
+    void updateLines();
+    /// What `paintLines` did.
+    enum PaintedLines { NoLines = 0, SomeLines = 1, WholeFrame = 2 };
+    /// Paints the lines that changed since the last frame into the image of the item, which
+    /// holds that frame; gives `WholeFrame` where it cannot tell them, and the item then paints
+    /// all of it with `paint`.
+    virtual int paintLines(QPainter *painter) = 0;
 
 protected:
     QSGNode *updatePaintNode(QSGNode *node, UpdatePaintNodeData *data) override;
@@ -89,6 +97,7 @@ private:
     QImage m_cursor;
     bool m_opaque = false;
     bool m_contentDirty = true;
+    bool m_linesDirty = false;
 };
 std::unique_ptr<QRawFont> rk_raw_font(const QPainter &painter, const QFont &font);
 std::uint32_t rk_glyph_index(const QRawFont &font, std::uint32_t character);
@@ -98,6 +107,10 @@ void rk_draw_glyphs(QPainter &painter,
                     rust::Slice<const std::uint32_t> glyphs,
                     rust::Slice<const QPointF> positions);
 void rk_draw_text(QPainter &painter, const QPointF &position, const QString &text);
+/// Lets the painter draw only within `band`, and clears that band to transparent first if
+/// `clear`; `rk_painter_unclip` lets it draw everywhere again.
+void rk_painter_band(QPainter &painter, const QRectF &band, bool clear);
+void rk_painter_unclip(QPainter &painter);
 void rk_font_family(QFont &font, const QString &family);
 QString rk_color_from_text(const QString &text);
 void rk_ask_save_file(int terminal, int purpose, const QString &suggestion);

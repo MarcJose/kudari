@@ -21,6 +21,8 @@ pub mod ffi {
         type QColor = cxx_qt_lib::QColor;
         include!("cxx-qt-lib/qpointf.h");
         type QPointF = cxx_qt_lib::QPointF;
+        include!("cxx-qt-lib/qrectf.h");
+        type QRectF = cxx_qt_lib::QRectF;
         include!(<QtGui/QRawFont>);
         /// A font that turns characters into glyphs without the text layout of `QPainter`.
         type QRawFont;
@@ -59,6 +61,10 @@ pub mod ffi {
         );
         /// Draws `text` from a point on the baseline that need not be on a whole pixel.
         fn rk_draw_text(painter: Pin<&mut QPainter>, position: &QPointF, text: &QString);
+        /// Lets the painter draw only within `band`, cleared to transparent first if `clear`.
+        fn rk_painter_band(painter: Pin<&mut QPainter>, band: &QRectF, clear: bool);
+        /// Lets the painter draw everywhere again.
+        fn rk_painter_unclip(painter: Pin<&mut QPainter>);
         fn rk_font_family(font: &mut QFont, family: &QString);
         /// A color from `#rgb` notation or a name as `#rrggbb`, or an empty string.
         fn rk_color_from_text(text: &QString) -> QString;

@@ -191,6 +191,28 @@ void RkImageItem::updateCursor()
     update();
 }
 
+void RkImageItem::updateLines()
+{
+    m_linesDirty = true;
+    update();
+}
+
+void rk_painter_band(QPainter &painter, const QRectF &band, bool clear)
+{
+    painter.setClipRect(band);
+    if (clear) {
+        painter.save();
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+        painter.fillRect(band, Qt::transparent);
+        painter.restore();
+    }
+}
+
+void rk_painter_unclip(QPainter &painter)
+{
+    painter.setClipping(false);
+}
+
 void RkImageItem::geometryChange(const QRectF &newGeometry, const QRectF &oldGeometry)
 {
     QQuickItem::geometryChange(newGeometry, oldGeometry);
@@ -322,6 +344,23 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
     const QPointF corner = mapToScene(QPointF());
     const QPointF snap(qRound(corner.x() * ratio) / ratio - corner.x(), qRound(corner.y() * ratio) / ratio - corner.y());
     const QRectF place(snap, QSizeF(size) / ratio);
+    // Only the lines that changed, into the image that holds the frame before, where the item
+    // can tell them; else, or with nothing of the frame kept, all of it.
+    bool linesPainted = false;
+    if (m_linesDirty && !m_contentDirty && m_image.size() == size) {
+        int painted = NoLines;
+        {
+            QPainter painter(&m_image);
+            painted = paintLines(&painter);
+        }
+        if (painted == WholeFrame) {
+            m_contentDirty = true;
+        } else if (painted == SomeLines) {
+            showImage(shown, content, m_image, m_opaque, place, size, smooth());
+            linesPainted = true;
+        }
+    }
+    m_linesDirty = false;
     const bool alone = !m_contentDirty && m_image.size() == size;
     if (!alone) {
         if (m_image.size() != size) {
@@ -354,7 +393,7 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
     bool kept = false;
     {
         QPainter painter(&m_cursor);
-        where = paintCursor(&painter, alone, mayKeep, kept);
+        where = paintCursor(&painter, alone && !linesPainted, mayKeep, kept);
     }
     const double opacity = where.isEmpty() ? 0.0 : cursorOpacity();
     fade->setOpacity(opacity);

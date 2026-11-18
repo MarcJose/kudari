@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
-use alacritty_terminal::term::{Term, TermMode};
+use alacritty_terminal::term::{Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{ClearMode, Handler, Rgb};
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::{QColor, QFont, QPen, QPointF, QRectF, QSizeF, QString, QVariant};
@@ -131,6 +131,10 @@ pub mod qobject {
         unsafe fn paint(self: Pin<&mut Self>, painter: *mut QPainter);
 
         #[cxx_override]
+        #[cxx_name = "paintLines"]
+        unsafe fn paint_lines(self: Pin<&mut Self>, painter: *mut QPainter) -> i32;
+
+        #[cxx_override]
         #[cxx_name = "paintCursor"]
         unsafe fn paint_cursor(
             self: Pin<&mut Self>,
@@ -166,6 +170,11 @@ pub mod qobject {
         #[inherit]
         #[cxx_name = "updateCursor"]
         fn update_cursor(self: Pin<&mut Self>);
+
+        /// Paints the lines that changed again, or the whole frame where it cannot tell them.
+        #[inherit]
+        #[cxx_name = "updateLines"]
+        fn update_lines(self: Pin<&mut Self>);
 
         /// Whether the item covers all its pixels, so that Qt draws it without blending.
         #[inherit]
@@ -375,6 +384,9 @@ pub struct TerminalItemRust {
     press_position: Option<(f64, f64)>,
     /// The words on the screen that the link numbers were found in.
     hint_words: Vec<view::HintWord>,
+    /// Whether the last frame showed only what the emulator tells changes of, so that the next
+    /// may paint only the lines that changed; see `paint_lines`.
+    plain_last: bool,
     /// Counts the looks for files among them, so that an old one is dropped.
     hint_generation: u64,
     /// A thread looks for files; on a drive that hangs it may never come back.
@@ -422,6 +434,7 @@ impl Default for TerminalItemRust {
             view: View::default(),
             press_position: None,
             hint_words: Vec::new(),
+            plain_last: false,
             hint_generation: 0,
             hint_looking: Arc::default(),
             cursor_drawn: None,
@@ -617,7 +630,9 @@ impl qobject::TerminalItem {
         }
         #[cfg(feature = "test-hooks")]
         slow_refresh();
-        self.update();
+        // Output changes lines of the screen, which the emulator tells; everything else that
+        // changes what a frame shows asks for a whole one, or makes the next one whole.
+        self.update_lines();
     }
 
     /// Runs `action` on the view with the locked terminal, then carries out its effects.
@@ -1077,6 +1092,136 @@ impl qobject::TerminalItem {
         self.paint_frame(target);
     }
 
+    /// Paints the lines that changed since the last frame into the image that holds it: those
+    /// that the emulator tells with a line on each side, for glyphs and lines that reach over.
+    /// The whole frame where it tells all of them, or where this or the last frame shows what
+    /// it does not tell changes of: a selection, the matches of a search, hints, a badge, the
+    /// history scrolled back. Gives what it did, as `RkImageItem::paintLines` reads it.
+    ///
+    /// # Safety
+    ///
+    /// `painter` is null or a painter that stays valid and in place during the call.
+    pub unsafe fn paint_lines(mut self: Pin<&mut Self>, painter: *mut qobject::QPainter) -> i32 {
+        const NOTHING: i32 = 0;
+        const PAINTED: i32 = 1;
+        const WHOLE: i32 = 2;
+        // SAFETY: Qt passes null or a painter that is valid during this call and stays in place.
+        let Some(painter) = (unsafe { painter.as_mut() }) else {
+            return WHOLE;
+        };
+        // SAFETY: Qt keeps the painter in place during this call.
+        let mut painter = unsafe { Pin::new_unchecked(painter) };
+        let Some(backend) = self.as_ref().backend() else {
+            return NOTHING;
+        };
+        terminal::frame_painted(*self.terminal_id());
+        let options = terminal::options().unwrap_or_default();
+        // Read before locking the terminal, as for a whole frame: this looks at the processes.
+        let badge = options
+            .badge
+            .as_ref()
+            .map(|badge| (backend.local_title(&badge.format), badge));
+        let scheme = colors::active();
+        let mut clock = stats::Stopwatch::start();
+        let bands = {
+            let mut term = backend.lock();
+            let changed = match term.damage() {
+                TermDamage::Full => None,
+                TermDamage::Partial(lines) => Some(lines.map(|line| line.line as i32).collect::<Vec<_>>()),
+            };
+            term.reset_damage();
+            let plain = self.as_ref().plain(&term, &options);
+            let was_plain = std::mem::replace(&mut self.as_mut().rust_mut().plain_last, plain);
+            // Decided before anything else is made. Under endless output the emulator tells all
+            // lines in every frame: the whole frame is painted here, under the same lock, as
+            // locking again would wait for the thread of the PTY once more.
+            let Some(changed) = changed.filter(|_| plain && was_plain) else {
+                stats::paint(*self.terminal_id());
+                if !*self.opaque() {
+                    let size = self.size();
+                    kde::rk_painter_band(
+                        painter.as_mut(),
+                        &QRectF::new(0.0, 0.0, size.width(), size.height()),
+                        true,
+                    );
+                    kde::rk_painter_unclip(painter.as_mut());
+                }
+                self.paint_frame_with(painter, &backend, term, &options, badge, clock);
+                return PAINTED;
+            };
+            if changed.is_empty() {
+                return NOTHING;
+            }
+            let bands = bands_of(&changed, term.screen_lines() as i32);
+            let (origin_x, origin_y) = self.as_ref().text_origin(term.columns(), term.screen_lines());
+            let scene = render::Scene {
+                geometry: render::Geometry {
+                    origin_x,
+                    origin_y,
+                    cell_width: *self.cell_width(),
+                    cell_height: *self.cell_height(),
+                    ascent: *self.ascent(),
+                    pixel_ratio: *self.pixel_ratio(),
+                },
+                scheme: &scheme,
+                bold_intense: *self.bold_intense(),
+                focused: *self.focused(),
+                cursor_hidden: *self.cursor_hidden(),
+                cursor_fade: *self.cursor_fade(),
+                cursor_apart: true,
+                hints: self.view.hints(),
+                matches: self.view.matches(),
+            };
+            let mut built = Vec::new();
+            let screen = term.screen_lines() as i32;
+            for band in &bands {
+                // With the lines just outside it as well: their glyphs can reach into the band,
+                // which is cleared first, and the clip keeps the rest of them out.
+                let drawn = (band.start - 1).max(0)..(band.end + 1).min(screen);
+                let mut band_paints = Vec::new();
+                render::lines_into(&term, &options, &scene, Some(drawn), &mut band_paints);
+                built.push((band.clone(), band_paints));
+            }
+            (built, origin_y)
+        };
+        clock.lap(stats::Time::FrameBuild);
+        stats::paint(*self.terminal_id());
+        stats::count(stats::Count::LinePaints);
+        let (built, origin_y) = bands;
+        let fonts = Fonts::new(self.term_font(), &options);
+        let (width, cell_height) = (self.size().width(), *self.cell_height());
+        painter.as_mut().set_font(&fonts.regular);
+        for (band, band_paints) in &built {
+            let rect = QRectF::new(
+                0.0,
+                origin_y + f64::from(band.start) * cell_height,
+                width,
+                f64::from(band.end - band.start) * cell_height,
+            );
+            kde::rk_painter_band(painter.as_mut(), &rect, !*self.opaque());
+            if *self.opaque() {
+                painter.as_mut().fill_rect(&rect, &qcolor(scheme.background));
+            }
+            draw(painter.as_mut(), &fonts, band_paints);
+        }
+        kde::rk_painter_unclip(painter.as_mut());
+        clock.stop(stats::Time::FrameDraw);
+        PAINTED
+    }
+
+    /// Whether the frame shows only what the emulator tells changes of: no selection, no
+    /// search that highlights, no hints, no badge, and the end of the history.
+    fn plain<T>(&self, term: &Term<T>, options: &terminal::Options) -> bool {
+        term.selection.is_none()
+            && term.grid().display_offset() == 0
+            && !view::selection_mode(term)
+            && !self.view.highlighting()
+            && self.view.matches().is_empty()
+            && self.view.hints().is_empty()
+            && !*self.url_hints()
+            && options.badge.is_none()
+    }
+
     /// Paints the cursor into its image, which starts at the cell of the cursor; see
     /// `RkImageItem` in qtbridge.h. Gives the cells it covers, or nothing without a cursor.
     ///
@@ -1205,7 +1350,41 @@ impl qobject::TerminalItem {
         }
     }
 
-    fn paint_frame(mut self: Pin<&mut Self>, mut painter: Pin<&mut qobject::QPainter>) {
+    fn paint_frame(self: Pin<&mut Self>, mut painter: Pin<&mut qobject::QPainter>) {
+        let Some(backend) = self.as_ref().backend() else {
+            let scheme = colors::active();
+            // A translucent background comes from the pane behind this item.
+            if *self.opaque() {
+                let size = self.size();
+                painter.as_mut().fill_rect(
+                    &QRectF::new(0.0, 0.0, size.width(), size.height()),
+                    &qcolor(scheme.background),
+                );
+            }
+            return;
+        };
+        let options = terminal::options().unwrap_or_default();
+        // Read before locking the terminal: this looks at the running processes.
+        let badge = options
+            .badge
+            .as_ref()
+            .map(|badge| (backend.local_title(&badge.format), badge));
+        let clock = stats::Stopwatch::start();
+        let term = backend.lock();
+        self.paint_frame_with(painter, &backend, term, &options, badge, clock);
+    }
+
+    /// Paints the whole frame from the terminal, locked already, which it lets go of before
+    /// drawing; with the text of the badge, read before the lock.
+    fn paint_frame_with(
+        mut self: Pin<&mut Self>,
+        mut painter: Pin<&mut qobject::QPainter>,
+        backend: &Arc<terminal::Backend>,
+        term: impl std::ops::Deref<Target = Term<terminal::Proxy>>,
+        options: &terminal::Options,
+        badge: Option<(String, &kudari_core::options::Badge)>,
+        mut clock: stats::Stopwatch,
+    ) {
         let scheme = colors::active();
         // A translucent background comes from the pane behind this item.
         if *self.opaque() {
@@ -1215,24 +1394,14 @@ impl qobject::TerminalItem {
                 &qcolor(scheme.background),
             );
         }
-
-        let Some(backend) = self.as_ref().backend() else {
-            return;
-        };
-        let options = terminal::options().unwrap_or_default();
-        // Read before locking the terminal: this looks at the running processes.
-        let badge = options
-            .badge
-            .as_ref()
-            .map(|badge| (backend.local_title(&badge.format), badge));
+        let options = options.clone();
         let fonts = Fonts::new(self.term_font(), &options);
-        let mut clock = stats::Stopwatch::start();
         let mut paints = PAINTS.take();
         let fresh_words = {
-            let term = backend.lock();
+            let term: &Term<terminal::Proxy> = &term;
             // Only the words under the lock; whether they name files is looked up later.
             let fresh_words = if *self.url_hints() {
-                Some(view::hint_words(&term)).filter(|words| *words != self.hint_words)
+                Some(view::hint_words(term)).filter(|words| *words != self.hint_words)
             } else {
                 None
             };
@@ -1249,7 +1418,9 @@ impl qobject::TerminalItem {
             }
             // The matches of "highlight all" in the text this frame shows: output that came
             // since the last refresh would else be painted with the matches of the text before.
-            self.as_mut().rust_mut().view.update_matches(&term);
+            self.as_mut().rust_mut().view.update_matches(term);
+            let plain = self.as_ref().plain(term, &options);
+            self.as_mut().rust_mut().plain_last = plain;
             let (origin_x, origin_y) = self.as_ref().text_origin(term.columns(), term.screen_lines());
             let scene = render::Scene {
                 geometry: render::Geometry {
@@ -1270,14 +1441,15 @@ impl qobject::TerminalItem {
                 hints: self.view.hints(),
                 matches: self.view.matches(),
             };
-            render::frame_into(&term, &options, &scene, &mut paints);
+            render::frame_into(term, &options, &scene, &mut paints);
             #[cfg(feature = "test-hooks")]
-            note_matches(*self.terminal_id(), &term, self.view.matches());
+            note_matches(*self.terminal_id(), term, self.view.matches());
             fresh_words
         };
+        drop(term);
         clock.lap(stats::Time::FrameBuild);
         if let Some(words) = fresh_words {
-            self.as_mut().look_for_hint_files(words, backend);
+            self.as_mut().look_for_hint_files(words, Arc::clone(backend));
         }
 
         painter.as_mut().set_font(&fonts.regular);
@@ -1453,6 +1625,26 @@ impl Fonts {
     }
 }
 
+/// The lines of the screen to paint again for the lines that changed: each with a line on
+/// each side, for glyphs and lines that reach over, joined where they touch.
+fn bands_of(changed: &[i32], lines: i32) -> Vec<std::ops::Range<i32>> {
+    let mut sorted: Vec<i32> = changed
+        .iter()
+        .copied()
+        .filter(|line| (0..lines).contains(line))
+        .collect();
+    sorted.sort_unstable();
+    let mut bands: Vec<std::ops::Range<i32>> = Vec::new();
+    for line in sorted {
+        let band = (line - 1).max(0)..(line + 2).min(lines);
+        match bands.last_mut() {
+            Some(last) if band.start <= last.end => last.end = last.end.max(band.end),
+            _ => bands.push(band),
+        }
+    }
+    bands
+}
+
 fn qcolor(rgb: Rgb) -> QColor {
     QColor::from_rgb(rgb.r.into(), rgb.g.into(), rgb.b.into())
 }
@@ -1566,6 +1758,15 @@ mod tests {
     use cxx_qt_lib::{QList, QString, QUrl};
 
     use super::*;
+
+    #[test]
+    fn changed_lines_paint_with_a_line_on_each_side_joined_where_they_touch() {
+        assert_eq!(bands_of(&[5], 24), vec![4..7]);
+        // Lines two apart touch with their neighbours; the edges of the screen stay inside.
+        assert_eq!(bands_of(&[9, 0, 7, 23, 7], 24), vec![0..2, 6..11, 22..24]);
+        // Lines that the emulator tells outside the screen paint nothing.
+        assert_eq!(bands_of(&[30], 24), Vec::<std::ops::Range<i32>>::new());
+    }
 
     fn urls(addresses: &[&str]) -> QList<QUrl> {
         let mut list = QList::default();
