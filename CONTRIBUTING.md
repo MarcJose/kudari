@@ -91,6 +91,7 @@ tests/windows/gui.ps1 path\to\kudari.exe  # the window, on a Windows desktop
 tools/security.sh                                # secrets, dependencies, workflows
 tools/bench.sh                                   # speed of output and drawing, against other terminals
 tools/bench.sh --scenarios                       # start, showing, waiting and memory of Kudari
+tools/bench.sh --perf                            # the same loads under perf, with a profile of each
 cargo bench -p kudari-core --bench core          # scanner, parser and frames alone, without a window
 cargo bench -p kudari-core --bench allocations   # the allocations of the same frames and cases
 tools/bench-compare.py                           # the core benchmark, main against the working tree
@@ -133,6 +134,43 @@ milliseconds. `tools/bench.sh` sets both, so that the report of a build made wit
 build has them as well: the GUI test reads them over D-Bus to check that nothing is painted
 while nothing happens, and waits with them until Kudari has settled. Without the feature,
 nothing is counted.
+
+### Profiling
+
+To see where the time goes, build Kudari with the profile `profiling`. It is the release
+build with the lines of the code in its symbols and with frame pointers, so that `perf` can
+follow the calls through Rust and Qt. It goes to a directory of its own, because the flags
+differ:
+
+```sh
+RUSTFLAGS="-C force-frame-pointers=yes" CXXFLAGS=-fno-omit-frame-pointer \
+    CARGO_TARGET_DIR=~/.cache/kudari-profiling cargo build --profile profiling
+tools/bench.sh --binary ~/.cache/kudari-profiling/profiling/kudari --perf --runs 1 --warmup 0 kudari
+```
+
+With `--perf`, `tools/bench.sh` starts Kudari under `perf record`, which samples the cycles
+and calls in user space only. `perf` is the parent of Kudari, so this needs neither the rights
+to trace another process nor a lower `perf_event_paranoid` than 2. The data is kept, and the
+report ends with a command of `perf report` for each load, which shows only the time of that
+load:
+
+```sh
+perf report -i …/perf-kudari-1.data --time 56091.98,56092.69 --sort comm,dso,sym
+perf report -i …/perf-kudari-1.data --time 56091.98,56092.69 --comm 'PTY reader' --no-children
+```
+
+The threads to look at are `PTY reader` (the parser), `QSGRenderThread` (drawing),
+`Thread (pooled)` and `main`. The functions of Kudari, `alacritty_terminal` and `vte` all have
+their names. Frames of the libraries of the system, such as `libc` and Qt, show as
+`[unknown]` without their debug information. With `DEBUGINFOD_URLS` set, `perf` fetches it; it
+then sends the build IDs of those libraries to that server. Under `perf`, the build of
+`profiling` takes in output within a few percent of a release build. A build of `profiling`
+must never be published.
+
+`--call-graph fp` keeps only the addresses of the calls. `--call-graph dwarf` would copy
+pieces of the stack into the data, and with them what the terminal showed; the loads of the
+bench are made up, but keep that in mind for anything else. For memory, `heaptrack` runs
+Kudari the same way: `heaptrack ~/.cache/kudari-profiling/profiling/kudari`.
 
 On Windows, `tools/windows-package.ps1` builds the Windows front end and packs it, as the
 release workflow does. It needs PowerShell 7, Git, Rust, Python, the Visual Studio Build

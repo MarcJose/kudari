@@ -113,6 +113,13 @@ rpath = false
 [profile.bench]
 lto = "thin"
 
+# For profiling with perf: the release build with the lines of the code in its symbols, which
+# perf report needs to name functions and lines. Never for a release; see CONTRIBUTING.md.
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = "none"
+
 # Until cxx-qt publishes them, these crates carry two fixes for reproducible builds and one
 # for release builds; see third_party/README.md. Remove the section when a release contains
 # all three.
