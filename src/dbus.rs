@@ -610,6 +610,18 @@ impl TestHooks {
         });
     }
 
+    /// Lets each refresh of a terminal wait `milliseconds` at its end, so that output comes
+    /// between a refresh and the paint of its frame; 0 ends that.
+    fn slow_refresh(&self, milliseconds: u32) {
+        kudari_qt::terminal_item::set_refresh_delay(milliseconds.into());
+    }
+
+    /// The text under each match of the search that the last frame of the terminal showed,
+    /// a line each.
+    fn matched_text(&self, terminal: i32) -> String {
+        kudari_qt::terminal_item::matched_text(terminal)
+    }
+
     /// Saves an image of the window, to find where the checks have to click.
     fn grab(&self, path: String) {
         queue(move |_| crate::kde::rk_test_grab(&crate::kde::qs(&path)));
