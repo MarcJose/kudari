@@ -4,13 +4,19 @@
 # Measures how fast terminals take in output and, for Kudari, how long Qt Quick needs for
 # each frame meanwhile, to compare terminals and a change to the drawing before and after:
 #
-#   tools/bench.sh [--binary PATH] [--runs N] [--warmup N] [--seed N] [--loads LOAD,...]
+#   tools/bench.sh [--binary [NAME=]PATH] [--rev [NAME=]REV] [--runs N] [--warmup N] [--seed N]
+#                  [--loads LOAD,...]
 #                  [--set GROUP.KEY=VALUE] [--scale N] [--detail] [--scenarios] [--perf]
 #                  [--keep] [--keep-env] [TERMINAL...]
 #
 # The terminals are kudari, yakuake, konsole, alacritty, kitty, ghostty, contour and xterm;
 # without any, every one of them that is installed. Kudari is the installed one, or else the
-# release build (cargo build --release); --binary names another. Each run measures every
+# release build (cargo build --release); --binary names another. Several builds of Kudari
+# compare in the same runs: each --binary NAME=PATH, and each --rev [NAME=]REV, which builds
+# that commit with cargo build --release in a worktree under ~/.cache and keeps the build for
+# the next time, runs as a terminal of its own, kudari@NAME. The report then compares each
+# with the first, load by load, and says whether it is faster, slower or no different. NAME
+# is lower case letters, digits and _. Each run measures every
 # terminal once, in an order shuffled for each run; --seed repeats an order. Five runs count
 # by default, after one warm-up run that does not (--warmup). The report shows for each load
 # the median of the runs, its spread, a 95 % interval of the median, the fastest and the
@@ -49,6 +55,37 @@ set -eu
 tools=$(cd "$(dirname "$0")" && pwd)
 all="kudari yakuake konsole alacritty kitty ghostty contour xterm"
 die() { echo "bench: $*" >&2; exit 1; }
+# NAME=PATH of a build to compare, with its name checked: it becomes part of names of files.
+named() {
+    case ${1%%=*} in '' | *[!a-z0-9_]*) die "the name of a build is lower case letters, digits and _, not '${1%%=*}'" ;; esac
+    [ -n "${1#*=}" ] || die "--binary ${1%%=*}= needs a path"
+    printf '%s' "$1"
+}
+# The path of the build NAME to compare; the session of KWin has them from the environment.
+variant() { printf '%s\n' "${variants:-${KUDARI_BENCH_VARIANTS:-}}" | sed -n "s/^$1=//p" | head -n 1; }
+# Builds the commit [NAME=]REV in a worktree of its own, unless an earlier run built it, and
+# gives NAME=PATH of the build. The working tree stays as it is.
+built() {
+    case $1 in *=*) name=${1%%=*} revision=${1#*=} ;; *) name='' revision=$1 ;; esac
+    commit=$(git -C "$tools/.." rev-parse --verify --quiet "$revision^{commit}") || die "no commit $revision"
+    short=$(printf '%.10s' "$commit")
+    if [ -z "$name" ]; then
+        case $revision in *[!a-z0-9_]*) name=$short ;; *) name=$revision ;; esac
+    fi
+    store="${XDG_CACHE_HOME:-$HOME/.cache}/kudari-bench-builds/$commit"
+    if [ ! -x "$store/kudari" ]; then
+        echo "Building $revision ($short) in $store ..." >&2
+        rm -rf "$store/tree"
+        mkdir -p "$store"
+        git -C "$tools/.." worktree add --detach --quiet "$store/tree" "$commit" || die "could not check out $revision"
+        if (cd "$store/tree" && CARGO_TARGET_DIR="$store/target" cargo build --release --locked --quiet); then
+            cp "$store/target/release/kudari" "$store/kudari"
+        fi
+        git -C "$tools/.." worktree remove --force "$store/tree"
+        [ -x "$store/kudari" ] || die "could not build $revision"
+    fi
+    named "$name=$store/kudari"
+}
 stamp() { date +%Y-%m-%dT%H:%M:%S.%3N; }
 
 # As the shell of the terminal under test: waits until the window is up, then times each load.
@@ -142,7 +179,9 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
             mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
             shell="$tools/bench.sh"
             case $terminal in
-                kudari)
+                kudari | kudari@*)
+                    binary=$KUDARI_BENCH_BINARY
+                    [ "$terminal" = kudari ] || binary=$(variant "${terminal#kudari@}")
                     printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nWidth=100\nHeight=100\n' \
                         > "$XDG_CONFIG_HOME/kudarirc"
                     cat "$work/kudarirc-settings" >> "$XDG_CONFIG_HOME/kudarirc"
@@ -157,7 +196,7 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
                     # shellcheck disable=SC2086 # the profiler is words of its own, or none
                     SHELL=$shell QSG_RENDER_TIMING=1 KUDARI_STATS=1 KUDARI_STATS_MS=100 \
                         QT_MESSAGE_PATTERN='%{time yyyy-MM-ddTHH:mm:ss.zzz} %{category} %{message}' \
-                        $profiler "$KUDARI_BENCH_BINARY" > "$log" 2>&1 &
+                        $profiler "$binary" > "$log" 2>&1 &
                     pid=$!
                     if [ -n "$KUDARI_BENCH_PERF" ]; then
                         # Kudari itself, which owns the name on the bus and whose threads count.
@@ -208,7 +247,7 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
             kill "$pid" 2> /dev/null || true
             wait "$pid" 2> /dev/null || true
             # perf writes its data once Kudari has ended.
-            if [ "$terminal" = kudari ] && [ -n "$KUDARI_BENCH_PERF" ]; then
+            if [ "${terminal%%@*}" = kudari ] && [ -n "$KUDARI_BENCH_PERF" ]; then
                 wait "$profiler" 2> /dev/null || true
             fi
             sleep 1
@@ -220,6 +259,9 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
 fi
 
 binary=
+# The builds of Kudari to compare, a line NAME=PATH each, and the commits to build for it.
+variants=${KUDARI_BENCH_VARIANTS:-}
+revisions=
 runs=5
 scale=1
 loads="plain color frames seq"
@@ -234,7 +276,19 @@ scenarios=
 terminals=
 while [ $# -gt 0 ]; do
     case $1 in
-        --binary) binary=$2; shift 2 ;;
+        --binary)
+            case $2 in
+                *=*) variants="$variants$(named "$2")
+" ;;
+                *) binary=$2 ;;
+            esac
+            shift 2
+            ;;
+        --rev)
+            [ -n "${2:-}" ] || die "--rev needs a commit, such as main or HEAD~1"
+            revisions="$revisions $2"
+            shift 2
+            ;;
         --runs) runs=$2; shift 2 ;;
         --keep) keep=1; shift ;;
         --scale) scale=$2; shift 2 ;;
@@ -261,10 +315,12 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         -h | --help) sed -n '4,/^[^#]/s/^# \{0,1\}//p' "$0"; exit 0 ;;
+        # A build to compare, which the outer call passes on.
+        kudari@*) terminals="$terminals $1"; shift ;;
         *)
             case " $all " in
                 *" $1 "*) terminals="$terminals $1"; shift ;;
-                *) die "usage: tools/bench.sh [--binary PATH] [--runs N] [--warmup N] [--seed N] [--loads LOAD,...] [--scale N] [--detail] [--scenarios] [--perf] [--keep] [--keep-env] [TERMINAL...]; the terminals are: $all" ;;
+                *) die "usage: tools/bench.sh [--binary [NAME=]PATH] [--rev [NAME=]REV] [--runs N] [--warmup N] [--seed N] [--loads LOAD,...] [--scale N] [--detail] [--scenarios] [--perf] [--keep] [--keep-env] [TERMINAL...]; the terminals are: $all" ;;
             esac
             ;;
     esac
@@ -275,6 +331,20 @@ case $warmup in '' | *[!0-9]*) die "--warmup needs a number of 0 or more" ;; esa
 case $seed in *[!0-9]*) die "--seed needs a number" ;; esac
 case $scale in '' | *[!0-9.]* | *.*.* | .* | *.) die "--scale needs a number such as 2 or 1.5" ;; esac
 local_build="${CARGO_TARGET_DIR:-$tools/../target}/release/kudari"
+# Outside, once: the commits to compare are built, and the builds take the place of kudari.
+if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
+    for revision in $revisions; do
+        variants="$variants$(built "$revision")
+"
+    done
+    if [ -n "$variants" ]; then
+        [ -z "$scenarios" ] || die "--scenarios measures one Kudari; compare builds with the loads"
+        others=
+        for terminal in $terminals; do [ "$terminal" = kudari ] || others="$others $terminal"; done
+        terminals="$(printf '%s' "$variants" | sed -n 's/^\([a-z0-9_]*\)=.*/ kudari@\1/p' | tr -d '\n')$others"
+        [ "$(printf '%s' "$variants" | sed -n 's/=.*//p' | sort | uniq -d)" = "" ] || die "each build to compare needs a name of its own"
+    fi
+fi
 if [ -z "$binary" ]; then
     binary=$(command -v kudari || echo "$local_build")
 fi
@@ -290,6 +360,10 @@ fi
 for terminal in $terminals; do
     if [ "$terminal" = kudari ]; then
         [ -x "$binary" ] || die "no Kudari at $binary; install it, build it with cargo build --release, or name one with --binary"
+    elif [ "${terminal%%@*}" = kudari ]; then
+        path=$(variant "${terminal#kudari@}")
+        [ -n "$path" ] || die "no build named ${terminal#kudari@}; name one with --binary ${terminal#kudari@}=PATH"
+        [ -x "$path" ] || die "no Kudari at $path"
     else
         command -v "$terminal" > /dev/null || die "$terminal is not installed"
     fi
@@ -319,15 +393,22 @@ if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
     if [ -z "$keep_env" ]; then
         for variable in $variables; do unset_variables="$unset_variables -u $variable"; done
     fi
-    case " $terminals " in *" kudari "*) measured=$binary ;; *) measured= ;; esac
+    # The Kudari measured, or each build to compare as NAME=PATH.
+    set --
+    case " $terminals " in *" kudari "*) set -- "$binary" ;; esac
+    while IFS= read -r line; do
+        [ -z "$line" ] || set -- "$@" "$line"
+    done << VARIANTS
+$variants
+VARIANTS
     # The settings for Kudari, one a line as given, and as lines of its kudarirc; KConfig
     # joins groups named twice. A value may hold spaces, so the lines split only at newlines.
     printf '%s\n' "$settings" | sed '/^$/d' > "$work/settings"
     while IFS= read -r setting; do
         printf '[%s]\n%s\n' "${setting%%.*}" "${setting#*.}"
     done < "$work/settings" > "$work/kudarirc-settings"
-    # shellcheck disable=SC2086 # the Kudari measured is one word or none
-    python3 "$tools/bench.py" environment "$work" $measured --local "$local_build" \
+    # shellcheck disable=SC2086 # the variables are words of their own
+    python3 "$tools/bench.py" environment "$work" "$@" --local "$local_build" \
         --variables "$(echo $variables | tr ' ' ',')" ${keep_env:+--keep-env} \
         --runs "$runs" --warmup "$warmup" --seed "$seed"
     echo "Making the data ..."
@@ -338,7 +419,7 @@ if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
     # that the bus would start finds neither the settings nor the services of the user.
     # shellcheck disable=SC2086 # the terminals and the variables are words of their own
     if env -u WAYLAND_DISPLAY -u DISPLAY -u QSG_RENDER_LOOP -u QT_QUICK_BACKEND -u QSG_RHI_BACKEND $unset_variables \
-        XDG_CONFIG_HOME=/nonexistent XDG_DATA_HOME=/nonexistent KUDARI_BENCH_WORK="$work" \
+        XDG_CONFIG_HOME=/nonexistent XDG_DATA_HOME=/nonexistent KUDARI_BENCH_WORK="$work" KUDARI_BENCH_VARIANTS="$variants" \
         dbus-run-session -- "$0" --binary "$binary" --runs "$runs" --warmup "$warmup" --seed "$seed" --scale "$scale" \
         --loads "$(echo $loads | tr " " ",")" ${scenarios:+--scenarios} ${perf:+--perf} $terminals \
         < /dev/null 3>&2 2> "$work/dbus.log"; then
