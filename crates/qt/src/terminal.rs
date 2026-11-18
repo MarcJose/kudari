@@ -33,7 +33,8 @@ pub fn frame_painted(terminal: TerminalId) {
     gate(|gate| gate.painted(terminal));
 }
 
-/// Gives up frames that did not come within `longest`.
+/// Lets the output of terminals that asked for no frame be reported again, and gives up
+/// frames that did not come within `longest`.
 pub fn release_held(longest: Duration) {
     gate(|gate| gate.release(longest));
 }

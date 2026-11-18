@@ -377,6 +377,8 @@ class Scenarios(unittest.TestCase):
         self.assertEqual(self.row(text, "call received")[2], "3.0")
         self.assertEqual(self.row(text, "second start")[2], "40.0")
         self.assertEqual(self.row(text, "shown, nothing happens")[3:6], ["0.20", "3", "0.5"])
+        # The busiest thread, in milliseconds a second.
+        self.assertEqual(self.row(text, "shown, nothing happens")[6:], ["main", "0.20"])
         self.assertEqual(self.row(text, "1 tab")[2:5], ["100", "300", "110"])
 
     def test_without_a_run_it_says_so(self):

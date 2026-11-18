@@ -32,7 +32,7 @@
 # scales the screen as for a HiDPI display, and --keep keeps the data and the logs of the
 # terminals. --scenarios measures Kudari alone instead of the loads: its start and its
 # phases, showing the window, a second start and --version, CPU time, wakeups and frames
-# while it waits in eight situations, and its memory with 1, 5 and 10 tabs; see
+# while it waits in nine situations, and its memory with 1, 5 and 10 tabs; see
 # tools/bench-scenarios.sh. --perf samples Kudari with perf during the loads and keeps the
 # data; the report gives the command of perf report for each load. A build of the profile
 # profiling names the functions; CONTRIBUTING.md tells how to build one.
