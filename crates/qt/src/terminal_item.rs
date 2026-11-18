@@ -584,6 +584,7 @@ impl qobject::TerminalItem {
 
     fn refresh(mut self: Pin<&mut Self>) {
         stats::count(stats::Count::Refreshes);
+        terminal::frame_asked(*self.terminal_id());
         if let Some(backend) = self.as_ref().backend() {
             let term = backend.lock();
             let history = term.grid().history_size() as f64;
@@ -1077,6 +1078,7 @@ impl qobject::TerminalItem {
         // SAFETY: Qt keeps the painter in place during this call.
         let target = unsafe { Pin::new_unchecked(painter) };
         stats::paint(*self.terminal_id());
+        terminal::frame_painted(*self.terminal_id());
         // The painter draws into the image of the item itself, which goes to the screen as it
         // is; see `RkImageItem` in qtbridge.h.
         self.paint_frame(target);

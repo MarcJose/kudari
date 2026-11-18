@@ -39,9 +39,9 @@ pub use crate::options::Options;
 /// What a terminal tells its front end.
 #[derive(Debug)]
 pub enum Report {
-    /// New output to show. More output is reported only once this is dropped, so the front
-    /// end drops it right before it reads the terminal: output that arrives meanwhile is
-    /// reported anew.
+    /// New output to show. More output is reported only once this is dropped. A front end
+    /// that draws drops it when the frame it asked for begins, before that frame reads the
+    /// terminal, so that output arriving meanwhile is reported anew; see [`FrameGate`].
     Output(Pending),
     /// The bell rang. Further bells are reported only once this is dropped.
     Bell(Pending),
@@ -56,6 +56,54 @@ pub struct Pending(Arc<AtomicBool>);
 impl Drop for Pending {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
+    }
+}
+
+/// Lets the PTY thread of a terminal report output at most once a frame. A report leads to a
+/// refresh of the item, which asks for a frame; its [`Pending`] then waits for that frame, and
+/// output meanwhile goes into the frame instead of reports of its own. Under a lot of output
+/// that is thousands of reports, each with the lock of the terminal, fewer a second.
+///
+/// A report that asked for no frame, as for a terminal nobody sees, lets go at once, so that
+/// watching for activity and silence still hears of all output. A frame that was asked for and
+/// does not come, as when the terminal is hidden meanwhile, is given up after a while.
+#[derive(Debug, Default)]
+pub struct FrameGate {
+    asked: std::collections::HashSet<crate::sessions::TerminalId>,
+    held: HashMap<crate::sessions::TerminalId, (Pending, Instant)>,
+}
+
+impl FrameGate {
+    /// The item of `terminal` asked for a frame.
+    pub fn asked(&mut self, terminal: crate::sessions::TerminalId) {
+        self.asked.insert(terminal);
+    }
+
+    /// A report of output of `terminal` was handled: its mark waits for the frame it asked
+    /// for, or goes.
+    pub fn hold(&mut self, terminal: crate::sessions::TerminalId, pending: Pending) {
+        if self.asked.contains(&terminal) {
+            self.held.insert(terminal, (pending, Instant::now()));
+        }
+    }
+
+    /// The frame of `terminal` begins: its output is reported again.
+    pub fn painted(&mut self, terminal: crate::sessions::TerminalId) {
+        self.asked.remove(&terminal);
+        self.held.remove(&terminal);
+    }
+
+    /// Gives up the frames that marks waited for longer than `longest`.
+    pub fn release(&mut self, longest: std::time::Duration) {
+        let late: Vec<_> = self
+            .held
+            .iter()
+            .filter(|(_, (_, since))| since.elapsed() >= longest)
+            .map(|(terminal, _)| *terminal)
+            .collect();
+        for terminal in late {
+            self.painted(terminal);
+        }
     }
 }
 
@@ -1269,6 +1317,46 @@ mod tests {
                 ("A".to_string(), "b=c".to_string())
             ]
         );
+    }
+
+    /// A mark of output, and the flag that the PTY thread looks at before it reports again.
+    fn pending() -> (Pending, Arc<AtomicBool>) {
+        let flag = Arc::new(AtomicBool::new(true));
+        (Pending(Arc::clone(&flag)), flag)
+    }
+
+    #[test]
+    fn output_is_reported_again_once_the_frame_it_asked_for_begins() {
+        let mut gate = FrameGate::default();
+        let (mark, flag) = pending();
+        gate.asked(1);
+        gate.hold(1, mark);
+        // The frame has not begun: the PTY thread reports no more output meanwhile.
+        assert!(flag.load(Ordering::Acquire));
+        gate.painted(2);
+        assert!(flag.load(Ordering::Acquire));
+        gate.painted(1);
+        assert!(!flag.load(Ordering::Acquire));
+        // Without a frame asked for, as for a terminal nobody sees, the mark goes at once.
+        let (mark, flag) = pending();
+        gate.hold(1, mark);
+        assert!(!flag.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn a_frame_that_does_not_come_is_given_up() {
+        let mut gate = FrameGate::default();
+        let (mark, flag) = pending();
+        gate.asked(1);
+        gate.hold(1, mark);
+        gate.release(std::time::Duration::from_secs(60));
+        assert!(flag.load(Ordering::Acquire), "not yet");
+        gate.release(std::time::Duration::ZERO);
+        assert!(!flag.load(Ordering::Acquire));
+        // Nor does the next output wait for it.
+        let (mark, flag) = pending();
+        gate.hold(1, mark);
+        assert!(!flag.load(Ordering::Acquire));
     }
 
     #[test]

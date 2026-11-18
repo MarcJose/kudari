@@ -5,9 +5,38 @@
 
 pub use kudari_core::terminal::*;
 
+use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
+
 use crate::frontend::frontend;
 use crate::services::Clipboard;
 use crate::sessions::TerminalId;
+
+/// Output is reported once a frame; see [`FrameGate`].
+static GATE: Mutex<Option<FrameGate>> = Mutex::new(None);
+
+fn gate<R>(work: impl FnOnce(&mut FrameGate) -> R) -> R {
+    work(
+        GATE.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert_default(),
+    )
+}
+
+/// The item of `terminal` asked for a frame.
+pub fn frame_asked(terminal: TerminalId) {
+    gate(|gate| gate.asked(terminal));
+}
+
+/// The frame of `terminal` begins; called from the render thread while the thread of Qt waits.
+pub fn frame_painted(terminal: TerminalId) {
+    gate(|gate| gate.painted(terminal));
+}
+
+/// Gives up frames that did not come within `longest`.
+pub fn release_held(longest: Duration) {
+    gate(|gate| gate.release(longest));
+}
 
 /// Hands what the terminals report to the controller, on the thread of Qt.
 struct Qt;
@@ -20,8 +49,8 @@ impl Listener for Qt {
     fn report(&self, terminal: TerminalId, report: Report) {
         crate::controller::queue(move |controller| match report {
             Report::Output(pending) => {
-                drop(pending);
                 controller.terminal_output(terminal);
+                gate(|gate| gate.hold(terminal, pending));
             }
             Report::Bell(pending) => {
                 drop(pending);
