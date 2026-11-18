@@ -843,7 +843,7 @@ impl Backend {
         let term = self.lock();
         let start = Point::new(term.grid().topmost_line(), Column(0));
         let end = Point::new(term.grid().bottommost_line(), term.grid().last_column());
-        term.bounds_to_string(start, end)
+        crate::view::text_between(&term, start, end)
     }
 
     /// The last `lines` lines of scrollback and screen, or the screen when `lines` is zero.
@@ -954,7 +954,7 @@ fn last_lines<T: EventListener>(term: &Term<T>, lines: usize) -> String {
     // Line numbers run from minus the scrollback up to the last line of the screen.
     let count = i32::try_from(span).unwrap_or(i32::MAX).saturating_sub(1);
     let top = Line(bottom.0.saturating_sub(count)).max(grid.topmost_line());
-    let text = term.bounds_to_string(Point::new(top, Column(0)), Point::new(bottom, grid.last_column()));
+    let text = crate::view::text_between(term, Point::new(top, Column(0)), Point::new(bottom, grid.last_column()));
     let mut found: Vec<&str> = text.lines().map(str::trim_end).collect();
     let used = found
         .iter()

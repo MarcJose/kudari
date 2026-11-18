@@ -109,6 +109,27 @@ pub const WHEEL_NOTCH: f64 = 120.0;
 /// Lines that one notch scrolls.
 const NOTCH_LINES: f64 = 3.0;
 
+/// The text from `start` to `end`, as `Term::bounds_to_string` gives it, without its fault:
+/// where the last line ends at the last column on the spacer of a wide character that wrapped
+/// into the next line, it takes the first cell of the line before instead of that character,
+/// and from the top line of a screen without history a line outside the grid. Here the text
+/// ends a cell before, and the character comes from the line after, if the range is not at the
+/// bottom of the grid.
+pub fn text_between<T>(term: &Term<T>, start: Point, end: Point) -> String {
+    let last = term.last_column();
+    let wrapped = end.column == last && end > start && term.grid()[end].flags.contains(Flags::LEADING_WIDE_CHAR_SPACER);
+    if !wrapped {
+        return term.bounds_to_string(start, end);
+    }
+    let mut text = term.bounds_to_string(start, Point::new(end.line, last - 1));
+    if end.line < term.bottommost_line() {
+        let cell = &term.grid()[Line(end.line.0 + 1)][Column(0)];
+        text.push(cell.c);
+        text.extend(cell.zerowidth().into_iter().flatten());
+    }
+    text
+}
+
 /// Puts the view of `term` back where it can be, where `alacritty_terminal` can leave it
 /// outside: scrolled back further than the history goes, which output into a region that
 /// does not start at the top does while the view is scrolled back, and the cursor of the
@@ -1156,7 +1177,14 @@ pub fn scroll_page(lines: usize, options: &Options) -> i32 {
 /// The selection as text, trimmed as configured.
 #[must_use]
 pub fn selected_text<T>(term: &Term<T>, options: &Options) -> Option<String> {
-    let text = term.selection_to_string()?;
+    let selection = term.selection.as_ref()?;
+    let range = selection.to_range(term)?;
+    let text = match selection.ty {
+        // Each line of a block can end on such a spacer; see `text_between`.
+        SelectionType::Block => term.selection_to_string()?,
+        SelectionType::Lines => text_between(term, range.start, range.end) + "\n",
+        _ => text_between(term, range.start, range.end),
+    };
     if !options.trim_leading && !options.trim_trailing {
         return Some(text);
     }
@@ -2549,6 +2577,23 @@ mod tests {
         assert!(view.matches().is_empty());
         assert_eq!(view.search_lines(&term), None);
         assert!(term.selection.is_some(), "the selection of the last match stays");
+    }
+
+    #[test]
+    fn copying_to_the_end_of_a_line_takes_the_wide_character_that_wrapped() {
+        // The wide character does not fit in the last column and wraps into the next line.
+        let copied = |output: &str, line: i32| {
+            let mut term = term_of(10, output);
+            let mut selection = Selection::new(SelectionType::Simple, Point::new(Line(line), Column(0)), Side::Left);
+            selection.update(Point::new(Line(line), Column(9)), Side::Right);
+            term.selection = Some(selection);
+            selected_text(&term, &Options::default())
+        };
+        assert_eq!(copied("x\r\naaaaaaaaa界", 1).as_deref(), Some("aaaaaaaaa界"));
+        // In the top line of the alternate screen, which has no line before it.
+        assert_eq!(copied("\x1b[?1049haaaaaaaaa界", 0).as_deref(), Some("aaaaaaaaa界"));
+        // A line that ends on its own copies as before.
+        assert_eq!(copied("x\r\naaaaaaaaab", 1).as_deref(), Some("aaaaaaaaab"));
     }
 
     #[test]
