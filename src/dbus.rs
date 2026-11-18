@@ -526,6 +526,33 @@ impl Sessions {
 #[cfg(feature = "test-hooks")]
 struct TestHooks;
 
+/// See [`TestHooks::settle`]; on a thread of its own, as it waits.
+#[cfg(feature = "test-hooks")]
+fn settle_within(quiet: Duration, most: Duration) -> bool {
+    let started = std::time::Instant::now();
+    loop {
+        // A trip through the Qt thread: what was queued before has run, and it reads the frames.
+        let (sender, receiver) = mpsc::channel();
+        queue(move |_| {
+            let _ = sender.send(crate::kde::rk_test_quiet_ms());
+        });
+        let frames = receiver
+            .recv_timeout(QT_TIMEOUT)
+            .ok()
+            .map(|milliseconds| Duration::from_millis(u64::try_from(milliseconds).unwrap_or(0)));
+        let calm = [Some(started.elapsed()), frames, kudari_core::stats::quiet()]
+            .into_iter()
+            .try_fold(Duration::MAX, |least, time| time.map(|time| least.min(time)));
+        if calm.is_some_and(|calm| calm >= quiet) {
+            return true;
+        }
+        if started.elapsed() >= most {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[cfg(feature = "test-hooks")]
 #[interface(name = "io.github.marcjose.kudari.Test")]
 impl TestHooks {
@@ -546,6 +573,29 @@ impl TestHooks {
     /// Sets the counters back, so that a check counts from now on.
     fn reset_stats(&self) {
         kudari_core::stats::reset();
+    }
+
+    /// Whether Kudari has started: its first session is there and, if the settings say so,
+    /// its window.
+    fn started(&self) -> bool {
+        crate::controller::started()
+    }
+
+    /// Waits until the user interface has settled: nothing waits for the Qt thread, and
+    /// neither a terminal nor a window of Qt Quick has drawn for `quiet` milliseconds since
+    /// this call. False when that did not come within `most` milliseconds, at most 20 s.
+    async fn settle(&self, quiet: u32, most: u32) -> bool {
+        let quiet = Duration::from_millis(quiet.into());
+        let most = Duration::from_millis(most.min(20_000).into());
+        let reply = Reply::default();
+        let answer = reply.clone();
+        let waiting = std::thread::Builder::new()
+            .name("kudari-settle".to_string())
+            .spawn(move || answer.fill(Some(settle_within(quiet, most))));
+        if waiting.is_err() {
+            return false;
+        }
+        reply.await.unwrap_or(false)
     }
 
     /// Saves an image of the window, to find where the checks have to click.

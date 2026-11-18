@@ -81,7 +81,10 @@
 #include <QWindow>
 
 #ifdef RK_TEST_HOOKS
+#include <QElapsedTimer>
 #include <QTest>
+
+#include <atomic>
 #endif
 
 namespace
@@ -993,6 +996,30 @@ void rk_test_grab(const QString &path)
     }
 }
 
+// The milliseconds since a window of Qt Quick last showed a new frame: the window of the
+// terminals, the settings, or a dialog. A window seen for the first time counts as just now,
+// as its frames before were not counted.
+std::int64_t rk_test_quiet_ms()
+{
+    static QElapsedTimer clock;
+    static std::atomic<qint64> lastFrame{0};
+    static QSet<QQuickWindow *> counted;
+    if (!clock.isValid()) {
+        clock.start();
+    }
+    for (QWindow *window : QGuiApplication::topLevelWindows()) {
+        auto quick = qobject_cast<QQuickWindow *>(window);
+        if (quick && !counted.contains(quick)) {
+            counted.insert(quick);
+            // The render loop can swap on a thread of its own.
+            QObject::connect(quick, &QQuickWindow::frameSwapped, quick, [] { lastFrame = clock.elapsed(); }, Qt::DirectConnection);
+            QObject::connect(quick, &QObject::destroyed, [quick] { counted.remove(quick); });
+            lastFrame = clock.elapsed();
+        }
+    }
+    return clock.elapsed() - lastFrame;
+}
+
 QString rk_test_window_state()
 {
     auto window = mainWindow();
@@ -1054,6 +1081,11 @@ QString rk_test_agent_question()
 
 void rk_test_answer_agent(bool)
 {
+}
+
+std::int64_t rk_test_quiet_ms()
+{
+    return 0;
 }
 
 QString rk_test_window_state()

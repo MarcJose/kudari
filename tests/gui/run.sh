@@ -98,13 +98,25 @@ export QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=kudari-gui-test QT_FORCE_STDERR_L
 # where the checks click, the same everywhere.
 export QT_QUICK_BACKEND=software
 export QT_LOGGING_RULES='*.warning=true;qml*=true'
+# The shell counts its prompts in a file, so that a check can wait until a command is done;
+# the prompt itself looks as before.
+prompts="$work/prompts"
+: > "$prompts"
+cat > "$work/shrc" <<EOF
+PS1='\$(printf . >> "$prompts")\\s-\\v\\\$ '
+EOF
+export ENV="$work/shrc"
 kbuildsycoca6 >/dev/null 2>&1
 
 # KWin needs a render device; where there is no GPU, such as in the CI, the kernel module
 # vgem provides one, on which Mesa draws in software.
 kwin_wayland --virtual --no-lockscreen --socket="$WAYLAND_DISPLAY" --width 1280 --height 800 > "$work/kwin.log" 2>&1 &
 kwin=$!
-sleep 3
+tries=0
+until [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ] || [ "$tries" -gt 100 ]; do
+    tries=$((tries + 1))
+    sleep 0.1
+done
 # Waits for Kudari on the bus. A call to a name nobody owns would start a Kudari from
 # the service files instead.
 started() {
@@ -118,7 +130,12 @@ started() {
         fi
         sleep 0.1
     done
-    sleep 3
+    tries=0
+    until [ "$(hook Started 2>/dev/null)" = true ] || [ "$tries" -gt 100 ]; do
+        tries=$((tries + 1))
+        sleep 0.1
+    done
+    settle 300 10000
 }
 "$binary" > "$work/log" 2>&1 &
 kudari=$!
@@ -145,7 +162,31 @@ input() { "$work/input" "$@"; }
 # With KUDARI_GUI_GRABS set to a directory, saves images of the window there, to find where
 # the checks have to click.
 grab() { if [ -n "${KUDARI_GUI_GRABS:-}" ]; then hook Grab "$KUDARI_GUI_GRABS/$1"; sleep 0.5; fi; }
-run() { sessions runCommand "$1" 2>/dev/null; sleep 0.6; }
+# Waits until the user interface has settled, for at least QUIET milliseconds (150 by default).
+settle() { hook Settle "${1:-150}" "${2:-5000}" > /dev/null; }
+# Notes for whoever works on the test, such as a command whose prompt did not come.
+note() { echo "$*" >> "${KUDARI_GUI_NOTES:-/dev/null}"; }
+# Waits for a prompt after the first COUNT, up to five seconds.
+wait_prompt() { # count, what for
+    tries=0
+    until [ "$(wc -c < "$prompts")" -gt "$1" ]; do
+        tries=$((tries + 1))
+        if [ "$tries" -gt 500 ]; then
+            note "no prompt after: $2"
+            return
+        fi
+        sleep 0.01
+    done
+}
+# Runs a command in the active terminal and waits until it is done and shown.
+run() { run_before=$(wc -c < "$prompts"); sessions runCommand "$1" 2>/dev/null; wait_prompt "$run_before" "$1"; settle; }
+# Runs a command in a given terminal and waits until it is done and shown.
+run_in() { run_before=$(wc -c < "$prompts"); sessions runCommandInTerminal "$1" "$2"; wait_prompt "$run_before" "$2"; settle; }
+# Notes the prompts so far; wait_shells then waits for the first prompt of COUNT new shells.
+mark() { mark_before=$(wc -c < "$prompts"); }
+wait_shells() { wait_prompt $((mark_before + ${1:-1} - 1)) "${1:-1} new shells"; settle; }
+# Runs a command that keeps running, such as one that reads input.
+run_open() { sessions runCommand "$1" 2>/dev/null; sleep 0.6; }
 state() { hook State | cut -d' ' -f1; }
 # Waits until the window is $1 pixels high: it takes its new size in its own time, which
 # software rendering makes longer.
@@ -167,11 +208,11 @@ content() {
 # Moves the selection to entry number $1 of an open menu and activates it.
 menu_entry() {
     tries=0
-    while [ "$tries" -lt "$1" ]; do input key 108; sleep 0.1; tries=$((tries + 1)); done
+    while [ "$tries" -lt "$1" ]; do input key 108; settle; tries=$((tries + 1)); done
     input key 28
     sleep 1.2
 }
-end_input() { input key 28; sleep 0.2; input key 29 32; sleep 0.4; }
+end_input() { input key 28; sleep 0.2; input key 29 32; settle; }
 
 window toggleWindowState; sleep 1.5
 check "the window opens" visible=1 "$(state)"
@@ -204,9 +245,9 @@ check "calls while the window opens get their answers at once" "180 0" \
 grep -v '^[0-9][0-9,]*$' "$work/answers" | sort | uniq -c | sed 's/^/Error in the answers: /'
 input click 600 150; sleep 0.5
 
-run "echo blocked > $work/blocked"
+run_open "echo blocked > $work/blocked"
 check "commands over D-Bus are off by default" "" "$(cat "$work/blocked" 2>/dev/null)"
-hook SetSetting AllowRemoteCommands true; sleep 0.3
+hook SetSetting AllowRemoteCommands true; settle
 run "echo allowed > $work/allowed"
 check "commands over D-Bus work after opting in" "allowed|" "$(content "$work/allowed")"
 
@@ -214,52 +255,52 @@ run "printf 'zwei worte\n'; printf 'hallo  \n'"
 hook SaveOutput 0 "$work/saved"; sleep 0.4
 check "saved output is private" 600 "$(stat -c %a "$work/saved")"
 
-hook SetSetting KeyBindings test; sleep 0.3
-run "cat > $work/keys"
-input key 63; sleep 0.2; end_input
+hook SetSetting KeyBindings test; settle
+run_open "cat > $work/keys"
+input key 63; settle; end_input
 check "a keytab file changes keys" "KEYTAB|" "$(content "$work/keys")"
-hook SetSetting KeyBindings ""; sleep 0.2
+hook SetSetting KeyBindings ""; settle
 
-run "sleep 300"
+run_open "sleep 300"
 hook MenuValue signal 15; sleep 0.5
 run "echo back > $work/signal"
 check "a signal reaches the foreground program" "back|" "$(content "$work/signal")"
 
-sessions splitTerminalLeftRight 0 >/dev/null; sleep 0.8
+mark; sessions splitTerminalLeftRight 0 >/dev/null; wait_shells
 check "splitting adds a terminal" 0,1 "$(sessions terminalIdsForSessionId 0)"
-sessions removeTerminal 1; sleep 0.8
+sessions removeTerminal 1; settle
 check "closing a terminal removes it" 0 "$(sessions terminalIdsForSessionId 0)"
 
-hook SetSetting EditorCommand "$work/editor PATH:LINE"; hook SetSetting OpenLinksByClick true; sleep 0.3
+hook SetSetting EditorCommand "$work/editor PATH:LINE"; hook SetSetting OpenLinksByClick true; settle
 run "clear; printf 'see notes.txt:12:3 end\n'"
 input click 130 8
 check "a plain click opens a file link in the editor" "$work/home/notes.txt:12|" "$(content "$work/edited")"
 # The link numbers find the file on a thread of their own, and a number opens it.
 rm -f "$work/edited"
-hook SetSetting UrlHintsModifier ctrl+alt; sleep 0.3
+hook SetSetting UrlHintsModifier ctrl+alt; settle
 run "clear; printf 'see notes.txt:12:3 end\n'"
-input key 29 56 2; sleep 0.5
+input key 29 56 2; settle
 check "a link number opens the file it shows" "$work/home/notes.txt:12|" "$(content "$work/edited")"
 # With Shift for the numbers, the key of 1 types "!"; its place still opens the first link.
 rm -f "$work/edited"
-hook SetSetting UrlHintsModifier ctrl+shift; sleep 0.3
-input key 29 42 2; sleep 0.5
+hook SetSetting UrlHintsModifier ctrl+shift; settle
+input key 29 42 2; settle
 check "a link number opens with Shift held as well" "$work/home/notes.txt:12|" "$(content "$work/edited")"
-hook SetSetting UrlHintsModifier none; sleep 0.3
-hook SetSetting OpenLinksByClick false; hook SetSetting EditorCommand ""; sleep 0.3
+hook SetSetting UrlHintsModifier none; settle
+hook SetSetting OpenLinksByClick false; hook SetSetting EditorCommand ""; settle
 
-run "clear; cat > $work/pasted"
+run_open "clear; cat > $work/pasted"
 hook Popup "$work/source/a.txt"; sleep 1; menu_entry 1; end_input
 check "dropping pastes the quoted path" "'$work/source/a.txt' |" "$(content "$work/pasted")"
 hook Popup "$work/source/a.txt"; sleep 1; menu_entry 2
 check "dropping copies a file" "a|" "$(content "$work/home/a.txt")"
 check "copying keeps the source" "a|" "$(content "$work/source/a.txt")"
 # The keyboard of the terminal is blocked: the menu of a drop types nothing either.
-run "clear; cat > $work/blocked"
+run_open "clear; cat > $work/blocked"
 blocked=$(sessions activeSessionId)
-sessions setSessionKeyboardInputEnabled "$blocked" false; sleep 0.3
+sessions setSessionKeyboardInputEnabled "$blocked" false; settle
 hook Popup "$work/source/a.txt"; sleep 1; menu_entry 1
-sessions setSessionKeyboardInputEnabled "$blocked" true; sleep 0.3
+sessions setSessionKeyboardInputEnabled "$blocked" true; settle
 end_input
 check "a blocked terminal takes no path from the menu of a drop" "|" "$(content "$work/blocked")"
 hook Popup "$work/source/b.txt"; sleep 1; menu_entry 3
@@ -270,7 +311,7 @@ check "dropping links a file" "$work/source/c.txt" "$(readlink "$work/home/c.txt
 
 run "clear; seq 1 900"
 hook Trigger adjust-history; sleep 1.2
-input key 29 30; sleep 0.2; input key 6; input key 11; sleep 0.2; input key 28; sleep 0.6
+input key 29 30; settle; input key 6; input key 11; settle; input key 28; settle
 hook SaveOutput 0 "$work/short"; sleep 0.4
 check "the scrollback of a terminal can shrink" yes "$([ "$(wc -l < "$work/short")" -lt 100 ] && echo yes || echo no)"
 run "clear; echo saved here"
@@ -279,11 +320,11 @@ check "saving asks for a file and writes the output there" yes \
     "$(grep -q 'saved here' "$work/home/output.txt" 2>/dev/null && echo yes || echo no)"
 hook Trigger options_configure_keybinding; sleep 2
 check "the shortcut dialog leaves Kudari responsive" visible=1 "$(state)"
-input key 1; sleep 0.6
+input key 1; settle
 
 run "clear"
 hook SetSetting SilenceSeconds 1; sleep 0.2
-hook Trigger toggle-session-monitor-once; sleep 0.2
+hook Trigger toggle-session-monitor-once; settle
 sessions setSessionMonitorSilenceEnabled 0 true; sleep 0.3
 check "silence counts from switching it on" true "$(sessions isSessionMonitorSilenceEnabled 0)"
 sleep 2.2
@@ -292,9 +333,9 @@ check "a one-shot monitor ends after its alert" false "$(sessions isSessionMonit
 background() { hook TerminalBackground; }
 light=$(background)
 check "the terminal takes the colors of the theme" yes "$([ -n "$light" ] && echo yes || echo no)"
-hook SetSetting Skin theme:kudari.test.dark; sleep 1
+hook SetSetting Skin theme:kudari.test.dark; settle
 check "a fixed theme changes the terminal colors" yes "$([ "$(background)" != "$light" ] && echo yes || echo no)"
-hook SetSetting Skin system; sleep 1
+hook SetSetting Skin system; settle
 check "the terminal returns to the system theme" "$light" "$(background)"
 cp /usr/share/color-schemes/BreezeDark.colors "$XDG_CONFIG_HOME/kdeglobals"
 kwriteconfig6 --notify --file kdeglobals --group General --key KudariTest 1; sleep 1.5
@@ -321,12 +362,12 @@ with open(sys.argv[1], "w") as found:
     found.write("#" + b"".join(color.groups()).decode() if color else "none")
     found.write(f" {fits} {order}\n")
 EOF
-run "python3 $work/ask $work/asked"; sleep 1
+run_open "python3 $work/ask $work/asked"; sleep 1
 check "programs get the background, the size in pixels and the attributes in order" \
     "$(background) True True" "$(cat "$work/asked" 2>/dev/null)"
 # A program that switched flow control off keeps it off while the settings change: nano and
 # emacs save with Ctrl+S.
-run "sh -c 'stty -ixon; sleep 2; stty -a; stty ixon' > $work/ixon"
+run_open "sh -c 'stty -ixon; sleep 2; stty -a; stty ixon' > $work/ixon"
 hook SetSetting SilenceSeconds 2; sleep 2.5
 hook SetSetting SilenceSeconds 1; sleep 0.2
 check "a change of the settings leaves flow control to the program" -ixon \
@@ -346,14 +387,14 @@ check "the grip works both ways" 50 "$(setting Height)"
 hook Trigger options_configure; sleep 2
 grab settings
 input click 700 354; sleep 0.3
-input key 29 30; sleep 0.2
-input key 8; sleep 0.1; input key 11; sleep 0.4
+input key 29 30; settle
+input key 8; settle; input key 11; settle
 input click 700 275; sleep 0.5
 check "a number stays when leaving its field" 70 "$(setting Height)"
 input click 700 354; sleep 0.5
 check "visiting a field does not change it" "" "$(setting Width)"
-input key 29 30; sleep 0.2
-input key 14; sleep 0.2
+input key 29 30; settle
+input key 14; settle
 input click 700 275; sleep 0.5
 check "an emptied field keeps the number" 70 "$(setting Height)"
 input click 250 316; sleep 1.2
@@ -361,25 +402,25 @@ input click 700 354; sleep 0.3
 input click 700 433; sleep 0.5
 check "a field showing its special value stays at 0" "" "$(setting FontSize)"
 input click 700 354; sleep 0.3
-input key 29 30; sleep 0.2
-input key 2; sleep 0.1; input key 3; sleep 0.4
+input key 29 30; settle
+input key 2; settle; input key 3; settle
 input click 700 433; sleep 0.5
 check "a special value can be overwritten" 12 "$(setting FontSize)"
-input key 1; sleep 0.6
+input key 1; settle
 # A size above 72 points, from Konsole perhaps, shows as it is and stays.
-hook SetSetting FontSize 96; sleep 0.5
+hook SetSetting FontSize 96; settle
 hook Trigger options_configure; sleep 2
 input click 250 316; sleep 1.2
 check "the settings show a font size above 72" 96 "$(hook Property fontSize value)"
 input click 700 354; sleep 0.3
 input click 700 433; sleep 0.5
 check "a font size above 72 stays" 96 "$(setting FontSize)"
-input key 1; sleep 0.6
-hook SetSetting Height 50; hook SetSetting FontSize 0; sleep 0.5
+input key 1; settle
+hook SetSetting Height 50; hook SetSetting FontSize 0; settle
 
 hook Trigger options_configure; sleep 2
 for row in 208 244 280 316 352 388; do input click 250 "$row"; sleep 0.7; done
-input key 1; sleep 0.5
+input key 1; settle
 
 # The actions of the menus and shortcuts, each checked where its effect can be seen.
 active() { sessions activeSessionId; }
@@ -388,104 +429,104 @@ count() { sessions terminalIdsForSessionId "$1" | tr ',' '\n' | grep -c .; }
 first=$(active)
 # The first size of a new terminal is no change of its size to show.
 shown() { hook Property sizeHint visible | grep -q true && echo yes || echo no; }
-hook Trigger new-session; sleep 0.5
+mark; hook Trigger new-session; wait_shells
 check "a new terminal shows no size" no "$(shown)"
-hook SetSetting Width 70; sleep 0.5
+hook SetSetting Width 70; settle
 check "a new size shows the columns and lines" yes "$(shown)"
 hook SetSetting Width 90; sleep 1.2
-sessions removeSession "$(active)"; sleep 0.6
+sessions removeSession "$(active)"; settle
 # The search bar is as wide as the terminal, beside the scrollbar wherever that is.
 for position in left hidden right; do
-    hook SetSetting ScrollBarPosition "$position"; sleep 0.5
-    hook Trigger edit_find; sleep 0.5
+    hook SetSetting ScrollBarPosition "$position"; settle
+    hook Trigger edit_find; settle
     check "the search bar lines up with the terminal, scrollbar $position" \
         "$(hook Property terminal x) $(hook Property terminal width)" \
         "$(hook Property searchBar x) $(hook Property searchBar width)"
-    input key 1; sleep 0.3
+    input key 1; settle
 done
 hook Trigger new-session-two-horizontal; sleep 1; left_right=$(active)
 hook Trigger new-session-two-vertical; sleep 1; top_bottom=$(active)
 hook Trigger new-session-quad; sleep 1.2; quad=$(active)
 check "sessions open with two, two and four terminals" "2 2 4" "$(count "$left_right") $(count "$top_bottom") $(count "$quad")"
-hook Trigger split-auto; sleep 0.8
-hook Trigger split-left-right; sleep 0.8
-hook Trigger split-top-bottom; sleep 0.8
+mark; hook Trigger split-auto; wait_shells
+mark; hook Trigger split-left-right; wait_shells
+mark; hook Trigger split-top-bottom; wait_shells
 check "the split actions add terminals" 7 "$(count "$quad")"
 before=$(sessions activeTerminalId)
-hook Trigger next-terminal; sleep 0.4
+hook Trigger next-terminal; settle
 moved=$(sessions activeTerminalId)
-hook Trigger previous-terminal; sleep 0.4
+hook Trigger previous-terminal; settle
 check "the terminal actions move the focus there and back" "yes $before" \
     "$([ "$moved" != "$before" ] && echo yes || echo no) $(sessions activeTerminalId)"
-for side in right left top bottom; do hook Trigger "grow-terminal-$side"; sleep 0.2; done
-hook Trigger close-active-terminal; sleep 0.8
+for side in right left top bottom; do hook Trigger "grow-terminal-$side"; settle; done
+hook Trigger close-active-terminal; settle
 check "closing the active terminal" 6 "$(count "$quad")"
-hook Trigger previous-session; sleep 0.4
+hook Trigger previous-session; settle
 check "the previous session" "$top_bottom" "$(active)"
-hook Trigger next-session; sleep 0.4
+hook Trigger next-session; settle
 check "the next session" "$quad" "$(active)"
-hook Trigger switch-to-session-1; sleep 0.4
+hook Trigger switch-to-session-1; settle
 check "switching to the first tab" "$first" "$(active)"
-hook Trigger move-session-right; sleep 0.4
+hook Trigger move-session-right; settle
 check "moving a tab to the right" "$first" "$(tabs sessionAtTab 1)"
-hook Trigger move-session-left; sleep 0.4
+hook Trigger move-session-left; settle
 check "moving it back" "$first" "$(tabs sessionAtTab 0)"
-hook Trigger rename-session; sleep 0.6
-for code in 38 24 34 31 28; do input key "$code"; sleep 0.1; done
+hook Trigger rename-session; settle
+for code in 38 24 34 31 28; do input key "$code"; settle; done
 sleep 0.4
 check "renaming the tab of a session" logs "$(tabs tabTitle "$first")"
 tabs setTabTitle "$first" ""
-hook Toggle toggle-session-prevent-closing true; sleep 0.3
+hook Toggle toggle-session-prevent-closing true; settle
 check "locking a session" false "$(sessions isSessionClosable "$first")"
-hook Toggle toggle-session-prevent-closing false; sleep 0.3
-hook Toggle toggle-session-keyboard-input true; sleep 0.3
+hook Toggle toggle-session-prevent-closing false; settle
+hook Toggle toggle-session-keyboard-input true; settle
 check "blocking the keyboard input of a session" false "$(sessions isSessionKeyboardInputEnabled "$first")"
-hook Toggle toggle-session-keyboard-input false; sleep 0.3
-hook Toggle toggle-session-monitor-activity true; sleep 0.3
-hook Toggle toggle-session-monitor-silence true; sleep 0.3
+hook Toggle toggle-session-keyboard-input false; settle
+hook Toggle toggle-session-monitor-activity true; settle
+hook Toggle toggle-session-monitor-silence true; settle
 check "watching a session" "true true" \
     "$(sessions isSessionMonitorActivityEnabled "$first") $(sessions isSessionMonitorSilenceEnabled "$first")"
 for kind in activity silence process once; do hook Toggle "toggle-session-monitor-$kind" false; done
 sleep 0.3
-sessions raiseSession "$quad"; sleep 0.4
-hook Trigger close-session; sleep 1
+sessions raiseSession "$quad"; settle
+hook Trigger close-session; settle
 check "closing the active session" "$first,$left_right,$top_bottom" "$(sessions sessionIdList)"
-sessions raiseSession "$first"; sleep 0.4
+sessions raiseSession "$first"; settle
 
-hook Trigger increase-window-width; sleep 0.6
-hook Trigger increase-window-height; sleep 0.6
+hook Trigger increase-window-width; settle
+hook Trigger increase-window-height; settle
 check "the window grows" "100 60" "$(setting Width) $(setting Height)"
-hook Trigger decrease-window-width; sleep 0.6
-hook Trigger decrease-window-height; sleep 0.6
+hook Trigger decrease-window-width; settle
+hook Trigger decrease-window-height; settle
 check "the window shrinks" "90 50" "$(setting Width) $(setting Height)"
-hook Toggle keep-open false; sleep 0.3
+hook Toggle keep-open false; settle
 check "the window can stop staying open" false "$(setting KeepOpen)"
-hook Toggle keep-open true; sleep 0.3
-hook Trigger view-full-screen; sleep 1
-hook Trigger view-full-screen; sleep 1
-for action in enlarge-font enlarge-font shrink-font reset-font-size; do hook Trigger "$action"; sleep 0.3; done
+hook Toggle keep-open true; settle
+hook Trigger view-full-screen; settle
+hook Trigger view-full-screen; settle
+for action in enlarge-font enlarge-font shrink-font reset-font-size; do hook Trigger "$action"; settle; done
 hook Toggle allow-mouse-tracking false; hook Toggle allow-mouse-tracking true
 
 run "clear; seq 1 900"
-hook Trigger clear-scrollback; sleep 0.6
+hook Trigger clear-scrollback; settle
 hook SaveOutput "$(sessions activeTerminalId)" "$work/scrollback"; sleep 0.4
 check "clearing the scrollback keeps only the screen" yes "$([ "$(wc -l < "$work/scrollback")" -lt 100 ] && echo yes || echo no)"
 run "seq 1 30"
-hook Trigger clear-history-and-reset; sleep 0.6
+hook Trigger clear-history-and-reset; settle
 hook SaveOutput "$(sessions activeTerminalId)" "$work/reset"; sleep 0.4
 check "resetting the terminal clears it" 0 "$(grep -cxE '[0-9]+' "$work/reset")"
 run "echo gefunden"
-hook Trigger edit_find; sleep 0.6
-for code in 34 18 33; do input key "$code"; sleep 0.1; done
-hook Trigger edit_find_next; sleep 0.2
-hook Trigger edit_find_prev; sleep 0.2
+hook Trigger edit_find; settle
+for code in 34 18 33; do input key "$code"; settle; done
+hook Trigger edit_find_next; settle
+hook Trigger edit_find_prev; settle
 # Matches in new output appear on the scrollbar a moment later, without searching again.
 marks() { hook Property terminal searchLines | grep -o '[0-9.][0-9.]*' | wc -l; }
 before=$(marks)
 run "seq 1 50; echo gefunden"; sleep 0.6
 check "matches in new output reach the scrollbar" yes "$([ "$(marks)" -gt "$before" ] && echo yes || echo "no: $before $(marks)")"
-input key 1; sleep 0.4
-for action in edit_select_all edit_copy select-line select-mode select-mode; do hook Trigger "$action"; sleep 0.3; done
+input key 1; settle
+for action in edit_select_all edit_copy select-line select-mode select-mode; do hook Trigger "$action"; settle; done
 
 # A blinking cursor that a program hid, as htop does, stops blinking: each blink would draw
 # the same frame again, and a fading cursor 30 of them a second.
@@ -510,19 +551,19 @@ sleep 1.5
 resting() { hook Property terminal cursorResting | grep -o true | wc -l; }
 rested=$(resting)
 rested_hidden=$(hook Property terminal cursorHidden | grep -o true | wc -l)
-input key 42; sleep 0.3
+input key 42; settle
 check "a blinking cursor rests shown after a while and a key wakes it" "1 0 0" "$rested $rested_hidden $(resting)"
 hook SetSetting CursorBlinkTimeout 15; hook SetSetting BlinkingCursor false; sleep 0.3
 
 # The D-Bus interface, each method checked against its counterpart.
-two_h=$(sessions addSessionTwoHorizontal); sleep 1
-two_v=$(sessions addSessionTwoVertical); sleep 1
-four=$(sessions addSessionQuad); sleep 1.2
+mark; two_h=$(sessions addSessionTwoHorizontal); wait_shells 2
+mark; two_v=$(sessions addSessionTwoVertical); wait_shells 2
+mark; four=$(sessions addSessionQuad); wait_shells 4
 check "D-Bus opens sessions with two, two and four terminals" "2 2 4" "$(count "$two_h") $(count "$two_v") $(count "$four")"
-sessions splitSessionAuto "$two_h" >/dev/null; sleep 0.6
-sessions splitSessionLeftRight "$two_h" >/dev/null; sleep 0.6
-sessions splitSessionTopBottom "$two_h" >/dev/null; sleep 0.6
-terminal=$(sessions splitTerminalTopBottom "$(sessions terminalIdsForSessionId "$two_h" | cut -d, -f1)"); sleep 0.6
+mark; sessions splitSessionAuto "$two_h" >/dev/null; wait_shells
+mark; sessions splitSessionLeftRight "$two_h" >/dev/null; wait_shells
+mark; sessions splitSessionTopBottom "$two_h" >/dev/null; wait_shells
+mark; terminal=$(sessions splitTerminalTopBottom "$(sessions terminalIdsForSessionId "$two_h" | cut -d, -f1)"); wait_shells
 check "D-Bus splits sessions and terminals" 6 "$(count "$two_h")"
 check "a new terminal belongs to its session" "$two_h yes" \
     "$(sessions sessionIdForTerminalId "$terminal") $(sessions terminalIdList | tr ',' '\n' | grep -qx "$terminal" && echo yes)"
@@ -530,10 +571,10 @@ grown=""
 for side in Right Left Top Bottom; do grown="$grown$(sessions "tryGrowTerminal$side" "$terminal" 10) "; done
 check "growing a terminal answers with pixels or -1" yes "$(echo "$grown" | grep -qE '^(-?[0-9]+ ){4}$' && echo yes)"
 
-sessions setTerminalKeyboardInputEnabled "$terminal" false; sleep 0.3
+sessions setTerminalKeyboardInputEnabled "$terminal" false; settle
 check "D-Bus blocks the keyboard of one terminal" "false true true" \
     "$(sessions isTerminalKeyboardInputEnabled "$terminal") $(sessions hasTerminalsWithKeyboardInputEnabled "$two_h") $(sessions hasTerminalsWithKeyboardInputDisabled "$two_h")"
-sessions setSessionKeyboardInputEnabled "$two_h" true; sleep 0.3
+sessions setSessionKeyboardInputEnabled "$two_h" true; settle
 check "D-Bus gives a session its keyboard back" true "$(sessions isTerminalKeyboardInputEnabled "$terminal")"
 for kind in Activity Silence; do
     sessions "setTerminalMonitor${kind}Enabled" "$terminal" true; sleep 0.3
@@ -543,18 +584,18 @@ for kind in Activity Silence; do
     check "D-Bus stops watching a session for $kind" false "$(sessions "isTerminalMonitor${kind}Enabled" "$terminal")"
 done
 
-sessions setSessionClosable "$two_h" false; sleep 0.3
+sessions setSessionClosable "$two_h" false; settle
 check "a locked session is reported" true "$(sessions hasUnclosableSessions)"
-sessions removeTerminal "$terminal"; sleep 0.6
+sessions removeTerminal "$terminal"; settle
 check "the terminals of a locked session stay" 6 "$(count "$two_h")"
-sessions setSessionClosable "$two_h" true; sleep 0.3
-sessions removeTerminal "$terminal"; sleep 0.6
+sessions setSessionClosable "$two_h" true; settle
+sessions removeTerminal "$terminal"; settle
 check "D-Bus closes a terminal" 5 "$(count "$two_h")"
-for session in "$two_h" "$two_v" "$four"; do sessions removeSession "$session"; sleep 0.8; done
+for session in "$two_h" "$two_v" "$four"; do sessions removeSession "$session"; settle; done
 check "D-Bus closes sessions" no "$(sessions sessionIdList | tr ',' '\n' | grep -qxE "$two_h|$two_v|$four" && echo yes || echo no)"
 # A tab whose shell is stopped closes whole: the shell ends, and nothing waits for it forever.
-stopped=$(sessions addSession); sleep 1
-sessions raiseSession "$stopped"; sleep 0.4
+mark; stopped=$(sessions addSession); wait_shells
+sessions raiseSession "$stopped"; settle
 run "echo \$\$ > $work/shell-pid"
 shell_pid=$(cat "$work/shell-pid")
 kill -STOP "$shell_pid"; sleep 0.3
@@ -562,7 +603,7 @@ sessions removeSession "$stopped"; sleep 1.5
 check "closing a tab with a stopped shell ends the shell" gone \
     "$(kill -0 "$shell_pid" 2>/dev/null && echo running || echo gone)"
 kill -CONT "$shell_pid" 2>/dev/null
-sessions raiseSession "$first"; sleep 0.4
+sessions raiseSession "$first"; settle
 
 # Output in a terminal that nobody sees, in a tab in the background or with the window
 # hidden, only marks it stale; it catches up when it shows.
@@ -576,19 +617,19 @@ stale_before=$(stale)
 sizeless() { echo $(($(hook Property terminal width | tr -s ', ' '\n' | grep -cxE '0(\.0*)?') - sizeless_before)); }
 sizeless_before=0
 sizeless_before=$(sizeless)
-background=$(sessions addSession); sleep 1
-sessions raiseSession "$background"; sleep 0.4
-sessions runCommandInTerminal "$first_terminal" "seq 1 40"; sleep 0.6
+mark; background=$(sessions addSession); wait_shells
+sessions raiseSession "$background"; settle
+run_in "$first_terminal" "seq 1 40"
 stale_in_background=$(stale)
 sizeless_in_background=$(sizeless)
-sessions raiseSession "$first"; sleep 0.4
+sessions raiseSession "$first"; settle
 stale_shown=$(stale)
 # Now the new tab is the one in the background; closed, it leaves none.
 sizeless_shown=$(sizeless)
-sessions removeSession "$background"; sleep 0.8
+sessions removeSession "$background"; settle
 sizeless_closed=$(sizeless)
 window toggleWindowState; sleep 1
-sessions runCommandInTerminal "$first_terminal" "seq 1 40"; sleep 0.6
+run_in "$first_terminal" "seq 1 40"
 stale_hidden=$(stale)
 window toggleWindowState; sleep 1
 check "output nobody sees waits until the terminal shows" "1 0 1 0" "$stale_in_background $stale_shown $stale_hidden $(stale)"
@@ -604,20 +645,68 @@ needed = [stats["wakeups"], stats["reports"], stats["refreshes"], stats["paints"
 needed += [stats[name]["count"] for name in ("lock_wait", "lock_hold", "queue", "frame_build", "frame_draw", "frame_copy")]
 print("yes" if all(needed) else stats)' "$first_terminal")
 check "the counters count the work of a terminal" yes "$counted"
+
+# What is painted while nothing happens: nothing. A paint costs the render thread and the
+# graphics card, and on a laptop the battery. Each check counts for two seconds, and a cursor
+# that blinks shows that the counting sees the paints that are there.
+paints() { # terminal id, or "all" for the terminals of all tabs
+    hook Stats | python3 -c '
+import json, sys
+paints, terminal = json.load(sys.stdin)["paints"], sys.argv[1]
+print(sum(paints.values()) if terminal == "all" else paints.get(terminal, 0))' "$1"
+}
+quiet() { hook ResetStats; sleep 2; paints "${1:-all}"; }
+run "clear"
+idle=$(quiet)
+hook SetSetting BlinkingCursor true; sleep 0.3
+blinking=$(quiet)
+hook SetSetting CursorBlinkTimeout 1; sleep 1.5
+rested=$(quiet)
+hook SetSetting CursorBlinkTimeout 15; input key 42; sleep 0.3
+window toggleWindowState; sleep 1
+hidden=$(quiet)
+window toggleWindowState; sleep 1
+# Only the terminal with the focus blinks; the other one of a split stays as it is.
+mark; split=$(sessions splitTerminalLeftRight "$first_terminal"); wait_shells
+input key 42; settle
+unfocused=$first_terminal
+[ "$(sessions activeTerminalId)" = "$first_terminal" ] && unfocused=$split
+hook ResetStats; sleep 2
+beside=$(paints "$unfocused")
+sessions removeTerminal "$split"; sleep 0.6
+hook SetSetting BlinkingCursor false; sleep 0.3
+check "nothing is painted while nothing happens" "0 yes 0 0 0" \
+    "$idle $([ "$blinking" -gt 0 ] && echo yes || echo "no: $blinking") $rested $hidden $beside"
+mark; background=$(sessions addSession); wait_shells
+sessions raiseSession "$background"; settle
+hook ResetStats
+run_in "$first_terminal" "seq 1 40"
+# Neither does it refresh: the terminal of the new tab has no output either.
+behind="$(paints "$first_terminal") $(hook Stats | python3 -c 'import json, sys; print(json.load(sys.stdin)["refreshes"])')"
+sessions removeSession "$background"; settle
+sessions raiseSession "$first"; settle
+check "output in a tab in the background neither refreshes nor paints" "0 0" "$behind"
+# A key that the shell echoes paints the terminal once.
+run "clear"
+hook ResetStats
+input key 30; settle
+typed=$(paints "$first_terminal")
+input key 14; settle
+check "a typed key paints once" yes "$([ "$typed" -ge 1 ] && [ "$typed" -le 1 ] && echo yes || echo "no: $typed")"
 check "a terminal in a tab in the background has no size until it shows" "1 1 0" "$sizeless_in_background $sizeless_shown $sizeless_closed"
 run "clear"
 
-sessions runCommandInTerminal "$(sessions activeTerminalId)" "echo dbus > $work/dbus"; sleep 0.6
+run_in "$(sessions activeTerminalId)" "echo dbus > $work/dbus"
 check "D-Bus runs a command in a given terminal" "dbus|" "$(content "$work/dbus")"
 # A terminal split over D-Bus starts where the one split is.
 mkdir -p "$work/split-here"
 run "cd $work/split-here"
-split=$(sessions splitTerminalLeftRight "$(sessions activeTerminalId)"); sleep 1
-sessions runCommandInTerminal "$split" "pwd > $work/split-dir"; sleep 0.6
+mark; split=$(sessions splitTerminalLeftRight "$(sessions activeTerminalId)"); wait_shells
+run_in "$split" "pwd > $work/split-dir"
 check "a terminal split over D-Bus starts where the one split is" "$work/split-here|" "$(content "$work/split-dir")"
 sessions removeTerminal "$split"; sleep 0.6
 run "clear; cd"
-run "clear; cat > $work/typed"
+run_open "clear; cat > $work/typed"
 hook Key A; sleep 0.2
 hook InputMethod "vor" ""; sleep 0.2
 hook InputMethod "" "ü"; sleep 0.2
@@ -625,7 +714,7 @@ end_input
 check "keys and input methods reach the terminal" "aü|" "$(content "$work/typed")"
 
 # The real menus, opened as a click would open them and walked with the keyboard.
-hook SetSetting Width 100; hook SetSetting TabActivityColor "#ff0000"; sleep 0.8
+hook SetSetting Width 100; hook SetSetting TabActivityColor "#ff0000"; settle
 hook Popup session; sleep 1; menu_entry 2
 pair=$(active)
 check "the session menu opens a session" 2 "$(count "$pair")"
@@ -634,120 +723,120 @@ check "the main menu switches an option" false "$(setting KeepOpen)"
 hook Popup main; sleep 1; menu_entry 4
 hook Popup main; sleep 1; menu_entry 5; menu_entry 5
 check "a submenu of the main menu sets the width" 60 "$(setting Width)"
-hook SetSetting Width 100; sleep 0.8
+hook SetSetting Width 100; settle
 left=$(sessions terminalIdsForSessionId "$pair" | cut -d, -f1)
 hook Popup tab; sleep 1; menu_entry 7; menu_entry 1
 check "the tab menu blocks the keyboard of one terminal" false "$(sessions isTerminalKeyboardInputEnabled "$left")"
-sessions setSessionKeyboardInputEnabled "$pair" true; sleep 0.3
+sessions setSessionKeyboardInputEnabled "$pair" true; settle
 hook Popup tab; sleep 1; menu_entry 5; input key 28; sleep 1
 hook Popup tab; sleep 1; menu_entry 6
 first_closable=$(sessions isSessionClosable "$pair")
 hook Popup tab; sleep 1; menu_entry 6
 check "a tab color can be chosen and reset" "true false" "$first_closable $(sessions isSessionClosable "$pair")"
-hook Trigger close-session; sleep 1; input key 1; sleep 0.6
+hook Trigger close-session; settle; input key 1; settle
 check "a locked session asks before closing" yes "$(sessions sessionIdList | tr ',' '\n' | grep -qx "$pair" && echo yes)"
-sessions setSessionClosable "$pair" true; sleep 0.3
+sessions setSessionClosable "$pair" true; settle
 
-sessions runCommandInTerminal "$left" "stty size > $work/size-before"; sleep 0.6
+run_in "$left" "stty size > $work/size-before"
 grab splitter
 input drag 640 150 440 150; sleep 1
-sessions runCommandInTerminal "$left" "stty size > $work/size-after"; sleep 0.6
+run_in "$left" "stty size > $work/size-after"
 check "dragging the splitter resizes the terminals" yes \
     "$([ -s "$work/size-after" ] && ! cmp -s "$work/size-before" "$work/size-after" && echo yes)"
 # A tab in the background keeps its size; it used to grow by the scroll bar and wrap again
 # on every switch of tabs.
-sessions raiseSession "$first"; sleep 0.6
-sessions runCommandInTerminal "$left" "stty size > $work/size-hidden"; sleep 0.6
+sessions raiseSession "$first"; settle
+run_in "$left" "stty size > $work/size-hidden"
 check "a hidden tab keeps its columns" "$(cat "$work/size-after")" "$(cat "$work/size-hidden" 2>/dev/null)"
-sessions raiseSession "$pair"; sleep 0.6
+sessions raiseSession "$pair"; settle
 input rclick 200 150; sleep 1; menu_entry 1
 check "the terminal menu splits the terminal" 3 "$(count "$pair")"
 sessions runCommandInTerminal "$left" "exit"; sleep 1
 check "a terminal closes when its shell exits" 2 "$(count "$pair")"
 
-sessions raiseSession "$first"; sleep 0.4
-hook SetSetting EditorCommand "$work/editor PATH:LINE"; sleep 0.3
+sessions raiseSession "$first"; settle
+hook SetSetting EditorCommand "$work/editor PATH:LINE"; settle
 rm -f "$work/edited"
 run "clear; printf 'see notes.txt:12:3 end\n'"
 input rclick 130 8; sleep 1; menu_entry 1
 check "the terminal menu opens a link" "$work/home/notes.txt:12|" "$(content "$work/edited")"
-hook SetSetting EditorCommand ""; sleep 0.3
+hook SetSetting EditorCommand ""; settle
 
 input drag 60 377 200 377; sleep 1
 check "dragging a tab moves it" yes "$([ "$(tabs sessionAtTab 0)" != "$first" ] && echo yes)"
 
-hook SetSetting ConfirmQuit true; sleep 0.3
-hook Trigger file_quit; sleep 1; input key 1; sleep 0.6
+hook SetSetting ConfirmQuit true; settle
+hook Trigger file_quit; settle; input key 1; settle
 check "quitting with several sessions asks first" yes "$(kill -0 "$kudari" 2>/dev/null && echo yes)"
-hook SetSetting ConfirmQuit false; sleep 0.3
+hook SetSetting ConfirmQuit false; settle
 
 # What programs in the terminal ask for with control sequences.
 run "clear; stty raw -echo; printf '\033[6n'; dd bs=1 count=2 of=$work/report 2>/dev/null; stty sane"
 check "the terminal answers a program" "033[" "$(od -An -c "$work/report" | tr -d ' ')"
 run "clear; printf '\033]52;c;%s\a' \$(printf osc | base64)"
-run "clear; cat > $work/osc"
-hook Trigger edit_paste; sleep 0.3; end_input
+run_open "clear; cat > $work/osc"
+hook Trigger edit_paste; settle; end_input
 check "programs can copy to the clipboard" "osc|" "$(content "$work/osc")"
 # A blocked keyboard: the wheel sends no arrow keys to a program on the alternate screen.
 before_wheel=$(active)
-hook Trigger new-session; sleep 1
+mark; hook Trigger new-session; wait_shells
 wheeled=$(active)
-run "clear; stty raw -echo; printf '\033[?1049h'; timeout 3 cat > $work/wheel; printf '\033[?1049l'; stty sane"
-sessions setSessionKeyboardInputEnabled "$wheeled" false; sleep 0.3
+run_open "clear; stty raw -echo; printf '\033[?1049h'; timeout 3 cat > $work/wheel; printf '\033[?1049l'; stty sane"
+sessions setSessionKeyboardInputEnabled "$wheeled" false; settle
 input wheel 130 8 15 3; sleep 0.3
 # Given back its keyboard, the terminal takes the arrow key of one notch again.
-sessions setSessionKeyboardInputEnabled "$wheeled" true; sleep 0.3
+sessions setSessionKeyboardInputEnabled "$wheeled" true; settle
 input wheel 130 8 15 1; sleep 2.5
 wheel=$(tr '\033' E < "$work/wheel")
 check "a blocked terminal takes no arrow keys from the wheel" one \
     "$(echo "$wheel" | grep -qxE 'EO[AB]' && echo one || echo "$wheel")"
-sessions removeSession "$wheeled"; sleep 0.6
-sessions raiseSession "$before_wheel"; sleep 0.4
+sessions removeSession "$wheeled"; settle
+sessions raiseSession "$before_wheel"; settle
 # Output into a scrolling region below the top while the view is scrolled back used to scroll
 # the view past the history, and the next frame ended Kudari with all its terminals.
-region=$(sessions addSession); sleep 1
-sessions raiseSession "$region"; sleep 0.4
-hook SetSetting HistoryLines 10000; sleep 0.3
+mark; region=$(sessions addSession); wait_shells
+sessions raiseSession "$region"; settle
+hook SetSetting HistoryLines 10000; settle
 # Some history, a moment to scroll back a page with Shift+Page Up, then the output.
-run "clear; seq 300; sleep 2; printf '\\033[2;%dr\\033[%dH' \$(tput lines) \$(tput lines); seq 5000; printf '\\033[r'"
+run_open "clear; seq 300; sleep 2; printf '\\033[2;%dr\\033[%dH' \$(tput lines) \$(tput lines); seq 5000; printf '\\033[r'"
 input key 42 104; sleep 5
 check "output into a region below the top while scrolled back leaves Kudari running" yes \
     "$(kill -0 "$kudari" 2>/dev/null && [ -n "$(state)" ] && echo yes || echo no)"
-hook SetSetting HistoryLines 1000; sleep 0.3
-sessions removeSession "$region"; sleep 0.6
-sessions raiseSession "$before_wheel"; sleep 0.4
+hook SetSetting HistoryLines 1000; settle
+sessions removeSession "$region"; settle
+sessions raiseSession "$before_wheel"; settle
 # Two quick clicks at different places are two single clicks: the second selects no word.
 run "clear; printf '\033]52;c;%s\a' \$(printf before | base64)"
 run "clear; printf 'apple %s\n' bananabananabananabananabananabananabananabanana"
 input click2 12 8 300 8; sleep 0.3
-hook Trigger edit_copy; sleep 0.3
-run "clear; cat > $work/clicks"
-hook Trigger edit_paste; sleep 0.3; end_input
+hook Trigger edit_copy; settle
+run_open "clear; cat > $work/clicks"
+hook Trigger edit_paste; settle; end_input
 check "two quick clicks at different places select no word" no \
     "$(content "$work/clicks" | grep -q banana && echo yes || echo no)"
 # sh has no bracketed paste, so it would run pasted lines one by one: Kudari asks first.
 run "clear; printf '\033]52;c;%s\a' \$(printf 'one\ntwo\n' | base64)"
-run "clear; cat > $work/lines"
-hook Trigger edit_paste; sleep 1; input key 1; sleep 0.6
+run_open "clear; cat > $work/lines"
+hook Trigger edit_paste; settle; input key 1; settle
 check "pasting several lines asks first" "" "$(cat "$work/lines")"
-hook Trigger edit_paste; sleep 1; input key 28; sleep 0.6; input key 29 32; sleep 0.4
+hook Trigger edit_paste; settle; input key 28; settle; input key 29 32; settle
 check "the lines arrive once the user agrees" "one|two|" "$(content "$work/lines")"
-run "clear; cat > $work/dropped"
-hook DropText "$(printf 'three\nfour\n')"; sleep 1; input key 1; sleep 0.6
+run_open "clear; cat > $work/dropped"
+hook DropText "$(printf 'three\nfour\n')"; sleep 1; input key 1; settle
 check "dropping several lines of text asks first as well" "" "$(cat "$work/dropped")"
 end_input
 mkdir -p "$work/bin"; ln -sf "$(command -v sleep)" "$work/bin/ssh"
-hook SetSetting RemoteTitleFormat "%w on %H"; sleep 0.3
-run "clear; printf '\033]0;remote\a'; $work/bin/ssh 3"
+hook SetSetting RemoteTitleFormat "%w on %H"; settle
+run_open "clear; printf '\033]0;remote\a'; $work/bin/ssh 3"
 sleep 1
 check "a program sets the title of an ssh tab" "remote on 3" "$(tabs tabTitle "$first")"
 sleep 2
 # A reset leaves programs that read lines alone: Ctrl+L would go into the file.
-run "clear; cat > $work/reset"
-hook Trigger clear-history-and-reset; sleep 0.6; end_input
+run_open "clear; cat > $work/reset"
+hook Trigger clear-history-and-reset; settle; end_input
 check "a reset types nothing into a program that reads lines" "" "$(tr -d '\n' < "$work/reset" | od -An -c | tr -d ' ')"
 # In a pipeline whose first program ended, the title names the one that runs.
-run "true | sleep 3"; sleep 1.5
+run_open "true | sleep 3"; sleep 1.5
 check "a pipeline shows its program after its first one ended" yes \
     "$(tabs tabTitle "$first" | grep -q sleep && echo yes || echo "no: $(tabs tabTitle "$first")")"
 sleep 2
@@ -757,21 +846,21 @@ check "shells get no number of a window" "[][]" "$(cat "$work/windowid" 2>/dev/n
 # A title is text: the markup of a program shows as it is, and loads nothing from the network.
 python3 -m http.server --bind 127.0.0.1 18765 --directory "$work" > "$work/http.log" 2>&1 &
 http=$!
-hook SetSetting TitleFormat "%w"; sleep 0.3
+hook SetSetting TitleFormat "%w"; settle
 run "clear; printf '\033]2;<img src=\"http://127.0.0.1:18765/t.png\">x\a'"
 sleep 2
 check "a title shows its markup as text" '<img src="http://127.0.0.1:18765/t.png">x' "$(tabs tabTitle "$first")"
 kill "$http"
 check "a title loads nothing from the network" no "$(grep -q 't.png' "$work/http.log" && echo yes || echo no)"
-hook SetSetting TitleFormat "%d : %n"; sleep 0.3
-run "clear; stty raw -echo; printf '\033[?1000h\033[?1006h'; timeout 2 cat > $work/mouse; printf '\033[?1000l\033[?1006l'; stty sane"
+hook SetSetting TitleFormat "%d : %n"; settle
+run_open "clear; stty raw -echo; printf '\033[?1000h\033[?1006h'; timeout 2 cat > $work/mouse; printf '\033[?1000l\033[?1006l'; stty sane"
 # Three turns of 15 pixels, as a touchpad sends them, are three lines of 15 pixels: one
 # notch of a wheel, and one report for a program.
 input click 130 8; input wheel 130 8 15 3; sleep 2
 check "programs that ask get clicks and the wheel" yes \
     "$(tr '\033' E < "$work/mouse" | grep -qE '^E\[<0;[0-9]+;1ME\[<0;[0-9]+;1mE\[<6[45];' && echo yes)"
 check "a notch of small turns is one report" 1 "$(tr '\033' E < "$work/mouse" | grep -oE 'E\[<6[45];' | wc -l)"
-run "clear; stty raw -echo; printf '\033[?1049h'; timeout 2 cat > $work/arrows; printf '\033[?1049l'; stty sane"
+run_open "clear; stty raw -echo; printf '\033[?1049h'; timeout 2 cat > $work/arrows; printf '\033[?1049l'; stty sane"
 # A sideways wheel scrolls nothing; it used to count as down.
 input wheel 130 8 15 3 1; input wheel 130 8 15 3; sleep 1
 check "the wheel sends an arrow key for each line to full-screen programs" yes \
@@ -779,7 +868,7 @@ check "the wheel sends an arrow key for each line to full-screen programs" yes \
 
 # The kitty keyboard protocol: a program learns which of its flags Kudari carries out, and a
 # key that Shift changes has the code of its base key, as 2 for Ctrl+Shift+2, which types @.
-hook SetSetting KittyKeyboard true; sleep 0.3
+hook SetSetting KittyKeyboard true; settle
 cat > "$work/kitty" <<'EOF'
 import os, re, select, sys, termios, tty
 saved = termios.tcgetattr(0)
@@ -797,22 +886,22 @@ termios.tcsetattr(0, termios.TCSAFLUSH, saved)
 with open(sys.argv[1], "wb") as out:
     out.write((reply + b"|" + key).replace(b"\033", b"E"))
 EOF
-run "clear; python3 $work/kitty $work/kitty-out"
+run_open "clear; python3 $work/kitty $work/kitty-out"
 sleep 0.5; input key 29 42 3; sleep 1
 check "a program learns the kitty flags that Kudari carries out" "E[?25u" "$(cut -d'|' -f1 "$work/kitty-out")"
 check "Ctrl+Shift+2 has the code of the 2 in the kitty protocol" "E[50;6u" "$(cut -d'|' -f2 "$work/kitty-out")"
-hook SetSetting KittyKeyboard false; sleep 0.3
+hook SetSetting KittyKeyboard false; settle
 
-hook Toggle toggle-session-monitor-once true; sleep 0.2
-sessions setSessionMonitorActivityEnabled "$first" true; sleep 0.3
+hook Toggle toggle-session-monitor-once true; settle
+sessions setSessionMonitorActivityEnabled "$first" true; settle
 watched=$(sessions activeTerminalId)
-sessions raiseSession "$pair"; sleep 0.4
+sessions raiseSession "$pair"; settle
 sessions runCommandInTerminal "$watched" "echo activity"; sleep 1
 check "a one-shot activity monitor ends after its alert" false "$(sessions isSessionMonitorActivityEnabled "$first")"
-sessions raiseSession "$first"; sleep 0.4
-hook Toggle toggle-session-monitor-process true; sleep 0.2
-run "sleep 1"; sleep 1.5
-for mode in visual none notify; do hook SetSetting BellMode "$mode"; sleep 0.3; run "printf '\a'"; done
+sessions raiseSession "$first"; settle
+hook Toggle toggle-session-monitor-process true; settle
+run_open "sleep 1"; sleep 1.5
+for mode in visual none notify; do hook SetSetting BellMode "$mode"; settle; run "printf '\a'"; done
 hook Toggle toggle-session-monitor-once false; hook SetSetting BellMode notify; hook SetSetting TabActivityColor ""
 
 # AI agents reach Kudari through `kudari mcp`, which their client starts once and keeps.
@@ -869,7 +958,7 @@ refused() { grep -q "^error: $1" && echo yes; }
 start_agent
 check "agents may not read by default" yes "$(agent list_terminals '{}' | refused 'Reading terminals is switched off')"
 check "the switched off interface shows no access" false "$(hook AgentAccess)"
-hook SetSetting AllowAgentReading true; sleep 0.3
+hook SetSetting AllowAgentReading true; settle
 send list_terminals '{}'
 asked=$(question)
 check "Kudari asks before an agent reads" yes "$(echo "$asked" | grep -q 'wants to read your terminals' && echo yes)"
@@ -885,19 +974,19 @@ check "another agent has to ask for itself" yes "$( (agent_once list_terminals '
 (agent_once list_terminals '{}' > "$work/third" &)
 question > /dev/null
 protected=$(active)
-sessions setSessionClosable "$protected" false; sleep 0.3
-hook Trigger close-session; sleep 1; input key 1; sleep 0.6
+sessions setSessionClosable "$protected" false; settle
+hook Trigger close-session; settle; input key 1; settle
 check "a dialog left open keeps the window below it" true "$(hook DialogOpen)"
 hook AnswerAgent false; sleep 0.6
 check "the window comes back when the last dialog closed" false "$(hook DialogOpen)"
-sessions setSessionClosable "$protected" true; sleep 0.3
+sessions setSessionClosable "$protected" true; settle
 # About Kudari shows its dialog without waiting for it: the window stays below until it closes.
 hook Popup main; sleep 1; menu_entry 1; sleep 0.5
 check "the window stays below the dialog about Kudari" true "$(hook DialogOpen)"
 input key 1; sleep 1
 check "the window comes back when the dialog about Kudari closed" false "$(hook DialogOpen)"
 check "agents may not type by default" yes "$(agent type_text '{"text": "ls"}' | refused 'Controlling terminals is switched off')"
-hook SetSetting AllowAgentControl true; sleep 0.3
+hook SetSetting AllowAgentControl true; settle
 check "more rights end the access granted before" false "$(hook AgentAccess)"
 users=$(sessions activeSessionId)
 send open_session '{"title": "Agent"}'
@@ -910,7 +999,7 @@ check "an agent opens a session of its own" Agent "$(tabs tabTitle "$own")"
 # The user may be typing elsewhere, a password even: the new session stays behind.
 check "the session of an agent opens behind the tab of the user" "$users" "$(sessions activeSessionId)"
 # The user goes there to confirm the commands of the agent.
-sessions raiseSession "$own"; sleep 0.5
+sessions raiseSession "$own"; settle
 agent type_text "{\"terminal\": $mine, \"text\": \"echo typed > $work/agent-typed\", \"execute\": true}" > "$work/answer"
 sleep 0.6
 check "the command of an agent waits for Return" "no yes" \
@@ -920,12 +1009,12 @@ check "Return runs the command of an agent" "typed|" "$(content "$work/agent-typ
 check "with confirmation an agent cannot press escape" yes \
     "$(agent send_key "{\"terminal\": $mine, \"key\": \"escape\"}" | refused 'escape could form')"
 agent type_text "{\"terminal\": $mine, \"text\": \"read -r reply; echo got-\$reply > $work/agent-read\", \"execute\": true}" > /dev/null
-sleep 0.4; input key 28; sleep 0.5
+sleep 0.4; input key 28; settle
 check "a script reading input is no prompt for an agent" yes \
     "$(agent type_text "{\"terminal\": $mine, \"text\": \"y\"}" | refused 'The shell is not editing')"
-input key 28; sleep 0.5
+input key 28; settle
 check "the script got nothing from the agent" "got-|" "$(content "$work/agent-read")"
-hook SetSetting ConfirmAgentCommands false; sleep 0.3
+hook SetSetting ConfirmAgentCommands false; settle
 # The agent was allowed when its commands waited for Return; Kudari asks about it again.
 check "commands that no longer wait end the access granted before" false "$(hook AgentAccess)"
 send type_text "{\"terminal\": $mine, \"text\": \"echo ran-by-agent\", \"execute\": true}"
@@ -936,7 +1025,7 @@ receive > /dev/null; sleep 0.6
 check "without confirmation an agent runs commands" yes \
     "$(agent read_terminal "{\"terminal\": $mine, \"lines\": 5}" | grep -qx 'ran-by-agent' && echo yes)"
 agent type_text "{\"terminal\": $mine, \"text\": \"sleep 30\", \"execute\": true}" > /dev/null; sleep 0.6
-hook SetSetting ConfirmAgentCommands true; sleep 0.3
+hook SetSetting ConfirmAgentCommands true; settle
 check "with confirmation an agent cannot type into a running program" yes \
     "$(agent type_text "{\"terminal\": $mine, \"text\": \"y\"}" | refused 'A program is running')"
 check "an agent stops a program with ctrl+c" "Pressed ctrl+c." "$(agent send_key "{\"terminal\": $mine, \"key\": \"ctrl+c\"}")"
@@ -960,11 +1049,11 @@ once=$!
 check "the question goes away with its agent" "yes|" \
     "$(question | grep -q 'wants to read' && echo yes)|$(kill "$once"; sleep 0.5; hook AgentQuestion)"
 start_agent
-hook SetSetting AllowAgentReading false; sleep 0.3
+hook SetSetting AllowAgentReading false; settle
 check "reading can be switched off" yes "$(agent read_terminal '{}' | refused 'Reading terminals is switched off')"
 stop_agent
 hook SetSetting AllowAgentControl false
-sessions raiseSession "$first"; sleep 0.4
+sessions raiseSession "$first"; settle
 
 activate() { gdbus call --session --dest "$service" --object-path /io/github/marcjose/kudari \
     --method org.freedesktop.Application.Activate '@a{sv} {}' >/dev/null; sleep 1; }
@@ -1120,7 +1209,7 @@ check "at 125 %, the lines of tables are as thick and as far apart in every cell
 
 # A translucent terminal replaces every pixel of its image with each frame, transparent ones
 # as well: Qt no longer clears the image first, so text that went away must not stay.
-hook SetSetting Opacity 60; sleep 0.5
+hook SetSetting Opacity 60; settle
 run "clear; printf '█%.0s' \$(seq 300); echo"
 sleep 0.8
 hook Grab "$work/scaled/full"; sleep 1

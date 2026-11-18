@@ -283,21 +283,22 @@ pub struct Summary {
     pub p95_micros: u64,
 }
 
-/// Whether nothing was painted for `quiet` and no work waits for the Qt thread: the user
-/// interface has settled. Always true without the feature, which has nothing to wait for.
+/// How long no terminal was painted, or none while work waits in the queue of the Qt thread:
+/// then the user interface has not settled, however long ago the last paint was. Without
+/// the feature, the longest time, as there is nothing to wait for.
 #[must_use]
-pub fn settled(quiet: Duration) -> bool {
+pub fn quiet() -> Option<Duration> {
     #[cfg(feature = "stats")]
     {
         use std::sync::atomic::Ordering;
+        if counting::QUEUED.load(Ordering::Relaxed) > 0 {
+            return None;
+        }
         let idle = counting::since_start().saturating_sub(counting::LAST_PAINT.load(Ordering::Relaxed));
-        counting::QUEUED.load(Ordering::Relaxed) == 0 && u128::from(idle) >= quiet.as_micros()
+        Some(Duration::from_micros(idle))
     }
     #[cfg(not(feature = "stats"))]
-    {
-        let _ = quiet;
-        true
-    }
+    Some(Duration::MAX)
 }
 
 /// All counters as JSON, with the paints of each terminal; `{}` without the feature.
@@ -369,7 +370,7 @@ mod tests {
 
     /// All of the global counters in one test, as tests run side by side.
     #[test]
-    fn the_counters_count_wait_for_quiet_and_go_back_to_nothing() {
+    fn the_counters_count_know_the_quiet_and_go_back_to_nothing() {
         reset();
         count(Count::Wakeups);
         count(Count::Wakeups);
@@ -380,10 +381,12 @@ mod tests {
         record(Time::LockWait, Duration::from_micros(3));
         let queued = Queued::new();
         // Work waits in the queue: nothing has settled, whatever the time since a paint.
-        assert!(!settled(Duration::ZERO));
+        assert_eq!(quiet(), None);
         queued.runs();
-        assert!(settled(Duration::ZERO));
-        assert!(!settled(Duration::from_secs(60)), "a paint just now");
+        assert!(
+            quiet().is_some_and(|quiet| quiet < Duration::from_secs(60)),
+            "a paint just now"
+        );
         let stats: serde_json::Value = serde_json::from_str(&json()).unwrap_or_default();
         assert_eq!(stats["wakeups"], 2);
         assert_eq!(stats["refreshes"], 1);
