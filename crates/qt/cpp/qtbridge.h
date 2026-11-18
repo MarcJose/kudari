@@ -52,6 +52,9 @@ void rk_font_rendering(QFont &font, bool antiAlias, bool hinting);
 /// terminal. Its image has the format that text draws fastest into and that most graphics
 /// drivers take as it is, so no frame is converted or copied on its way to the screen, as
 /// they are with QQuickPaintedItem. An item without a size keeps neither image nor texture.
+///
+/// The cursor has a small image of its own over that of the item: blinking and fading only
+/// change how much of it shows, and a change of the cursor alone paints only its cells.
 class RkImageItem : public QQuickItem
 {
 public:
@@ -59,16 +62,33 @@ public:
 
     /// Paints a frame; the painter draws into the image of the item, in logical pixels.
     virtual void paint(QPainter *painter) = 0;
+    /// Paints the cursor, in the logical pixels of the item, into an image as large as
+    /// `cursorRoom`, starting at its corner; gives the rectangle of the item that it covers,
+    /// or an empty one without a cursor. `alone` tells that the frame was not painted with it.
+    /// Where `mayKeep` allows it and the cursor looks as last time, it paints nothing and sets
+    /// `kept`: the texture it has stays.
+    virtual QRectF paintCursor(QPainter *painter, bool alone, bool mayKeep, bool &kept) = 0;
+    /// The logical size that the cursor of any cell fits in.
+    virtual QSizeF cursorRoom() const = 0;
+    /// How much of the cursor shows, from 0 to 1.
+    virtual double cursorOpacity() const = 0;
     /// Whether every frame covers all of the item: it is then neither cleared before nor
     /// blended with what lies behind it.
     void setOpaquePainting(bool opaque);
+    /// Paints the frame and the cursor again.
+    void updateContent();
+    /// Paints only the cursor again, or only shows more or less of it.
+    void updateCursor();
 
 protected:
     QSGNode *updatePaintNode(QSGNode *node, UpdatePaintNodeData *data) override;
+    void geometryChange(const QRectF &newGeometry, const QRectF &oldGeometry) override;
 
 private:
     QImage m_image;
+    QImage m_cursor;
     bool m_opaque = false;
+    bool m_contentDirty = true;
 };
 std::unique_ptr<QRawFont> rk_raw_font(const QPainter &painter, const QFont &font);
 std::uint32_t rk_glyph_index(const QRawFont &font, std::uint32_t character);

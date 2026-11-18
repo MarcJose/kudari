@@ -21,7 +21,7 @@ use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{ClearMode, Handler, Rgb};
 use cxx_qt::{CxxQtType, Threading};
-use cxx_qt_lib::{QColor, QFont, QPen, QPointF, QRectF, QString, QVariant};
+use cxx_qt_lib::{QColor, QFont, QPen, QPointF, QRectF, QSizeF, QString, QVariant};
 
 use crate::colors;
 use crate::frontend::frontend;
@@ -46,6 +46,8 @@ pub mod qobject {
         type QPainter = cxx_qt_lib::QPainter;
         include!("cxx-qt-lib/qsizef.h");
         type QSizeF = cxx_qt_lib::QSizeF;
+        include!("cxx-qt-lib/qrectf.h");
+        type QRectF = cxx_qt_lib::QRectF;
         include!("cxx-qt-lib/qcolor.h");
         type QColor = cxx_qt_lib::QColor;
         include!("cxx-qt-lib/qvariant.h");
@@ -129,6 +131,24 @@ pub mod qobject {
         unsafe fn paint(self: Pin<&mut Self>, painter: *mut QPainter);
 
         #[cxx_override]
+        #[cxx_name = "paintCursor"]
+        unsafe fn paint_cursor(
+            self: Pin<&mut Self>,
+            painter: *mut QPainter,
+            alone: bool,
+            may_keep: bool,
+            kept: &mut bool,
+        ) -> QRectF;
+
+        #[cxx_override]
+        #[cxx_name = "cursorRoom"]
+        fn cursor_room(self: &Self) -> QSizeF;
+
+        #[cxx_override]
+        #[cxx_name = "cursorOpacity"]
+        fn cursor_opacity(self: &Self) -> f64;
+
+        #[cxx_override]
         unsafe fn input_method_event(self: Pin<&mut Self>, event: *mut QInputMethodEvent);
 
         #[cxx_override]
@@ -137,8 +157,15 @@ pub mod qobject {
         #[inherit]
         fn size(self: &Self) -> QSizeF;
 
+        /// Paints the frame and the cursor again.
         #[inherit]
+        #[cxx_name = "updateContent"]
         fn update(self: Pin<&mut Self>);
+
+        /// Paints only the cursor again, or only shows more or less of it.
+        #[inherit]
+        #[cxx_name = "updateCursor"]
+        fn update_cursor(self: Pin<&mut Self>);
 
         /// Whether the item covers all its pixels, so that Qt draws it without blending.
         #[inherit]
@@ -283,17 +310,29 @@ impl cxx_qt::Initialize for qobject::TerminalItem {
         self.as_mut()
             .on_focused_changed(|mut item| {
                 item.as_mut().report_focus();
+                // A cursor without the focus is a hollow block; nothing else of the frame changes.
+                item.update_cursor();
+            })
+            .release();
+        self.as_mut()
+            .on_cursor_hidden_changed(qobject::TerminalItem::update_cursor)
+            .release();
+        self.as_mut()
+            .on_cursor_fade_changed(qobject::TerminalItem::update_cursor)
+            .release();
+        self.as_mut()
+            .on_pixel_ratio_changed(|mut item| {
+                let fonts = item.cursor_fonts.wrapping_add(1);
+                item.as_mut().rust_mut().cursor_fonts = fonts;
                 item.update();
             })
             .release();
         self.as_mut()
-            .on_cursor_hidden_changed(qobject::TerminalItem::update)
-            .release();
-        self.as_mut()
-            .on_cursor_fade_changed(qobject::TerminalItem::update)
-            .release();
-        self.as_mut()
-            .on_pixel_ratio_changed(qobject::TerminalItem::update)
+            .on_term_font_changed(|mut item| {
+                let fonts = item.cursor_fonts.wrapping_add(1);
+                item.as_mut().rust_mut().cursor_fonts = fonts;
+                item.update();
+            })
             .release();
         self.on_url_hints_changed(qobject::TerminalItem::update).release();
     }
@@ -340,6 +379,11 @@ pub struct TerminalItemRust {
     hint_generation: u64,
     /// A thread looks for files; on a drive that hangs it may never come back.
     hint_looking: Arc<AtomicBool>,
+    /// What the image of the cursor shows: its cells and paints, and the fonts it was drawn
+    /// with, counted by `cursor_fonts`. The same again keeps the image.
+    cursor_drawn: Option<(render::Rect, Vec<Paint>, u32)>,
+    /// Counts the changes of the font and the scale, which change the look of the same paints.
+    cursor_fonts: u32,
 }
 
 impl Default for TerminalItemRust {
@@ -380,6 +424,8 @@ impl Default for TerminalItemRust {
             hint_words: Vec::new(),
             hint_generation: 0,
             hint_looking: Arc::default(),
+            cursor_drawn: None,
+            cursor_fonts: 0,
         }
     }
 }
@@ -1036,6 +1082,97 @@ impl qobject::TerminalItem {
         self.paint_frame(target);
     }
 
+    /// Paints the cursor into its image, which starts at the cell of the cursor; see
+    /// `RkImageItem` in qtbridge.h. Gives the cells it covers, or nothing without a cursor.
+    ///
+    /// # Safety
+    ///
+    /// `painter` is null or a painter that stays valid and in place during the call.
+    pub unsafe fn paint_cursor(
+        mut self: Pin<&mut Self>,
+        painter: *mut qobject::QPainter,
+        alone: bool,
+        may_keep: bool,
+        kept: &mut bool,
+    ) -> QRectF {
+        *kept = false;
+        // SAFETY: as the caller promises.
+        let Some(painter) = (unsafe { painter.as_mut() }) else {
+            return QRectF::default();
+        };
+        // SAFETY: Qt keeps the painter in place during this call.
+        let mut painter = unsafe { Pin::new_unchecked(painter) };
+        // A blink or a fade alone is the only paint of this frame; with the frame, it counts there.
+        if alone {
+            stats::paint(*self.terminal_id());
+        }
+        let Some(backend) = self.as_ref().backend() else {
+            return QRectF::default();
+        };
+        let options = terminal::options().unwrap_or_default();
+        let scheme = colors::active();
+        let mut paints = Vec::new();
+        let cells = {
+            let term = backend.lock();
+            let (origin_x, origin_y) = self.as_ref().text_origin(term.columns(), term.screen_lines());
+            let scene = render::Scene {
+                geometry: render::Geometry {
+                    origin_x,
+                    origin_y,
+                    cell_width: *self.cell_width(),
+                    cell_height: *self.cell_height(),
+                    ascent: *self.ascent(),
+                    pixel_ratio: *self.pixel_ratio(),
+                },
+                scheme: &scheme,
+                bold_intense: *self.bold_intense(),
+                focused: *self.focused(),
+                cursor_hidden: false,
+                cursor_fade: 1.0,
+                cursor_apart: true,
+                hints: &[],
+                matches: &[],
+            };
+            render::cursor_into(&term, &options, &scene, &mut paints)
+        };
+        let Some(cells) = cells else {
+            self.as_mut().rust_mut().cursor_drawn = None;
+            return QRectF::default();
+        };
+        let paints: Vec<Paint> = paints
+            .into_iter()
+            .map(|paint| paint.moved(-cells.x, -cells.y))
+            .collect();
+        let rect = QRectF::new(cells.x, cells.y, cells.width, cells.height);
+        // The cursor as it was: its image stays, as while output goes on beside it, or in a
+        // blink, where only how much of it shows changes.
+        let drawn = (cells, paints, self.cursor_fonts);
+        if may_keep && self.cursor_drawn.as_ref() == Some(&drawn) {
+            *kept = true;
+            return rect;
+        }
+        let fonts = Fonts::new(self.term_font(), &options);
+        painter.as_mut().set_font(&fonts.regular);
+        draw(painter, &fonts, &drawn.1);
+        self.as_mut().rust_mut().cursor_drawn = Some(drawn);
+        rect
+    }
+
+    /// Two cells, which the cursor on a wide character covers.
+    pub fn cursor_room(&self) -> QSizeF {
+        QSizeF::new(2.0 * *self.cell_width(), *self.cell_height())
+    }
+
+    /// How much of the cursor shows: none in the phase of a blink where it is hidden, nor
+    /// while the numbers of links show, which it would cover.
+    pub fn cursor_opacity(&self) -> f64 {
+        if *self.cursor_hidden() || *self.url_hints() {
+            0.0
+        } else {
+            self.cursor_fade().clamp(0.0, 1.0)
+        }
+    }
+
     /// Looks for files among the words of the link numbers on a thread of its own, without
     /// the lock of the terminal: on a slow or hanging network drive, a look can take seconds
     /// or never end, and the window, the drawing and the program in the terminal must not
@@ -1130,6 +1267,8 @@ impl qobject::TerminalItem {
                 focused: *self.focused(),
                 cursor_hidden: *self.cursor_hidden(),
                 cursor_fade: *self.cursor_fade(),
+                // The cursor has an image of its own; see `paint_cursor`.
+                cursor_apart: true,
                 hints: self.view.hints(),
                 matches: self.view.matches(),
             };
@@ -1156,41 +1295,7 @@ impl qobject::TerminalItem {
                 *self.cell_height() as i32,
             );
         }
-        let mut runs = GlyphRuns::default();
-        for paint in &paints {
-            match paint {
-                Paint::Fill(rect, color) => {
-                    // What comes before a fill stays under it.
-                    runs.draw(painter.as_mut());
-                    painter
-                        .as_mut()
-                        .fill_rect(&QRectF::new(rect.x, rect.y, rect.width, rect.height), &qcolor(*color));
-                }
-                Paint::Shade(rect, color, alpha) => {
-                    runs.draw(painter.as_mut());
-                    let mut color = qcolor(*color);
-                    color.set_alpha_f(f32::from(*alpha) / 255.0);
-                    painter
-                        .as_mut()
-                        .fill_rect(&QRectF::new(rect.x, rect.y, rect.width, rect.height), &color);
-                }
-                Paint::Text {
-                    x,
-                    y,
-                    text,
-                    color,
-                    font,
-                } => {
-                    let slot = fonts.slot(*font);
-                    if !runs.add(&painter, &fonts, slot, text.as_str(), (*x, *y), *color) {
-                        painter.as_mut().set_font(fonts.get(slot));
-                        painter.as_mut().set_pen(&QPen::from(&qcolor(*color)));
-                        kde::rk_draw_text(painter.as_mut(), &QPointF::new(*x, *y), &QString::from(text.as_str()));
-                    }
-                }
-            }
-        }
-        runs.draw(painter.as_mut());
+        draw(painter.as_mut(), &fonts, &paints);
         clock.stop(stats::Time::FrameDraw);
         paints.clear();
         PAINTS.set(paints);
@@ -1350,6 +1455,45 @@ impl Fonts {
 
 fn qcolor(rgb: Rgb) -> QColor {
     QColor::from_rgb(rgb.r.into(), rgb.g.into(), rgb.b.into())
+}
+
+/// Draws the paints of a frame or of the cursor with the fonts of the terminal.
+fn draw(mut painter: Pin<&mut qobject::QPainter>, fonts: &Fonts, paints: &[Paint]) {
+    let mut runs = GlyphRuns::default();
+    for paint in paints {
+        match paint {
+            Paint::Fill(rect, color) => {
+                // What comes before a fill stays under it.
+                runs.draw(painter.as_mut());
+                painter
+                    .as_mut()
+                    .fill_rect(&QRectF::new(rect.x, rect.y, rect.width, rect.height), &qcolor(*color));
+            }
+            Paint::Shade(rect, color, alpha) => {
+                runs.draw(painter.as_mut());
+                let mut color = qcolor(*color);
+                color.set_alpha_f(f32::from(*alpha) / 255.0);
+                painter
+                    .as_mut()
+                    .fill_rect(&QRectF::new(rect.x, rect.y, rect.width, rect.height), &color);
+            }
+            Paint::Text {
+                x,
+                y,
+                text,
+                color,
+                font,
+            } => {
+                let slot = fonts.slot(*font);
+                if !runs.add(&painter, fonts, slot, text.as_str(), (*x, *y), *color) {
+                    painter.as_mut().set_font(fonts.get(slot));
+                    painter.as_mut().set_pen(&QPen::from(&qcolor(*color)));
+                    kde::rk_draw_text(painter.as_mut(), &QPointF::new(*x, *y), &QString::from(text.as_str()));
+                }
+            }
+        }
+    }
+    runs.draw(painter.as_mut());
 }
 
 #[cfg(test)]
