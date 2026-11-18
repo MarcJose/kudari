@@ -1459,6 +1459,24 @@ fn qcolor(rgb: Rgb) -> QColor {
     QColor::from_rgb(rgb.r.into(), rgb.g.into(), rgb.b.into())
 }
 
+/// For the GUI test: draw every text with `drawText` of its own instead of in runs of
+/// glyphs, as a reference to compare the runs with.
+#[cfg(feature = "test-hooks")]
+static REFERENCE_DRAWING: AtomicBool = AtomicBool::new(false);
+
+/// Draws the frames that follow as the reference of the GUI test, or as usual again.
+#[cfg(feature = "test-hooks")]
+pub fn set_reference_drawing(reference: bool) {
+    REFERENCE_DRAWING.store(reference, Ordering::Relaxed);
+}
+
+fn reference_drawing() -> bool {
+    #[cfg(feature = "test-hooks")]
+    return REFERENCE_DRAWING.load(Ordering::Relaxed);
+    #[cfg(not(feature = "test-hooks"))]
+    false
+}
+
 /// Draws the paints of a frame or of the cursor with the fonts of the terminal.
 fn draw(mut painter: Pin<&mut qobject::QPainter>, fonts: &Fonts, paints: &[Paint]) {
     let mut runs = GlyphRuns::default();
@@ -1487,7 +1505,7 @@ fn draw(mut painter: Pin<&mut qobject::QPainter>, fonts: &Fonts, paints: &[Paint
                 font,
             } => {
                 let slot = fonts.slot(*font);
-                if !runs.add(&painter, fonts, slot, text.as_str(), (*x, *y), *color) {
+                if reference_drawing() || !runs.add(&painter, fonts, slot, text.as_str(), (*x, *y), *color) {
                     painter.as_mut().set_font(fonts.get(slot));
                     painter.as_mut().set_pen(&QPen::from(&qcolor(*color)));
                     kde::rk_draw_text(painter.as_mut(), &QPointF::new(*x, *y), &QString::from(text.as_str()));

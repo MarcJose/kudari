@@ -68,6 +68,76 @@ cd "$work/home" || exit 2
 wayland-scanner client-header "$here/fake-input.xml" "$work/fake-input-client.h" || exit 2
 wayland-scanner private-code "$here/fake-input.xml" "$work/fake-input-code.c" || exit 2
 cc -O1 -I"$work" "$here/fake_input.c" "$work/fake-input-code.c" -lwayland-client -lm -o "$work/input" || exit 2
+# Reads an image without libraries: Qt writes PNG with 8 bits a channel and no interlacing.
+cat > "$work/pngread.py" <<'EOF'
+import struct
+import zlib
+
+
+def read(path):
+    """The width, the height, the channels and the rows of bytes of a PNG."""
+    data = open(path, "rb").read()
+    chunks, at = {}, 8
+    while at < len(data):
+        length, kind = struct.unpack(">I4s", data[at:at + 8])
+        chunks.setdefault(kind, []).append(data[at + 8:at + 8 + length])
+        at += 12 + length
+    width, height, depth, kind = struct.unpack(">IIBB", chunks[b"IHDR"][0][:10])
+    channels = {2: 3, 6: 4}[kind]
+    raw = zlib.decompress(b"".join(chunks[b"IDAT"]))
+    stride = width * channels
+    rows, previous = [], bytearray(stride)
+    for y in range(height):
+        line = raw[y * (stride + 1):(y + 1) * (stride + 1)]
+        kind_of_filter, row = line[0], bytearray(line[1:])
+        for x in range(stride):
+            left = row[x - channels] if x >= channels else 0
+            up = previous[x]
+            corner = previous[x - channels] if x >= channels else 0
+            if kind_of_filter == 1:
+                row[x] = (row[x] + left) & 255
+            elif kind_of_filter == 2:
+                row[x] = (row[x] + up) & 255
+            elif kind_of_filter == 3:
+                row[x] = (row[x] + (left + up) // 2) & 255
+            elif kind_of_filter == 4:
+                guess = left + up - corner
+                near = min((abs(guess - left), left), (abs(guess - up), up), (abs(guess - corner), corner))[1]
+                row[x] = (row[x] + near) & 255
+        rows.append(row)
+        previous = row
+    return width, height, channels, rows
+EOF
+# Compares two images of the same size: how many pixels differ, and by how much at most in a
+# channel; or why it cannot.
+cat > "$work/pixels.py" <<'EOF'
+import sys
+from pngread import read
+first, second = read(sys.argv[1]), read(sys.argv[2])
+if first[:3] != second[:3]:
+    print(f"sizes {first[:2]} and {second[:2]}")
+    sys.exit()
+width, height, channels, rows = first
+others = second[3]
+differ, most = 0, 0
+for row, other in zip(rows, others):
+    for x in range(0, width * channels, channels):
+        gap = max(abs(a - b) for a, b in zip(row[x:x + 3], other[x:x + 3]))
+        if gap:
+            differ += 1
+            most = max(most, gap)
+print(f"{differ} {most}")
+EOF
+# The output the pixel checks paint: colors of all kinds, the styles of text and of lines,
+# box drawing and shades, wide characters, an emoji and combining marks. The underscores reach
+# across their cells, where the line at a column crosses them.
+cat > "$work/catalogue" <<'EOF'
+printf '__________ WWWWWWWWWW\n'
+printf '\033[31mred\033[42mgreen\033[0m \033[38;5;208m208\033[48;5;19mon19\033[0m \033[38;2;200;120;40mtrue\033[0m\n'
+printf '\033[1mbold\033[0m \033[3mitalic\033[0m \033[2mdim\033[0m \033[7minverse\033[0m \033[9mstrike\033[0m\n'
+printf '\033[4msingle\033[0m \033[4:2mdouble\033[0m \033[4:3mcurly\033[0m \033[4:4mdotted\033[0m \033[4:5mdashed\033[0m\n'
+printf '─│┼╭╮╯╰ ═║╬ ░▒▓█ ▀▄ 日本語 🙂 e\314\201 ñ\n'
+EOF
 
 cat > "$work/data/applications/kudari-gui-test.desktop" <<DESKTOP
 [Desktop Entry]
@@ -693,6 +763,34 @@ input key 30; settle
 typed=$(paints "$first_terminal")
 input key 14; settle
 check "a typed key paints once" yes "$([ "$typed" -ge 1 ] && [ "$typed" -le 1 ] && echo yes || echo "no: $typed")"
+
+# The pixels of a terminal: drawn in runs of glyphs as they always are, against each text drawn
+# on its own; and what the window shows, from the image and the cursor in its scene graph,
+# against the same frame painted anew.
+paint_check() { # directory, what for
+    # The line at a column goes over the text: a fill after glyphs.
+    hook SetSetting VerticalLine 3; settle
+    run "clear; sh $work/catalogue"
+    settle
+    hook PaintTerminals "$1/paint"
+    settle
+    hook SetSetting VerticalLine 0; settle
+    runs="" shown=""
+    for painted in "$1"/paint-[0-9]*.png; do
+        case $painted in *-shown.png) continue ;; esac
+        terminal=${painted##*/paint-}
+        terminal=${terminal%.png}
+        # The same glyphs of the same font in the same places: not a pixel differs.
+        differ=$(cd "$work" && python3 pixels.py "$painted" "$1/paint-reference-$terminal.png")
+        [ "$differ" = "0 0" ] || runs="$runs $terminal: $differ"
+        differ=$(cd "$work" && python3 pixels.py "$painted" "${painted%.png}-shown.png")
+        [ "$differ" = "0 0" ] || shown="$shown $terminal: $differ"
+    done
+    check "$2, runs of glyphs draw what each text drawn on its own draws" "" "$runs"
+    check "$2, the window shows what a frame painted anew shows" "" "$shown"
+}
+mkdir -p "$work/pixels"
+paint_check "$work/pixels" "at 100 %"
 check "a terminal in a tab in the background has no size until it shows" "1 1 0" "$sizeless_in_background $sizeless_shown $sizeless_closed"
 run "clear"
 
@@ -1122,8 +1220,11 @@ check "quitting after the first start ends the program" no "$(kill -0 "$kudari" 
 # At a fractional scale, as 125 %, the cells measure whole pixels of the device: the lines of
 # tables are as thick in every cell, and as far apart. With a cell of 9 logical pixels, 11.25
 # of the device, they used to vary from column to column.
+# A window of 89 % gives the terminal a width that is no whole number of pixels of the device,
+# as 886 logical pixels make 1107.5: its image has to lie on whole pixels all the same, which
+# the pixels below compare.
 mkdir "$work/scaled"
-printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nKeepOpen=true\n[Terminal]\nFontSize=11\n[Security]\nAllowRemoteCommands=true\n' \
+printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nKeepOpen=true\nWidth=89\n[Terminal]\nFontSize=11\n[Security]\nAllowRemoteCommands=true\n' \
     > "$work/scaled/kudarirc"
 # It writes its counters once a second as well, as the bench reads them.
 KUDARI_STATS=1 QT_SCALE_FACTOR=1.25 XDG_CONFIG_HOME="$work/scaled" "$binary" > "$work/scaled.log" 2>&1 &
@@ -1133,46 +1234,6 @@ window toggleWindowState; sleep 1.5
 run "clear; printf '│%.0s' \$(seq 60); echo; for i in 1 2 3; do echo; printf '─%.0s' \$(seq 60); echo; done"
 sleep 1
 hook Grab "$work/scaled/grab"; sleep 1
-# Reads an image without libraries: Qt writes PNG with 8 bits a channel and no interlacing.
-cat > "$work/pngread.py" <<'EOF'
-import struct
-import zlib
-
-
-def read(path):
-    """The width, the height, the channels and the rows of bytes of a PNG."""
-    data = open(path, "rb").read()
-    chunks, at = {}, 8
-    while at < len(data):
-        length, kind = struct.unpack(">I4s", data[at:at + 8])
-        chunks.setdefault(kind, []).append(data[at + 8:at + 8 + length])
-        at += 12 + length
-    width, height, depth, kind = struct.unpack(">IIBB", chunks[b"IHDR"][0][:10])
-    channels = {2: 3, 6: 4}[kind]
-    raw = zlib.decompress(b"".join(chunks[b"IDAT"]))
-    stride = width * channels
-    rows, previous = [], bytearray(stride)
-    for y in range(height):
-        line = raw[y * (stride + 1):(y + 1) * (stride + 1)]
-        kind_of_filter, row = line[0], bytearray(line[1:])
-        for x in range(stride):
-            left = row[x - channels] if x >= channels else 0
-            up = previous[x]
-            corner = previous[x - channels] if x >= channels else 0
-            if kind_of_filter == 1:
-                row[x] = (row[x] + left) & 255
-            elif kind_of_filter == 2:
-                row[x] = (row[x] + up) & 255
-            elif kind_of_filter == 3:
-                row[x] = (row[x] + (left + up) // 2) & 255
-            elif kind_of_filter == 4:
-                guess = left + up - corner
-                near = min((abs(guess - left), left), (abs(guess - up), up), (abs(guess - corner), corner))[1]
-                row[x] = (row[x] + near) & 255
-        rows.append(row)
-        previous = row
-    return width, height, channels, rows
-EOF
 cat > "$work/lines" <<'EOF'
 import sys
 from pngread import read
@@ -1206,6 +1267,8 @@ print("even" if len(bars) == 60 and len(lines) == 3 and all(len(group) == 1 for 
 EOF
 check "at 125 %, the lines of tables are as thick and as far apart in every cell" even \
     "$(python3 "$work/lines" "$work"/scaled/grab-*.png 2>&1 | tail -n 1)"
+mkdir -p "$work/scaled/pixels"
+paint_check "$work/scaled/pixels" "at 125 %"
 
 # A translucent terminal replaces every pixel of its image with each frame, transparent ones
 # as well: Qt no longer clears the image first, so text that went away must not stay.
