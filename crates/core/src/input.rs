@@ -33,6 +33,12 @@ impl Modifiers {
         self.0 & other.0 != 0
     }
 
+    /// These without `other`.
+    #[must_use]
+    pub const fn without(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
+    }
+
     #[must_use]
     pub const fn is_empty(self) -> bool {
         self.0 == 0
@@ -317,6 +323,22 @@ fn carries_modifiers(key: Key) -> bool {
             | Key::PageDown
             | Key::Function(_)
     )
+}
+
+/// The character that `AltGr` typed, if it did. Windows has no modifier of its own for `AltGr`:
+/// Qt reports it as Ctrl and Alt held, with the text of the second level of the key, such as
+/// `~` for `AltGr` and `+` on a German keyboard. That text is no shortcut: it goes to the
+/// program as it is, without the Escape of Alt. A real Ctrl+Alt with a key types the key
+/// itself, or a control character, and stays a combination.
+#[must_use]
+pub fn altgr_text(modifiers: Modifiers, base: Option<char>, text: &str) -> Option<char> {
+    let mut characters = text.chars();
+    let (Some(character), None) = (characters.next(), characters.next()) else {
+        return None;
+    };
+    let typed_other = base.is_some_and(|base| !base.to_lowercase().eq(character.to_lowercase()));
+    (modifiers.contains(Modifiers::CONTROL | Modifiers::ALT) && !character.is_control() && typed_other)
+        .then_some(character)
 }
 
 /// What the program receives for a key that no key binding file took: the kitty protocol
@@ -736,6 +758,18 @@ mod tests {
         assert_eq!(key_bytes(plain, Key::Character('A'), SHIFT, "A").unwrap(), b"A");
         assert_eq!(key_bytes(plain, Key::Other, NONE, "ä").unwrap(), "ä".as_bytes());
         assert_eq!(key_bytes(plain, Key::Other, NONE, ""), None);
+        // AltGr on Windows comes as Ctrl and Alt with the character it types.
+        assert_eq!(altgr_text(ALT | CONTROL, Some('+'), "~"), Some('~'));
+        assert_eq!(altgr_text(ALT | CONTROL, Some('e'), "€"), Some('€'));
+        // Not when the key types itself, a control character, more or no text, or Ctrl or
+        // Alt is missing; nor without the base key to tell.
+        assert_eq!(altgr_text(ALT | CONTROL, Some('a'), "A"), None);
+        assert_eq!(altgr_text(ALT | CONTROL, Some('a'), "\x01"), None);
+        assert_eq!(altgr_text(ALT | CONTROL, Some('+'), "~~"), None);
+        assert_eq!(altgr_text(ALT | CONTROL, Some('+'), ""), None);
+        assert_eq!(altgr_text(ALT, Some('+'), "~"), None);
+        assert_eq!(altgr_text(CONTROL, Some('+'), "~"), None);
+        assert_eq!(altgr_text(ALT | CONTROL, None, "~"), None);
         // Alt sends Escape first, unless the sequence holds the modifiers itself.
         assert_eq!(key_bytes(plain, Key::Character('B'), ALT, "b").unwrap(), b"\x1bb");
         assert_eq!(key_bytes(plain, Key::Up, ALT, "").unwrap(), b"\x1b[1;3A");
