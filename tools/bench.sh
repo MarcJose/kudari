@@ -5,8 +5,8 @@
 # each frame meanwhile, to compare terminals and a change to the drawing before and after:
 #
 #   tools/bench.sh [--binary PATH] [--runs N] [--warmup N] [--seed N] [--loads LOAD,...]
-#                  [--set GROUP.KEY=VALUE] [--scale N] [--detail] [--keep] [--keep-env]
-#                  [TERMINAL...]
+#                  [--set GROUP.KEY=VALUE] [--scale N] [--detail] [--scenarios] [--perf]
+#                  [--keep] [--keep-env] [TERMINAL...]
 #
 # The terminals are kudari, yakuake, konsole, alacritty, kitty, ghostty, contour and xterm;
 # without any, every one of them that is installed. Kudari is the installed one, or else the
@@ -24,7 +24,12 @@
 # for the CPU time and the wakeups of a terminal that waits. --set gives Kudari a setting
 # for the measurement, such as --set Terminal.BlinkingCursor=true, once for each. --scale
 # scales the screen as for a HiDPI display, and --keep keeps the data and the logs of the
-# terminals.
+# terminals. --scenarios measures Kudari alone instead of the loads: its start and its
+# phases, showing the window, a second start and --version, CPU time, wakeups and frames
+# while it waits in eight situations, and its memory with 1, 5 and 10 tabs; see
+# tools/bench-scenarios.sh. --perf samples Kudari with perf during the loads and keeps the
+# data; the report gives the command of perf report for each load. A build of the profile
+# profiling names the functions; CONTRIBUTING.md tells how to build one.
 #
 # The report starts with what was measured on what: the build of Kudari with its hash and
 # origin, the processor and its clock, the versions of Qt, KWin and Mesa. It warns about a
@@ -56,10 +61,13 @@ if [ "${KUDARI_BENCH_ROLE:-}" = workload ]; then
     python3 "$tools/bench.py" frames "$KUDARI_BENCH_WORK" "$rows" "$cols"
     echo "size $rows $cols" > "$KUDARI_BENCH_OUT"
     clear
+    # The clock of perf, for perf report --time.
+    monotonic() { python3 -c 'import time; print(f"{time.clock_gettime(time.CLOCK_MONOTONIC):.6f}")'; }
     for load in $KUDARI_BENCH_LOADS; do
         sleep 1
         # The CPU time of the threads of the terminal, just outside the time of the load.
         python3 "$tools/bench.py" cpu "$KUDARI_BENCH_CPU" "$terminal_pid" "$load" start
+        [ -z "${KUDARI_BENCH_PERF:-}" ] || first=$(monotonic)
         start=$(stamp)
         case $load in
             frames) cat "$KUDARI_BENCH_WORK/frames-${rows}x$cols.txt" ;;
@@ -68,6 +76,7 @@ if [ "${KUDARI_BENCH_ROLE:-}" = workload ]; then
             *) cat "$KUDARI_BENCH_WORK/$load.txt" ;;
         esac
         end=$(stamp)
+        [ -z "${KUDARI_BENCH_PERF:-}" ] || echo "$load $first $(monotonic)" >> "${KUDARI_BENCH_OUT%.txt}.perf"
         python3 "$tools/bench.py" cpu "$KUDARI_BENCH_CPU" "$terminal_pid" "$load" end
         sleep 1
         echo "$load $start $end" >> "$KUDARI_BENCH_OUT"
@@ -79,6 +88,9 @@ fi
 
 # As the session of the virtual KWin, which gives it WAYLAND_DISPLAY and DISPLAY: starts each
 # terminal in turn and waits for its loads. Messages go to progress.log, failures to failed.
+if [ "${KUDARI_BENCH_ROLE:-}" = session ] && [ -n "${KUDARI_BENCH_SCENARIOS:-}" ]; then
+    exec "$tools/bench-scenarios.sh"
+fi
 if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
     work=$KUDARI_BENCH_WORK
     say() { echo "$*" >> "$work/progress.log"; }
@@ -136,10 +148,27 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
                     cat "$work/kudarirc-settings" >> "$XDG_CONFIG_HOME/kudarirc"
                     # The frame times of Qt Quick, with the time of day to match them to the loads,
                     # and in a build with the feature stats its counters ten times a second.
+                    # With --perf, perf starts Kudari as its child and samples it: no rights to
+                    # trace another process are needed, and only the cycles and the calls in
+                    # user space count, which perf_event_paranoid 2 allows.
+                    profiler=
+                    [ -z "$KUDARI_BENCH_PERF" ] ||
+                        profiler="perf record -q -k monotonic -e cycles:u -F 4999 --call-graph fp --user-callchains -o $work/perf-$terminal-$run.data --"
+                    # shellcheck disable=SC2086 # the profiler is words of its own, or none
                     SHELL=$shell QSG_RENDER_TIMING=1 KUDARI_STATS=1 KUDARI_STATS_MS=100 \
                         QT_MESSAGE_PATTERN='%{time yyyy-MM-ddTHH:mm:ss.zzz} %{category} %{message}' \
-                        "$KUDARI_BENCH_BINARY" > "$log" 2>&1 &
+                        $profiler "$KUDARI_BENCH_BINARY" > "$log" 2>&1 &
                     pid=$!
+                    if [ -n "$KUDARI_BENCH_PERF" ]; then
+                        # Kudari itself, which owns the name on the bus and whose threads count.
+                        profiler=$pid
+                        tries=0
+                        until pid=$(pgrep -P "$profiler" | head -n 1) && [ -n "$pid" ]; do
+                            tries=$((tries + 1))
+                            [ "$tries" -lt 100 ] || fail "perf did not start Kudari; see $log"
+                            sleep 0.1
+                        done
+                    fi
                     on_bus io.github.marcjose.kudari
                     qdbus6 io.github.marcjose.kudari /kudari/window io.github.marcjose.kudari.toggleWindowState > /dev/null ||
                         fail "could not open $terminal; see $log"
@@ -178,6 +207,10 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
             done
             kill "$pid" 2> /dev/null || true
             wait "$pid" 2> /dev/null || true
+            # perf writes its data once Kudari has ended.
+            if [ "$terminal" = kudari ] && [ -n "$KUDARI_BENCH_PERF" ]; then
+                wait "$profiler" 2> /dev/null || true
+            fi
             sleep 1
         done
         round=$((round + 1))
@@ -196,6 +229,8 @@ warmup=1
 settings=
 seed=
 detail=
+perf=
+scenarios=
 terminals=
 while [ $# -gt 0 ]; do
     case $1 in
@@ -214,6 +249,8 @@ while [ $# -gt 0 ]; do
         --warmup) warmup=$2; shift 2 ;;
         --seed) seed=$2; shift 2 ;;
         --detail) detail=1; shift ;;
+        --scenarios) scenarios=1; shift ;;
+        --perf) perf=1 keep=1; shift ;;
         --set)
             case $2 in
                 [A-Za-z]*.[A-Za-z]*=*) ;;
@@ -223,11 +260,11 @@ while [ $# -gt 0 ]; do
             settings="$settings$(printf '\n%s' "$2")"
             shift 2
             ;;
-        -h | --help) sed -n '4,41s/^# \{0,1\}//p' "$0"; exit 0 ;;
+        -h | --help) sed -n '4,/^[^#]/s/^# \{0,1\}//p' "$0"; exit 0 ;;
         *)
             case " $all " in
                 *" $1 "*) terminals="$terminals $1"; shift ;;
-                *) die "usage: tools/bench.sh [--binary PATH] [--runs N] [--warmup N] [--seed N] [--loads LOAD,...] [--scale N] [--detail] [--keep] [--keep-env] [TERMINAL...]; the terminals are: $all" ;;
+                *) die "usage: tools/bench.sh [--binary PATH] [--runs N] [--warmup N] [--seed N] [--loads LOAD,...] [--scale N] [--detail] [--scenarios] [--perf] [--keep] [--keep-env] [TERMINAL...]; the terminals are: $all" ;;
             esac
             ;;
     esac
@@ -258,6 +295,11 @@ for terminal in $terminals; do
     fi
 done
 [ -n "$terminals" ] || die "none of the terminals is installed: $all"
+if [ -n "$scenarios" ]; then
+    case $terminals in " kudari") ;; *) [ -z "$terminals" ] || echo "bench: --scenarios measures Kudari only" >&2 ;; esac
+    [ -x "$binary" ] || die "no Kudari at $binary; install it, build it with cargo build --release, or name one with --binary"
+    terminals=" kudari"
+fi
 
 # Outside: a D-Bus session of its own, which ends with the measurement.
 if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
@@ -265,6 +307,8 @@ if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
         command -v "$program" > /dev/null || die "needs $program"
     done
     [ "$scale" = 1 ] || command -v kscreen-doctor > /dev/null || die "--scale needs kscreen-doctor"
+    [ -z "$perf" ] || command -v perf > /dev/null || die "--perf needs perf"
+    [ -z "$perf" ] || [ -z "$scenarios" ] || die "--perf profiles the loads, not the scenarios"
     # Some 400 MB of data and logs, kept only when the measurement fails.
     work=$(mktemp -d "${TMPDIR:-/tmp}/kudari-bench.XXXXXX")
     trap 'rm -rf "$work"; exit 1' INT TERM
@@ -296,9 +340,13 @@ if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
     if env -u WAYLAND_DISPLAY -u DISPLAY -u QSG_RENDER_LOOP -u QT_QUICK_BACKEND -u QSG_RHI_BACKEND $unset_variables \
         XDG_CONFIG_HOME=/nonexistent XDG_DATA_HOME=/nonexistent KUDARI_BENCH_WORK="$work" \
         dbus-run-session -- "$0" --binary "$binary" --runs "$runs" --warmup "$warmup" --seed "$seed" --scale "$scale" \
-        --loads "$(echo $loads | tr " " ",")" $terminals \
+        --loads "$(echo $loads | tr " " ",")" ${scenarios:+--scenarios} ${perf:+--perf} $terminals \
         < /dev/null 3>&2 2> "$work/dbus.log"; then
-        python3 "$tools/bench.py" report "$work" $terminals ${detail:+--detail}
+        if [ -n "$scenarios" ]; then
+            python3 "$tools/bench.py" scenarios "$work"
+        else
+            python3 "$tools/bench.py" report "$work" $terminals ${detail:+--detail}
+        fi
         if [ -n "$keep" ]; then echo "The data and the logs are in $work"; else rm -rf "$work"; fi
     else
         die "the measurement failed; its files are in $work"
@@ -323,6 +371,7 @@ printf '[General]\ncount=1\nrules=1\n\n[1]\nDescription=full screen\nfullscreen=
 export QT_QPA_PLATFORM=wayland QT_FORCE_STDERR_LOGGING=1
 export KUDARI_BENCH_RUNS="$runs" KUDARI_BENCH_TERMINALS="$terminals" KUDARI_BENCH_BINARY="$binary"
 export KUDARI_BENCH_LOADS="$loads" KUDARI_BENCH_SCALE="$scale" KUDARI_BENCH_WARMUP="$warmup" KUDARI_BENCH_SEED="$seed"
+export KUDARI_BENCH_SCENARIOS="$scenarios" KUDARI_BENCH_PERF="$perf"
 : > "$work/progress.log"
 tail -f "$work/progress.log" &
 progress=$!

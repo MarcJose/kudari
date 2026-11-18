@@ -680,6 +680,7 @@ impl qobject::Controller {
 
     fn start(self: Pin<&mut Self>) {
         self.update(App::start);
+        kudari_core::timing::mark("started");
         // What came before runs after the start, on the next turn of the event loop.
         let mut waiting = WAITING.lock().unwrap_or_else(PoisonError::into_inner);
         waiting.started = true;
@@ -1147,6 +1148,7 @@ impl qobject::Controller {
 
     /// `MainWindow::_toggleWindowState` for Wayland, where the compositor animates.
     pub fn toggle_window(self: Pin<&mut Self>) {
+        kudari_core::timing::mark("toggle");
         let has_focus = Terminals.has_focus();
         self.update(|app| app.toggle_window(has_focus));
     }

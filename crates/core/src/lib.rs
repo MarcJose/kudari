@@ -37,5 +37,6 @@ pub mod shells;
 pub mod stats;
 pub mod terminal;
 pub mod theme;
+pub mod timing;
 pub mod title;
 pub mod view;

@@ -10,6 +10,7 @@
     tools/bench.py cpu FILE PID LOAD WHEN   adds the CPU time of each thread of PID to FILE
     tools/bench.py report DIR [TERMINAL...]  the runs in DIR, in the order of the terminals;
                                             --detail adds the times of the frames in detail
+    tools/bench.py scenarios DIR            the runs of tools/bench.sh --scenarios in DIR
 
 The data comes from a fixed seed, so every run gets the same. For Kudari, the report also
 counts the frames that Qt Quick drew during each load and how long it took to prepare them
@@ -684,6 +685,27 @@ def counters(terminal, measured):
     table(["load", "wakeups/s", "refreshes/s", "paints/s", "lock wait p95", "lock hold p95", "queue p95", "build µs", "draw µs"], rows)
 
 
+def profiles(directory):
+    """For a run with --perf: the command of `perf report` for each load of each run, by the
+    times of its start and end on the clock of `perf`."""
+    found = []
+    for path in sorted(directory.glob("*-*.perf")):
+        terminal, run = path.stem.rsplit("-", 1)
+        data = directory / f"perf-{terminal}-{run}.data"
+        if not run.isdigit() or not data.exists():
+            continue
+        for line in path.read_text().splitlines():
+            parts = line.split()
+            if len(parts) == 3:
+                found.append((terminal, run, parts[0], f"perf report -i {data} --time {parts[1]},{parts[2]} --sort comm,dso,sym"))
+    if not found:
+        return
+    print("\nProfiles of perf, one for each load of each run; --sort sym --comm 'PTY reader' and the like")
+    print("show one thread, and perf report --no-children shows where the time itself goes.")
+    for terminal, run, load, command in found:
+        print(f"{terminal} run {run}, {load}: {command}")
+
+
 def ranged(whole, width):
     """Whole milliseconds cut off, `width` of them added up, as the range they stand for."""
     return milliseconds(whole) if width == 1 else f"{whole}-{whole + width}"
@@ -725,11 +747,143 @@ def report(directory, order, detail=False):
         if any(measured.frames for _, (_, result, _) in runs[terminal] for measured in result.values()):
             drawing(terminal, runs[terminal], detail)
         counters(terminal, runs[terminal])
+    profiles(directory)
+
+# The scenarios of `tools/bench.sh --scenarios` that wait, in the order of the report, with
+# what each of them shows.
+WAITING = (
+    ("never-shown", "started, the window never shown"),
+    ("shown", "shown, nothing happens"),
+    ("hidden", "hidden after it was shown"),
+    ("blinking", "shown, with a blinking cursor"),
+    ("rested", "the blinking cursor after 15 s, at rest"),
+    ("fading", "shown, with a fading cursor"),
+    ("output-behind", "ten lines a second in a tab in the background"),
+    ("output-hidden", "the same, with the window hidden"),
+)
+MEMORY = (("memory-1", "1 tab"), ("memory-5", "5 tabs"), ("memory-10", "10 tabs"), ("memory-closed", "closed to 1"))
+# The phases that Kudari marks through KUDARI_TIMING while it starts, in their order: the
+# controller starts its first session while QML loads.
+PHASES = ("main", "application", "bus", "started", "qml", "ready")
+TIMING = re.compile(r"^kudari-timing (\S+) (\d+(?:\.\d+)?)$")
+
+
+def scenario_run(directory, run):
+    """One run of the scenarios: its events by kind and name, the frames and the marks of each
+    Kudari by name, and what the samples of its threads found, by scenario."""
+    events = {}
+    for line in (directory / f"events-{run}.txt").read_text().splitlines():
+        parts = line.split()
+        if len(parts) == 3:
+            events.setdefault((parts[0], parts[1]), []).append(float(parts[2]))
+    drawn, marks, used, woken, memory = {}, {}, {}, {}, {}
+    for log in directory.glob(f"*-{run}.log"):
+        name = log.stem.rsplit("-", 1)[0]
+        for line in log.read_text(errors="replace").splitlines():
+            if found := frame(line):
+                drawn.setdefault(name, []).append(found.time)
+            elif found := TIMING.match(line):
+                marks.setdefault(name, []).append((found[1], float(found[2])))
+    for path in directory.glob(f"*-{run}.cpu"):
+        taken, switched, after = threads(path)
+        used.update(taken)
+        woken.update(switched)
+        memory.update(after)
+    return events, drawn, marks, used, woken, memory
+
+
+def first_after(times, moment, within=2.0):
+    """The first of `times` after `moment` and within `within` seconds of it, or None."""
+    later = [time for time in times if moment <= time <= moment + within]
+    return min(later) if later else None
+
+
+def summary(values, unit=1000):
+    """Median, the value below which 95 % lie, and the largest of the values, in milliseconds."""
+    if not values:
+        return ["-", "-", "-", "0"]
+    shown = [f"{value * unit:.1f}" for value in (statistics.median(values), percentile(values, 0.95), max(values))]
+    return shown + [str(len(values))]
+
+
+def scenarios(directory):
+    """The report of `tools/bench.sh --scenarios`."""
+    head = directory / "environment.txt"
+    if head.exists():
+        print()
+        print(head.read_text(), end="")
+    runs = sorted((path.stem.split("-", 1)[1] for path in directory.glob("events-*.txt")), key=lambda run: (not run.isdigit(), run))
+    runs = [run for run in runs if run.isdigit()]
+    if not runs:
+        print("\nNo run of the scenarios finished; the logs of Kudari tell why.")
+        return
+    starts, phases, first_shows, shows, toggles, seconds, versions = [], {}, [], [], [], [], []
+    waiting, memory = {}, {}
+    for run in runs:
+        events, drawn, marks, used, woken, sizes = scenario_run(directory, run)
+        spawn = events.get(("spawn", "main"), [None])[0]
+        bus = events.get(("bus", "main"), [None])[0]
+        if spawn is not None and bus is not None:
+            frame_at = first_after(drawn.get("main", []), spawn, within=30)
+            starts.append((bus - spawn, frame_at - spawn if frame_at else None))
+            for phase, moment in marks.get("main", []):
+                if phase in PHASES:
+                    phases.setdefault(phase, []).append(moment - spawn)
+        for name, into in (("hidden", first_shows), ("main", shows)):
+            for moment in events.get(("show", name), []):
+                if (found := first_after(drawn.get(name, []), moment)) is not None:
+                    into.append(found - moment)
+                toggled = first_after([time for phase, time in marks.get(name, []) if phase == "toggle"], moment)
+                if toggled is not None:
+                    toggles.append(toggled - moment)
+        for kind, into in (("second", seconds), ("version", versions)):
+            into.extend(end - start for start, end in zip(events.get((f"{kind}-start", "main"), []), events.get((f"{kind}-end", "main"), []), strict=False))
+        for scenario, _ in WAITING:
+            start = events.get(("idle", scenario), [None])[0]
+            end = events.get(("idle-end", scenario), [None])[0]
+            if start is None or end is None or scenario not in used:
+                continue
+            length = end - start
+            frames_meanwhile = sum(start <= time <= end for times in drawn.values() for time in times)
+            waiting.setdefault(scenario, []).append((sum(used[scenario].values()) / length, sum((woken.get(scenario) or {}).values()) / length, frames_meanwhile / length))
+        for label, _ in MEMORY:
+            if label in sizes:
+                memory.setdefault(label, []).append(sizes[label])
+    print(f"\n{len(runs)} runs of the scenarios.")
+    print("\nStart: from the start of the process, in ms; median and the slowest run.")
+    rows = [["name on the bus", *ranges([bus for bus, _ in starts])], ["first frame", *ranges([shown for _, shown in starts if shown is not None])]]
+    rows += [[f"phase {phase}", *ranges(phases[phase])] for phase in PHASES if phase in phases]
+    table(["", "median", "slowest", "runs"], rows)
+    print("\nShowing the window: from toggleWindowState over D-Bus to the next frame, and to the")
+    print("call reaching Kudari, in ms.")
+    table(["", "median", "p95", "max", "times"], [["first time", *summary(first_shows)], ["the times after", *summary(shows)], ["call received", *summary(toggles)]])
+    print("\nA second start, which only toggles the running Kudari, and kudari --version, to their end, in ms.")
+    table(["", "median", "p95", "max", "times"], [["second start", *summary(seconds)], ["--version", *summary(versions)]])
+    print("\nWaiting, ten seconds each: CPU time of all threads, how often they went to sleep or were")
+    print("put aside, and the frames that Qt Quick drew; the median of the runs.")
+    rows = []
+    for scenario, description in WAITING:
+        if found := waiting.get(scenario):
+            rows.append([description, f"{statistics.median(cpu for cpu, _, _ in found):.2f}", f"{statistics.median(wakeups for _, wakeups, _ in found):.0f}", f"{statistics.median(frames for _, _, frames in found):.1f}"])
+    table(["", "CPU ms/s", "wakeups/s", "frames/s"], rows)
+    print("\nMemory in MB, median of the runs: private, resident (RSS) and proportional (PSS).")
+    rows = []
+    for label, description in MEMORY:
+        if found := memory.get(label):
+            rows.append([description, *(f"{statistics.median(size[index] for size in found) / 1024:.0f}" for index in (2, 0, 1))])
+    table(["", "private", "RSS", "PSS"], rows)
+
+
+def ranges(values):
+    """Median and largest of the values, in milliseconds, and how many there are."""
+    if not values:
+        return ["-", "-", "0"]
+    return [f"{statistics.median(values) * 1000:.1f}", f"{max(values) * 1000:.1f}", str(len(values))]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("action", choices=("data", "frames", "environment", "order", "cpu", "report"))
+    parser.add_argument("action", choices=("data", "frames", "environment", "order", "cpu", "report", "scenarios"))
     parser.add_argument("directory", type=Path)
     parser.add_argument("rest", nargs="*", help="rows and columns for frames, the Kudari measured for environment, terminals for report")
     parser.add_argument("--local", help="for environment: the release build of the checkout, to warn when it is newer")
@@ -760,6 +914,8 @@ def main():
         if len(arguments.rest) != 2 or not all(part.isdigit() for part in arguments.rest):
             parser.error("frames needs the rows and the columns")
         frames(arguments.directory, *map(int, arguments.rest))
+    elif arguments.action == "scenarios":
+        scenarios(arguments.directory)
     else:
         report(arguments.directory, arguments.rest, arguments.detail)
 
