@@ -114,10 +114,16 @@ const NOTCH_LINES: f64 = 3.0;
 /// does not start at the top does while the view is scrolled back, and the cursor of the
 /// selection mode in history that is gone, after a switch to the alternate screen or a
 /// smaller history. A frame or a look at a cell there would read past the grid and end
-/// Kudari with all its terminals. Only the view moves, never the content; a selection made
-/// with a cursor out of place goes. Whether anything was out of place.
+/// Kudari with all its terminals. The view moves; a selection made with a cursor out of
+/// place goes.
+///
+/// It also takes out the spacer of a wide character that DCH leaves in column 0 without the
+/// character before it: the emulator steps one cell back from such a spacer, which from
+/// column 0 hides the cursor, loses text from a copy, and ends Kudari with a move of the
+/// cursor of the selection mode. The spacer becomes an empty cell, which it shows anyway.
+/// Whether anything was out of place.
 pub fn repair_view<T>(term: &mut Term<T>) -> bool {
-    let mut repaired = false;
+    let mut repaired = repair_spacers(term);
     if term.grid().display_offset() > term.grid().history_size() {
         // Scrolling by nothing keeps the view within the history.
         term.grid_mut().scroll_display(Scroll::Delta(0));
@@ -129,6 +135,39 @@ pub fn repair_view<T>(term: &mut Term<T>) -> bool {
         term.vi_mode_cursor.point = within;
         term.selection = None;
         repaired = true;
+    }
+    repaired
+}
+
+/// Takes out spacers of wide characters in column 0 in the lines of the screen, those that
+/// show, the line of the cursor of the selection mode and the ends of the selection; see
+/// [`repair_view`]. A spacer deeper in the history stays until one of these reaches it.
+fn repair_spacers<T>(term: &mut Term<T>) -> bool {
+    let (top, bottom) = (term.topmost_line().0, term.bottommost_line().0);
+    let mut repaired = false;
+    let mut repair = |term: &mut Term<T>, line: i32| {
+        if !(top..=bottom).contains(&line) {
+            return;
+        }
+        let cell = &mut term.grid_mut()[Line(line)][Column(0)];
+        if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+            cell.flags.remove(Flags::WIDE_CHAR_SPACER);
+            cell.c = ' ';
+            repaired = true;
+        }
+    };
+    // The lines that output writes to, and those that show while the view is scrolled back.
+    let (lines, offset) = (term.screen_lines() as i32, term.grid().display_offset() as i32);
+    for line in 0..lines {
+        repair(term, line);
+    }
+    for line in -offset..(lines - offset).min(0) {
+        repair(term, line);
+    }
+    repair(term, term.vi_mode_cursor.point.line.0);
+    if let Some(range) = term.selection.as_ref().and_then(|selection| selection.to_range(term)) {
+        repair(term, range.start.line.0);
+        repair(term, range.end.line.0);
     }
     repaired
 }
@@ -1862,6 +1901,44 @@ mod tests {
         assert!(repair_view(&mut term));
         assert!(term.vi_mode_cursor.point.line >= term.topmost_line());
         assert_eq!(read_view(&term), 50);
+    }
+
+    #[test]
+    fn deleting_half_of_a_wide_character_leaves_a_terminal_that_works() {
+        // DCH on the first half of a wide character in column 0 leaves its spacer there.
+        let mut term = term_of(10, "界x\r\x1b[P");
+        assert!(term.grid()[Line(0)][Column(0)].flags.contains(Flags::WIDE_CHAR_SPACER));
+        assert!(repair_view(&mut term));
+        assert!(!term.grid()[Line(0)][Column(0)].flags.contains(Flags::WIDE_CHAR_SPACER));
+        // The cursor shows where it is, a copy keeps the rest of the line, and the cursor of
+        // the selection mode moves from there.
+        assert_eq!(term.renderable_content().cursor.point, Point::new(Line(0), Column(0)));
+        select_all(&mut term);
+        assert_eq!(
+            selected_text(&term, &Options::default()).map(|text| text.trim().to_string()),
+            Some("x".to_string())
+        );
+        // One scrolled into the history is taken out once the view shows it.
+        let mut scrolled = term_of(10, "界x\r\x1b[P\r\n\n\n\n\n\n");
+        let line = -(scrolled.grid().history_size() as i32);
+        assert!(
+            line < 0
+                && scrolled.grid()[Line(line)][Column(0)]
+                    .flags
+                    .contains(Flags::WIDE_CHAR_SPACER)
+        );
+        scrolled.scroll_display(Scroll::Top);
+        assert!(repair_view(&mut scrolled));
+        assert!(
+            !scrolled.grid()[Line(line)][Column(0)]
+                .flags
+                .contains(Flags::WIDE_CHAR_SPACER)
+        );
+        term.selection = None;
+        toggle_selection_mode(&mut term);
+        term.vi_motion(ViMotion::Left);
+        assert!(!repair_view(&mut term));
+        assert_eq!(term.vi_mode_cursor.point.column, Column(0));
     }
 
     #[test]
