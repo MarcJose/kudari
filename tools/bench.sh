@@ -49,9 +49,9 @@
 # D-Bus and with settings of their own, so the desktop and its settings stay out of it. The
 # loads are plain text, text in 256 colors, wide characters, emoji and combining marks, 300
 # full screens with colors of their own in every cell, as a busy program draws them, 300 of
-# panels framed in lines with bars of blocks and graphs of braille, as system monitors draw them, and
-# the numbers up to 2,000,000. Kudari draws lines and blocks itself, and braille with the
-# font unless --set Terminal.FontBrailleCharacters=false. A load is timed
+# panels framed in lines with bars of blocks and graphs of braille, as system monitors draw
+# them, and the numbers up to 2,000,000. Kudari draws lines and blocks itself, and braille
+# with the font unless --set Terminal.FontBrailleCharacters=false. A load is timed
 # on the monotonic clock from its first byte to the answer of the terminal to a query of the
 # cursor (DSR) after its last, when the terminal has read and parsed all of it; the report
 # gives that query alone and how long each terminal still worked after the last byte. Each
