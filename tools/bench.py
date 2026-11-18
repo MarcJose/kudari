@@ -8,11 +8,16 @@
     tools/bench.py environment DIR [BINARY] what was measured, on what, and how
     tools/bench.py order RUN TERMINAL...    the terminals in the order of a run, with --seed
     tools/bench.py cpu FILE PID LOAD WHEN   adds the CPU time of each thread of PID to FILE
+    tools/bench.py workload DIR             as the shell of a terminal under test: runs the loads
+                                            of KUDARI_BENCH_LOADS and times each of them
     tools/bench.py report DIR [TERMINAL...]  the runs in DIR, in the order of the terminals;
                                             --detail adds the times of the frames in detail
     tools/bench.py scenarios DIR            the runs of tools/bench.sh --scenarios in DIR
 
-The data comes from a fixed seed, so every run gets the same. For Kudari, the report also
+The data comes from a fixed seed, so every run gets the same. The loads are timed on the
+monotonic clock, from their first byte to the answer of the terminal to a query of the cursor
+(DSR) after their last: only then has the terminal read and parsed all of a load, which a
+terminal with a large buffer would otherwise seem to be quicker at. For Kudari, the report also
 counts the frames that Qt Quick drew during each load and how long it took to prepare them
 ("sync"), which is where a QQuickPaintedItem paints.
 """
@@ -26,8 +31,12 @@ import os
 import platform
 import random
 import re
+import select
 import statistics
 import subprocess
+import sys
+import termios
+import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -43,19 +52,26 @@ DESCRIPTIONS = {
 }
 SEQ_BYTES = sum(len(f"{n}\n") for n in range(1, 2_000_001))
 # The line of a frame in the log of Qt Quick, from each of its render loops: threaded, basic
-# and software. Qt gives whole milliseconds there, cut off.
+# and software. Qt gives whole milliseconds there, cut off. The time in front is the monotonic
+# clock in seconds (`%{time boot}`, which Qt pads with spaces), or in older runs the time of day.
 FRAME = re.compile(
-    r"^(\S+) (?:.*\[(render|gui) thread[^\]]*\].*[Ff]rame rendered|.*Frame rendered with '(\w+)' renderloop) "
+    r"^\s*(\S+) (?:.*\[(render|gui) thread[^\]]*\].*[Ff]rame rendered|.*Frame rendered with '(\w+)' renderloop) "
     r"in (\d+)ms, (?:polish=\d+, )?sync=(\d+), render=(\d+), swap=(\d+)"
 )
 # What the GUI thread did for a frame of the threaded render loop, also in whole milliseconds.
-PREPARED = re.compile(r"^(\S+) .*\[gui thread\] Frame prepared, .*blockedForSync=(\d+) ms")
+PREPARED = re.compile(r"^\s*(\S+) .*\[gui thread\] Frame prepared, .*blockedForSync=(\d+) ms")
 # A line of the counters of a build with the feature stats: the seconds since 1970 and JSON.
 STATS = re.compile(r"^kudari-stats (\d+(?:\.\d+)?) (\{.*\})$")
 # The counted times of the counters, as they name them and as the report does.
 TIMED = (("lock_wait", "lock wait"), ("lock_hold", "lock hold"), ("queue", "queue"), ("frame_build", "build"), ("frame_draw", "draw"))
 # A frame shows the output a moment after it arrived: frames this long after a load count.
 TAIL = 0.05
+# Bytes written at a time, as `cat` does.
+BLOCK = 128 * 1024
+# How long the driver waits for the answer of a terminal to a query of the cursor, in seconds.
+ANSWER = 5.0
+# Round trips of that query without output, before the loads.
+ROUND_TRIPS = 100
 # A gap between two frames this long, in milliseconds, left out one at 60 Hz.
 LATE = 1.5 * 1000 / 60
 # The time a frame has at a refresh rate, in milliseconds.
@@ -89,6 +105,10 @@ class Load(NamedTuple):
     memory: tuple | None = None
     # What the counters of a build with the feature stats counted meanwhile; or None.
     counters: dict | None = None
+    # Seconds from the last byte written to the answer of the terminal; None in older runs.
+    backlog: float | None = None
+    # Whether the terminal answered; if not, the load ended with its last byte.
+    answered: bool = True
 
 
 def cpu(path, pid, load, moment):
@@ -113,6 +133,104 @@ def cpu(path, pid, load, moment):
         lines.append(f"{load}\tmemory\t{sizes.get('Rss', 0)}\t{sizes.get('Pss', 0)}\t{private}\n")
     with open(path, "a") as file:
         file.writelines(lines)
+
+
+def monotonic():
+    return time.clock_gettime(time.CLOCK_MONOTONIC)
+
+
+def write_all(descriptor, path):
+    """Writes the file to the descriptor in blocks, as `cat` does."""
+    with open(path, "rb") as source:
+        while block := source.read(BLOCK):
+            view = memoryview(block)
+            while view:
+                view = view[os.write(descriptor, view) :]
+
+
+def answer(reader, writer, wait=ANSWER):
+    """Asks the terminal for the place of its cursor (DSR) and waits for the answer, ESC [ row ;
+    column R: the time it came, or None after `wait` seconds. The input must not be canonical."""
+    termios.tcflush(reader, termios.TCIFLUSH)
+    os.write(writer, b"\x1b[6n")
+    deadline = monotonic() + wait
+    got = b""
+    while not re.search(rb"\x1b\[\d+;\d+R", got):
+        left = deadline - monotonic()
+        if left <= 0 or not select.select([reader], [], [], left)[0]:
+            return None
+        got += os.read(reader, 64)
+    return monotonic()
+
+
+def round_trips(reader, writer, count=ROUND_TRIPS):
+    """The seconds of `count` queries of the cursor and their answers, without output; those
+    without an answer are left out."""
+    taken = []
+    for _ in range(count):
+        asked = monotonic()
+        answered = answer(reader, writer, wait=1.0)
+        if answered is not None:
+            taken.append(answered - asked)
+    return taken
+
+
+def workload(directory, environment):
+    """As the shell of a terminal under test: waits for the window, then runs and times each
+    load, and writes a line for each to KUDARI_BENCH_OUT. Only echo and the canonical input of
+    the terminal are switched off, for the answers; the output goes out as it would, so that
+    a new line is still a carriage return and a line feed."""
+    out, loads = Path(environment["KUDARI_BENCH_OUT"]), environment["KUDARI_BENCH_LOADS"].split()
+    usage, profiled = environment["KUDARI_BENCH_CPU"], environment.get("KUDARI_BENCH_PERF")
+    while not (directory / "go").exists():
+        time.sleep(0.2)
+    terminal = (directory / "pid").read_text().strip()
+    time.sleep(1)
+    reader, writer = sys.stdin.fileno(), sys.stdout.fileno()
+    columns, rows = os.get_terminal_size(writer)
+    frames(directory, rows, columns)
+    mode = termios.tcgetattr(reader)
+    mode[3] &= ~(termios.ICANON | termios.ECHO)
+    mode[6][termios.VMIN], mode[6][termios.VTIME] = 1, 0
+    termios.tcsetattr(reader, termios.TCSANOW, mode)
+
+    def note(line):
+        with open(out, "a") as file:
+            file.write(line + "\n")
+
+    note(f"size {rows} {columns}")
+    # The counters of Kudari carry the time of day: both clocks at once, to match them.
+    note(f"clock {monotonic():.6f} {time.time():.6f}")
+    subprocess.run(["clear"], check=False)
+    note("round-trips " + " ".join(f"{taken:.6f}" for taken in round_trips(reader, writer)))
+    subprocess.run(["clear"], check=False)
+    for load in loads:
+        time.sleep(1)
+        # The CPU time of the threads of the terminal, just outside the time of the load.
+        cpu(usage, terminal, load, "start")
+        start = monotonic()
+        if load == "frames":
+            write_all(writer, directory / f"frames-{rows}x{columns}.txt")
+        elif load == "seq":
+            # A program of its own, which writes as it always does.
+            subprocess.run(["seq", "1", "2000000"], check=False)
+        elif load == "idle":
+            time.sleep(10)
+        else:
+            write_all(writer, directory / f"{load}.txt")
+        written = monotonic()
+        answered = answer(reader, writer)
+        end = answered if answered is not None else written
+        if profiled:
+            with open(out.with_suffix(".perf"), "a") as file:
+                file.write(f"{load} {start:.6f} {end:.6f}\n")
+        cpu(usage, terminal, load, "end")
+        time.sleep(1)
+        note(f"{load} {start:.6f} {end:.6f} {written:.6f} {'answered' if answered is not None else 'unanswered'}")
+        subprocess.run(["clear"], check=False)
+    note("done")
+    while True:
+        time.sleep(100_000)
 
 
 def threads(path):
@@ -175,7 +293,10 @@ def frames(directory, rows, columns):
 
 
 def when(stamp):
-    return datetime.datetime.fromisoformat(stamp).timestamp()
+    """Seconds on the monotonic clock, or in older runs the time of day."""
+    if "T" in stamp:
+        return datetime.datetime.fromisoformat(stamp).timestamp()
+    return float(stamp)
 
 
 def frame(line):
@@ -268,15 +389,39 @@ def measure(directory, name):
     result = {}
     for line in lines[1:]:
         parts = line.split()
-        if len(parts) != 3:
+        if parts[0] == "clock" and len(parts) == 3:
+            # The counters carry the time of day; the loads, the monotonic clock.
+            shift = float(parts[2]) - float(parts[1])
+            snapshots = [(moment - shift, values) for moment, values in snapshots]
+            continue
+        if parts[0] in ("size", "round-trips", "done") or len(parts) not in (3, 5):
             continue
         load, start, end = parts[0], when(parts[1]), when(parts[2])
+        backlog, answered = (end - float(parts[3]), parts[4] == "answered") if len(parts) == 5 else (None, True)
         frames_meanwhile = [found for found in drawn if start <= found.time <= end + TAIL]
         blocked = [wait for moment, wait in waits if start <= moment <= end + TAIL]
         result[load] = Load(
-            end - start, sizes[load], frames_meanwhile, blocked, end - start + TAIL, used.get(load), woken.get(load), memory.get(load), counted(snapshots, start, end + TAIL)
+            end - start,
+            sizes[load],
+            frames_meanwhile,
+            blocked,
+            end - start + TAIL,
+            used.get(load),
+            woken.get(load),
+            memory.get(load),
+            counted(snapshots, start, end + TAIL),
+            backlog,
+            answered,
         )
     return f"{columns}x{rows}", result, loops
+
+
+def trips(directory, name):
+    """The seconds of the queries of the cursor without output in one run; empty in older runs."""
+    for line in (directory / f"{name}.txt").read_text().splitlines():
+        if line.startswith("round-trips"):
+            return [float(part) for part in line.split()[1:]]
+    return []
 
 
 def milliseconds(whole):
@@ -553,6 +698,38 @@ def throughput(runs, terminals):
         )
 
 
+def answers(runs, trips, terminals):
+    """Per terminal, how long a query of the cursor took without output, and per load how long
+    the terminal still worked after the last byte, until it answered: in milliseconds, the
+    median and the largest over the runs, and how often it did not answer at all."""
+    rows = []
+    for terminal in terminals:
+        taken = trips.get(terminal, [])
+        cells = [terminal, f"{1000 * statistics.median(taken):.2f}" if taken else "-", f"{1000 * percentile(taken, 0.95):.2f}" if taken else "-"]
+        found = False
+        for load in LOADS:
+            done = [result[load] for _, (_, result, _) in runs[terminal] if load in result and result[load].backlog is not None]
+            if not done:
+                cells.append("-")
+                continue
+            found = True
+            backlog = [1000 * measured.backlog for measured in done if measured.answered]
+            missing = sum(not measured.answered for measured in done)
+            shown = f"{statistics.median(backlog):.1f} ({max(backlog):.1f})" if backlog else "-"
+            cells.append(shown + (f" {missing} unanswered" if missing else ""))
+        if found or taken:
+            rows.append(cells)
+    if not rows:
+        return
+    print("\nA load ends when the terminal answers a query of the cursor (DSR) after its last byte.")
+    print("The query alone, without output, in milliseconds: median and 95th percentile of 100,")
+    print("one right after the other, which keeps the computer awake as after a load.")
+    print("Then per load, the milliseconds from the last byte written to that answer: the median")
+    print("over the runs and, in brackets, the largest. Without an answer within 5 s, the load")
+    print("ended with its last byte, and the report counts it as unanswered.")
+    table(["terminal", "query ms", "95% ms"] + [f"{load} ms" for load in LOADS], rows)
+
+
 def processor(runs, terminals):
     """Per load, the CPU time of each terminal: all of it, as a share of a core, per MB of
     output, and its busiest groups of threads."""
@@ -768,12 +945,13 @@ def report(directory, order, detail=False):
     if head.exists():
         print()
         print(head.read_text(), end="")
-    runs, warmups = {}, 0
+    runs, warmups, taken = {}, 0, {}
     for path in sorted(directory.glob("*-*.txt")):
         terminal, run = path.stem.rsplit("-", 1)
         # The results of a run, not the screens of the frames load; warm-up runs do not count.
         if run.isdigit():
             runs.setdefault(terminal, []).append((run, measure(directory, path.stem)))
+            taken.setdefault(terminal, []).extend(trips(directory, path.stem))
         elif re.fullmatch(r"w\d+", run):
             warmups = max(warmups, int(run[1:]))
     if not runs:
@@ -789,6 +967,7 @@ def report(directory, order, detail=False):
     print("The terminals differ in their fonts and so in their cells, and the frames load in its size:")
     print("the highest throughput comes first.")
     throughput(runs, terminals)
+    answers(runs, taken, terminals)
     processor(runs, terminals)
     memory(runs, terminals)
     # Only Qt Quick reports its frames: those of Kudari.
@@ -944,7 +1123,7 @@ def ranges(values):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("action", choices=("data", "frames", "environment", "order", "cpu", "report", "scenarios"))
+    parser.add_argument("action", choices=("data", "frames", "environment", "order", "cpu", "report", "scenarios", "workload"))
     parser.add_argument("directory", type=Path)
     parser.add_argument("rest", nargs="*", help="rows and columns for frames, the Kudari measured or the builds to compare as NAME=PATH for environment, terminals for report")
     parser.add_argument("--local", help="for environment: the release build of the checkout, to warn when it is newer")
@@ -975,6 +1154,8 @@ def main():
         frames(arguments.directory, *map(int, arguments.rest))
     elif arguments.action == "scenarios":
         scenarios(arguments.directory)
+    elif arguments.action == "workload":
+        workload(arguments.directory, os.environ)
     else:
         report(arguments.directory, arguments.rest, arguments.detail)
 
