@@ -6,6 +6,7 @@
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import sys
 import tempfile
@@ -210,6 +211,42 @@ class Report(unittest.TestCase):
         row = next(line.split() for line in text.split("Memory of each terminal")[1].splitlines() if line.startswith("kudari "))
         self.assertEqual(row, ["kudari", "95", "96", "310", "120"])
         self.assertIn("after plain  after idle", text)
+
+    def stats(self, seconds, wakeups, paints, waits, builds):
+        """A line of the counters of a stats build at `seconds` of the run."""
+        times = {name: {"count": 0, "total_us": 0, "buckets": [0] * 32} for name, _ in bench.TIMED}
+        times["lock_wait"] = {"count": sum(waits), "total_us": 0, "buckets": waits + [0] * (32 - len(waits))}
+        times["frame_build"] = {"count": builds[0], "total_us": builds[1], "buckets": [0] * 32}
+        counters = {"wakeups": wakeups, "reports": 0, "refreshes": wakeups // 2, "paints": paints, **times}
+        return f"kudari-stats {bench.when(stamp(seconds)):.3f} {json.dumps(counters)}"
+
+    def test_the_counters_of_a_stats_build_count_per_load_between_their_lines(self):
+        quiet = [0] * 11
+        busy = [0, 0, 18, 0, 0, 0, 0, 0, 0, 0, 2]
+        self.run_of("kudari-1", [
+            self.stats(0.0, 10, {"1": 3}, quiet, (0, 0)),
+            # Within the load: not a line around it.
+            self.stats(0.1, 30, {"1": 13}, quiet, (5, 500)),
+            self.stats(0.4, 50, {"1": 23, "2": 20}, busy, (10, 1500)),
+        ])
+        text = self.report("kudari")
+        row = next(line.split() for line in text.split("what the build with the feature stats counted")[1].splitlines() if line.startswith("plain "))
+        # 40 times woken, 20 refreshes and 40 paints in the 0.4 s between the lines; 95 % of 20
+        # waits need the two in the bucket up to 1024 µs; ten frames built in 1500 µs.
+        self.assertEqual(row[:5], ["plain", "100", "50", "100", "1024"])
+        self.assertEqual(row[7], "150")
+
+    def test_without_lines_around_a_load_the_counters_say_nothing(self):
+        self.run_of("kudari-1", [self.stats(0.1, 10, {}, [], (0, 0)), self.stats(0.4, 20, {}, [], (0, 0))])
+        self.assertNotIn("feature stats", self.report("kudari"))
+        self.run_of("kudari-1", [threaded(0.1, 1)])
+        self.assertNotIn("feature stats", self.report("kudari"))
+
+    def test_the_buckets_give_the_upper_end_of_the_share(self):
+        # Two of four lie in the first two buckets, the second up to 2 µs.
+        self.assertEqual(bench.bucket_quantile([1, 1, 2], 0.5), 2)
+        self.assertEqual(bench.bucket_quantile([3, 0, 0, 1], 0.95), 8)
+        self.assertIsNone(bench.bucket_quantile([0, 0], 0.5))
 
     def test_no_run_at_all_is_said_plainly(self):
         self.assertIn("No run finished", self.report("kudari"))

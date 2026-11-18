@@ -51,6 +51,7 @@ fn main() {
     };
 
     kde::rk_init();
+    kudari_core::stats::report_from_environment();
 
     let mut engine = QQmlApplicationEngine::new();
     if let Some(mut engine) = engine.as_mut() {

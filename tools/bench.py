@@ -19,6 +19,8 @@ counts the frames that Qt Quick drew during each load and how long it took to pr
 import argparse
 import datetime
 import hashlib
+import json
+import math
 import os
 import platform
 import random
@@ -47,6 +49,10 @@ FRAME = re.compile(
 )
 # What the GUI thread did for a frame of the threaded render loop, also in whole milliseconds.
 PREPARED = re.compile(r"^(\S+) .*\[gui thread\] Frame prepared, .*blockedForSync=(\d+) ms")
+# A line of the counters of a build with the feature stats: the seconds since 1970 and JSON.
+STATS = re.compile(r"^kudari-stats (\d+(?:\.\d+)?) (\{.*\})$")
+# The counted times of the counters, as they name them and as the report does.
+TIMED = (("lock_wait", "lock wait"), ("lock_hold", "lock hold"), ("queue", "queue"), ("frame_build", "build"), ("frame_draw", "draw"), ("frame_copy", "copy"))
 # A frame shows the output a moment after it arrived: frames this long after a load count.
 TAIL = 0.05
 # A gap between two frames this long, in milliseconds, left out one at 60 Hz.
@@ -80,6 +86,8 @@ class Load(NamedTuple):
     switches: dict | None = None
     # Kilobytes of memory after the load: resident, proportional and private; or None.
     memory: tuple | None = None
+    # What the counters of a build with the feature stats counted meanwhile; or None.
+    counters: dict | None = None
 
 
 def cpu(path, pid, load, moment):
@@ -186,6 +194,53 @@ def prepared(line):
     return (when(match[1]), int(match[2])) if match else None
 
 
+def snapshot(line):
+    """The counters in a line of a build with the feature stats: their time and their values;
+    or None."""
+    match = STATS.match(line)
+    if not match:
+        return None
+    try:
+        return float(match[1]), json.loads(match[2])
+    except ValueError:
+        return None
+
+
+def counted(snapshots, start, end):
+    """What the counters counted from the last line at `start` or before to the first at `end`
+    or after: the seconds between those lines, the counts, the paints of all terminals, and
+    for each time its count, its sum in microseconds and its buckets; or None without both."""
+    before = [found for found in snapshots if found[0] <= start]
+    after = [found for found in snapshots if found[0] >= end]
+    if not before or not after:
+        return None
+    (first, old), (last, new) = before[-1], after[0]
+    result = {"seconds": last - first}
+    for name in ("wakeups", "reports", "refreshes"):
+        result[name] = new.get(name, 0) - old.get(name, 0)
+    result["paints"] = sum(new.get("paints", {}).values()) - sum(old.get("paints", {}).values())
+    for name, _ in TIMED:
+        was, now = old.get(name, {}), new.get(name, {})
+        earlier = was.get("buckets") or []
+        buckets = [later - (earlier[index] if index < len(earlier) else 0) for index, later in enumerate(now.get("buckets", []))]
+        result[name] = {"count": now.get("count", 0) - was.get("count", 0), "total_us": now.get("total_us", 0) - was.get("total_us", 0), "buckets": buckets}
+    return result
+
+
+def bucket_quantile(buckets, share):
+    """The upper end in microseconds of the bucket of powers of two that holds `share` of the
+    times, as the counters of Kudari give it; None without any."""
+    count = sum(buckets)
+    if not count:
+        return None
+    needed, seen = max(1, math.ceil(count * share)), 0
+    for index, found in enumerate(buckets):
+        seen += found
+        if seen >= needed:
+            return 1 << index
+    return None
+
+
 def measure(directory, name):
     """Per load of one run: its seconds, its bytes, the frames and the waits of the GUI thread
     meanwhile, and the seconds in which they were counted; with the render loops seen."""
@@ -198,7 +253,7 @@ def measure(directory, name):
         "seq": SEQ_BYTES,
         "idle": 0,
     }
-    drawn, waits, loops = [], [], set()
+    drawn, waits, loops, snapshots = [], [], set(), []
     used, woken, memory = threads(directory / f"{name}.cpu")
     log = directory / f"{name}.log"
     for line in log.read_text(errors="replace").splitlines():
@@ -207,6 +262,8 @@ def measure(directory, name):
             loops.add(found.loop)
         elif found := prepared(line):
             waits.append(found)
+        elif found := snapshot(line):
+            snapshots.append(found)
     result = {}
     for line in lines[1:]:
         parts = line.split()
@@ -215,7 +272,9 @@ def measure(directory, name):
         load, start, end = parts[0], when(parts[1]), when(parts[2])
         frames_meanwhile = [found for found in drawn if start <= found.time <= end + TAIL]
         blocked = [wait for moment, wait in waits if start <= moment <= end + TAIL]
-        result[load] = Load(end - start, sizes[load], frames_meanwhile, blocked, end - start + TAIL, used.get(load), woken.get(load), memory.get(load))
+        result[load] = Load(
+            end - start, sizes[load], frames_meanwhile, blocked, end - start + TAIL, used.get(load), woken.get(load), memory.get(load), counted(snapshots, start, end + TAIL)
+        )
     return f"{columns}x{rows}", result, loops
 
 
@@ -590,6 +649,41 @@ def drawing(terminal, measured, detail):
         print(f"sync+render over the budget of {' / '.join(name for name, _ in BUDGETS)}: at least {over}")
 
 
+def counters(terminal, measured):
+    """For a build with the feature stats: what Kudari counted during each load."""
+    rows = []
+    for load in LOADS:
+        done = [result[load].counters for _, (_, result, _) in measured if load in result and result[load].counters]
+        if not done:
+            continue
+
+        def rate(name, done=done):
+            return f"{statistics.median(found[name] / found['seconds'] for found in done if found['seconds'] > 0):.0f}"
+
+        def pooled(name, done=done):
+            width = max(len(found[name]["buckets"]) for found in done)
+            return [sum(found[name]["buckets"][index] for found in done if index < len(found[name]["buckets"])) for index in range(width)]
+
+        def p95(name):
+            found = bucket_quantile(pooled(name), 0.95)
+            return "-" if found is None else f"{found}"
+
+        def mean(name, done=done):
+            count = sum(found[name]["count"] for found in done)
+            return f"{sum(found[name]['total_us'] for found in done) / count:.0f}" if count else "-"
+
+        rows.append([load, rate("wakeups"), rate("refreshes"), rate("paints"), p95("lock_wait"), p95("lock_hold"), p95("queue"), mean("frame_build"), mean("frame_draw"), mean("frame_copy")])
+    if not rows:
+        return
+    print(f"\n{terminal}: what the build with the feature stats counted during each load")
+    print("Wakeups are those of the PTY thread for output; a second is the median over the runs, between")
+    print("the lines of the counters around the load. p95 is the upper end of the bucket of powers of two")
+    print("that holds 95 % of the times, over all runs, in microseconds: the wait for the lock of a")
+    print("terminal, how long it was held, and the wait in the queue of the Qt thread. A frame is")
+    print("built, drawn into its image and copied into the item; those are the means.")
+    table(["load", "wakeups/s", "refreshes/s", "paints/s", "lock wait p95", "lock hold p95", "queue p95", "build µs", "draw µs", "copy µs"], rows)
+
+
 def ranged(whole, width):
     """Whole milliseconds cut off, `width` of them added up, as the range they stand for."""
     return milliseconds(whole) if width == 1 else f"{whole}-{whole + width}"
@@ -630,6 +724,7 @@ def report(directory, order, detail=False):
     for terminal in terminals:
         if any(measured.frames for _, (_, result, _) in runs[terminal] for measured in result.values()):
             drawing(terminal, runs[terminal], detail)
+        counters(terminal, runs[terminal])
 
 
 def main():

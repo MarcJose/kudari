@@ -404,28 +404,6 @@ pub fn queue(action: impl FnOnce(Pin<&mut qobject::Controller>) + Send + 'static
     }
 }
 
-/// With `KUDARI_STATS=1` in a build that counts, writes the counters of [`stats`] to stderr once
-/// a second, as `kudari-stats` with the seconds since 1970 and the counters as JSON, which
-/// `tools/bench.py` reads. The counters keep counting; a reader takes the differences.
-fn report_stats() {
-    static LAST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
-    static WANTED: OnceLock<bool> = OnceLock::new();
-    if !stats::enabled() || !*WANTED.get_or_init(|| std::env::var_os("KUDARI_STATS").is_some_and(|value| value == "1"))
-    {
-        return;
-    }
-    let mut last = LAST.lock().unwrap_or_else(PoisonError::into_inner);
-    if last.is_some_and(|last| last.elapsed() < std::time::Duration::from_secs(1)) {
-        return;
-    }
-    *last = Some(std::time::Instant::now());
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs_f64();
-    eprintln!("kudari-stats {now:.3} {}", stats::json());
-}
-
 /// Whether the controller has started, with its first session and, if the settings say so,
 /// its window.
 pub fn started() -> bool {
@@ -769,7 +747,6 @@ impl qobject::Controller {
 
     /// Periodic update of titles and the monitors.
     fn poll(self: Pin<&mut Self>) {
-        report_stats();
         let format = self.app.settings().title_format.clone();
         let statuses: Vec<app::Status> = self
             .app
