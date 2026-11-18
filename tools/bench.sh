@@ -38,7 +38,12 @@
 # 100,000 lines with a working directory, links, marks of the prompt and copies to the
 # clipboard; bells, 300,000 of them; queries, 100,000 queries of the device attributes in
 # batches of 1,000, each answered before the next, whose answers the report counts; and
-# combining, cells with four combining marks each. --set gives Kudari a setting
+# combining, cells with four combining marks each. query asks 200 times each for the place
+# of the cursor, the device attributes and the color of the background, alone and while the
+# frames load goes to the terminal, and the report gives the round trips. resize makes the
+# font 10 steps larger and 10 smaller with Ctrl and = or -, 0.5 s apart, with a history of
+# 20,000 lines to wrap anew: for Kudari, the time from each shortcut to its frame; set
+# Terminal.HistoryLines for a longer history. --set gives Kudari a setting
 # for the measurement, such as --set Terminal.BlinkingCursor=true, once for each. --scale
 # scales the screen as for a HiDPI display, and --keep keeps the data and the logs of the
 # terminals. --scenarios measures Kudari alone instead of the loads: its start and its
@@ -290,8 +295,8 @@ while [ $# -gt 0 ]; do
             for load in $loads; do
                 case $load in
                     plain | color | unicode | frames | boxes | seq | partial | idle | typing | burst | scroll | search) ;;
-                    titles | osc | bells | queries | combining) ;;
-                    *) die "no load $load; there are plain, color, unicode, frames, boxes, seq, partial, idle, typing, burst, scroll, search, titles, osc, bells, queries and combining" ;;
+                    titles | osc | bells | queries | combining | query | resize) ;;
+                    *) die "no load $load; there are plain, color, unicode, frames, boxes, seq, partial, idle, typing, burst, scroll, search, titles, osc, bells, queries, combining, query and resize" ;;
                 esac
             done
             shift 2
@@ -386,9 +391,9 @@ if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
     # The loads that type and scroll do so through the fake input of KWin, which allows a
     # program that a desktop file names; tests/gui/run.sh uses the same tool.
     case " $loads " in
-        *" typing "* | *" burst "* | *" scroll "* | *" search "*)
+        *" typing "* | *" burst "* | *" scroll "* | *" search "* | *" resize "*)
             for program in wayland-scanner cc; do
-                command -v "$program" > /dev/null || die "the loads typing, burst, scroll and search need $program"
+                command -v "$program" > /dev/null || die "the loads typing, burst, scroll, search and resize need $program"
             done
             if ! { wayland-scanner client-header "$tools/../tests/gui/fake-input.xml" "$work/fake-input-client.h" &&
                 wayland-scanner private-code "$tools/../tests/gui/fake-input.xml" "$work/fake-input-code.c" &&
