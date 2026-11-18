@@ -119,8 +119,8 @@ const MOST_MATCHES: usize = 100_000;
 /// reaches past `end`, as one whose wide character wrapped from a line ending at `end` to the
 /// next, that is past `end`; searching from there goes around the end of the grid and finds
 /// the same match again, so its iterator of matches never ends and Kudari froze. This stops at
-/// a match that reaches `end`, before a start past it, and at a match before its start, which
-/// means the search went around.
+/// a match that reaches `end`, before a start past it, at a match before its start, which
+/// means the search went around, and where the search would not move on.
 fn matches_between<T>(term: &Term<T>, regex: &mut RegexSearch, start: Point, end: Point, most: usize) -> Vec<Match> {
     let mut found = Vec::new();
     let mut point = start;
@@ -134,7 +134,9 @@ fn matches_between<T>(term: &Term<T>, regex: &mut RegexSearch, start: Point, end
         let after = *next.end();
         found.push(next);
         let following = after.add(term, Boundary::None, 1);
-        if after >= end || following <= after {
+        // A match of nothing, as of an empty pattern, ends before it starts: the next search
+        // would start where this one did.
+        if after >= end || following <= point {
             break;
         }
         point = following;
@@ -738,7 +740,10 @@ impl View {
         highlight_all: bool,
     ) -> bool {
         let pattern = search_pattern(pattern, case_sensitive, regular_expression);
-        let Ok(mut regex) = RegexSearch::new(&pattern) else {
+        // A pattern that matches nothing at all, as an empty one or `x*`, finds no text to
+        // show, and the search of the emulator can go on forever over such matches.
+        let matches_nothing = regex_automata::meta::Regex::new(&pattern).map_or(true, |regex| regex.is_match(""));
+        let Some(mut regex) = RegexSearch::new(&pattern).ok().filter(|_| !matches_nothing) else {
             // The matches of the pattern before do not belong to this one.
             self.clear_search();
             return false;
@@ -2701,6 +2706,30 @@ mod tests {
         });
         let done = receiver.recv_timeout(std::time::Duration::from_secs(5));
         assert_eq!(done, Ok((true, 1, true, Some(1))));
+    }
+
+    #[test]
+    fn a_pattern_that_matches_nothing_finds_nothing() {
+        // As in the case the random test found: a search backwards for nothing went on forever.
+        let mut term = term_of(10, "one two\r\n日本\r\nthree");
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut view = View::default();
+            let mut found = Vec::new();
+            for pattern in ["", "x*", "^", "$", "(?:)"] {
+                found.push(view.find(&mut term, pattern, false, false, true, true));
+                found.push(view.find(&mut term, pattern, true, false, true, true));
+                view.update_matches(&term);
+                found.push(!view.matches().is_empty() || view.search_lines(&term).is_some());
+            }
+            // A pattern that matches something still does.
+            found.push(view.find(&mut term, "t+", true, false, true, true));
+            let _ = sender.send(found);
+        });
+        let found = receiver.recv_timeout(std::time::Duration::from_secs(5));
+        let mut expected = vec![false; 15];
+        expected.push(true);
+        assert_eq!(found, Ok(expected));
     }
 
     #[test]
