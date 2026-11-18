@@ -92,12 +92,29 @@ tools/security.sh                                # secrets, dependencies, workfl
 tools/bench.sh                                   # speed of output and drawing, against other terminals
 tools/bench.sh --scenarios                       # start, showing, waiting and memory of Kudari
 tools/bench.sh --perf                            # the same loads under perf, with a profile of each
+tools/bench.sh --rev main --binary new=PATH      # two builds of Kudari in the same runs, with a verdict
 cargo bench -p kudari-core --bench core          # scanner, parser and frames alone, without a window
 cargo bench -p kudari-core --bench allocations   # the allocations of the same frames and cases
 tools/bench-compare.py                           # the core benchmark, main against the working tree
 ```
 
 `tools/bench.sh` measures Kudari as a whole in a virtual KWin, next to other terminals.
+To compare a change with what came before, give `tools/bench.sh` both builds. Each
+`--binary NAME=PATH` and each `--rev [NAME=]REV` runs as a terminal of its own in the same
+runs. A `--rev` is built in a worktree under `~/.cache` and kept for the next time:
+
+```sh
+tools/bench.sh --rev main --binary new=target/release/kudari --runs 10
+```
+
+The report compares each build with the first, load by load. It gives the time and the CPU
+time, their ratio, a bootstrap interval of the ratio, and a verdict. A build is faster or
+slower only where the interval leaves out 1; a difference of a few percent needs ten runs or
+more. A verdict is about the two builds, not always about the change: where the code lies in
+the program alone can move a load by five percent, even between builds whose code differs
+only outside it. Check a gain of the parser or the drawing with the instructions that
+`tools/bench-compare.py` counts, which the layout does not change.
+
 `tools/bench.sh --scenarios` measures Kudari alone, in the same virtual KWin, when it is not
 taking in output:
 - how long it takes to start, with the phases it marks itself with `KUDARI_TIMING=1`;

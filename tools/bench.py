@@ -447,7 +447,9 @@ def describe(kudari, machine, software, removed, kept, plan=None):
         lines.append(f"Runs      {plan.runs}{warm}; the terminals in an order shuffled for each run, --seed {plan.seed} repeats it")
         if plan.settings:
             lines.append(f"Settings  {', '.join(plan.settings)} for Kudari")
-    if kudari:
+    # One Kudari as a dict, or the builds to compare as (name, facts).
+    builds = [("Kudari", kudari)] if isinstance(kudari, dict) else list(kudari or [])
+    for label, kudari in builds:
         parts = [kudari["version"] or "no --version"]
         if kudari.get("git"):
             parts.append(f"git {kudari['git']}")
@@ -458,7 +460,7 @@ def describe(kudari, machine, software, removed, kept, plan=None):
             parts.append(f"build ID {kudari['build id'][:16]}")
         parts.extend(kudari["compilers"])
         parts.append("with debug info" if kudari["debug info"] else "without debug info")
-        lines.append(f"Kudari    {kudari['path']}: {', '.join(parts)}")
+        lines.append(f"{label:<9} {kudari['path']}: {', '.join(parts)}")
         if kudari.get("makepkg"):
             rust, cxx = kudari["makepkg"]
             lines.append(f"          makepkg builds with RUSTFLAGS={rust or '(none)'} CXXFLAGS={cxx or '(none)'}")
@@ -492,9 +494,14 @@ def describe(kudari, machine, software, removed, kept, plan=None):
     return lines + [f"Warning: {warning}" for warning in warnings]
 
 
-def environment(directory, binary, local, removed, kept, plan=None):
-    """Writes the head of the report to DIR/environment.txt and shows it."""
-    kudari = build(binary, local) if binary else None
+def environment(directory, binaries, local, removed, kept, plan=None):
+    """Writes the head of the report to DIR/environment.txt and shows it. `binaries` is the
+    Kudari measured, or the builds to compare as NAME=PATH."""
+    named = [binary.split("=", 1) for binary in binaries if "=" in binary]
+    if named:
+        kudari = [(f"kudari@{name}", build(path, local)) for name, path in named]
+    else:
+        kudari = build(binaries[0], local) if binaries else None
     text = "\n".join(describe(kudari, computer(), versions(), removed, kept, plan)) + "\n"
     (directory / "environment.txt").write_text(text)
     print(text, end="")
@@ -685,6 +692,51 @@ def counters(terminal, measured):
     table(["load", "wakeups/s", "refreshes/s", "paints/s", "lock wait p95", "lock hold p95", "queue p95", "build µs", "draw µs", "copy µs"], rows)
 
 
+def ratio_interval(base, other, seed=SEED, rounds=2000):
+    """A 95 % bootstrap interval of the ratio of the medians, `other` over `base`."""
+    rng = random.Random(seed)
+    ratios = sorted(statistics.median(rng.choices(other, k=len(other))) / statistics.median(rng.choices(base, k=len(base))) for _ in range(rounds))
+    return ratios[int(0.025 * rounds)], ratios[int(0.975 * rounds) - 1]
+
+
+def verdict(low, high, words=("faster", "slower")):
+    """Faster or slower, or the words given, only where the interval of the ratio leaves out 1."""
+    if high < 1:
+        return words[0]
+    if low > 1:
+        return words[1]
+    return "no difference"
+
+
+def compare(runs, builds):
+    """Each build of Kudari against the first, load by load: the time and the CPU time."""
+    base = builds[0]
+    print(f"\nThe builds of Kudari against {base}: the median of each, the ratio of the medians and a")
+    print("95 % bootstrap interval of it (seed 1). A build is faster or slower only where the interval")
+    print("leaves out 1; with few runs, the interval is wide and small changes are no difference.")
+    measures = (
+        ("seconds per load", lambda measured: measured.seconds, ("faster", "slower"), 2),
+        ("CPU ms per load", lambda measured: sum(measured.cpu.values()) if measured.cpu else None, ("less", "more"), 0),
+    )
+    for what, value, words, precision in measures:
+        rows = []
+        for load in LOADS:
+            # A load without output takes its ten seconds in any build.
+            if load == "idle" and what.startswith("seconds"):
+                continue
+            for other in builds[1:]:
+                found = [[value(result[load]) for _, (_, result, _) in runs[build] if load in result and (load == "idle" or result[load].size)] for build in (base, other)]
+                found = [[number for number in numbers if number] for numbers in found]
+                if len(found[0]) < 2 or len(found[1]) < 2:
+                    continue
+                low, high = ratio_interval(*found)
+                ratio = statistics.median(found[1]) / statistics.median(found[0])
+                rows.append([load, other, f"{statistics.median(found[0]):.{precision}f}", f"{statistics.median(found[1]):.{precision}f}", f"{ratio:.3f}", f"{low:.3f}-{high:.3f}", verdict(low, high, words)])
+        if rows:
+            print(f"\n{what}")
+            table(["load", "build", base, "build", "ratio", "95% ratio", "verdict"], rows)
+
+
 def profiles(directory):
     """For a run with --perf: the command of `perf report` for each load of each run, by the
     times of its start and end on the clock of `perf`."""
@@ -741,12 +793,15 @@ def report(directory, order, detail=False):
     memory(runs, terminals)
     # Only Qt Quick reports its frames: those of Kudari.
     for terminal in terminals:
-        if terminal == "kudari" and not any(measured.frames for _, (_, result, _) in runs[terminal] for measured in result.values()):
-            print("\nkudari: no frame timings in its logs; did Qt honour QSG_RENDER_TIMING, and in which render loop?")
+        if terminal.split("@")[0] == "kudari" and not any(measured.frames for _, (_, result, _) in runs[terminal] for measured in result.values()):
+            print(f"\n{terminal}: no frame timings in its logs; did Qt honour QSG_RENDER_TIMING, and in which render loop?")
     for terminal in terminals:
         if any(measured.frames for _, (_, result, _) in runs[terminal] for measured in result.values()):
             drawing(terminal, runs[terminal], detail)
         counters(terminal, runs[terminal])
+    builds = [terminal for terminal in terminals if terminal.startswith("kudari@")]
+    if len(builds) > 1:
+        compare(runs, builds)
     profiles(directory)
 
 # The scenarios of `tools/bench.sh --scenarios` that wait, in the order of the report, with
@@ -885,7 +940,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("action", choices=("data", "frames", "environment", "order", "cpu", "report", "scenarios"))
     parser.add_argument("directory", type=Path)
-    parser.add_argument("rest", nargs="*", help="rows and columns for frames, the Kudari measured for environment, terminals for report")
+    parser.add_argument("rest", nargs="*", help="rows and columns for frames, the Kudari measured or the builds to compare as NAME=PATH for environment, terminals for report")
     parser.add_argument("--local", help="for environment: the release build of the checkout, to warn when it is newer")
     parser.add_argument("--variables", default="", help="for environment: the variables of Qt, Mesa and the like that were set, with commas")
     parser.add_argument("--keep-env", action="store_true", help="for environment: those variables were kept")
@@ -895,12 +950,10 @@ def main():
     parser.add_argument("--detail", action="store_true", help="for report: the times of the frames in detail")
     arguments = parser.parse_args()
     if arguments.action == "environment":
-        if len(arguments.rest) > 1:
-            parser.error("environment takes at most the Kudari measured")
         removed = [name for name in arguments.variables.split(",") if name]
         settings = tuple((content(arguments.directory / "settings") or "").splitlines())
         plan = Plan(arguments.runs, arguments.warmup, arguments.seed, settings) if arguments.runs else None
-        environment(arguments.directory, arguments.rest[0] if arguments.rest else None, arguments.local, removed, arguments.keep_env, plan)
+        environment(arguments.directory, arguments.rest, arguments.local, removed, arguments.keep_env, plan)
     elif arguments.action == "cpu":
         if len(arguments.rest) != 3 or not arguments.rest[0].isdigit() or arguments.rest[2] not in ("start", "end"):
             parser.error("cpu needs the file, the process, the load and start or end")

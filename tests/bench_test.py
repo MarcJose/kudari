@@ -265,6 +265,33 @@ class Report(unittest.TestCase):
             path.unlink()
         return self.report("kudari")
 
+    def comparison(self, text, title, build):
+        part = text.split("The builds of Kudari against")[1].split(title)[1]
+        return next(line.split() for line in part.splitlines() if line.startswith("plain ") and build in line)
+
+    def test_builds_compare_with_the_first_and_get_a_verdict(self):
+        # Five runs each: b takes half again as long and as much CPU time, c the same as a.
+        for run in range(1, 6):
+            wobble = 0.002 * run
+            for build, seconds, cpu in (("a", 0.20, 100), ("b", 0.30, 150), ("c", 0.20, 100)):
+                self.run_of(f"kudari@{build}-{run}", [], (("plain", 0.0, seconds + wobble),))
+                self.cpu_of(f"kudari@{build}-{run}", "plain", (1, "PTY reader", 0, cpu + run))
+        text = self.report("kudari@a", "kudari@b", "kudari@c")
+        # Medians of 0.206 and 0.306 s.
+        self.assertEqual(self.comparison(text, "seconds per load", "kudari@b")[1:7], ["kudari@b", "0.21", "0.31", "1.485", "1.452-1.520", "slower"])
+        self.assertEqual(self.comparison(text, "seconds per load", "kudari@c")[-2:], ["no", "difference"])
+        self.assertEqual(self.comparison(text, "CPU ms per load", "kudari@b")[-1], "more")
+        # Nothing to compare with one build.
+        for path in [*self.directory.glob("kudari@b-*"), *self.directory.glob("kudari@c-*")]:
+            path.unlink()
+        self.assertNotIn("The builds of Kudari against", self.report("kudari@a"))
+
+    def test_a_verdict_needs_an_interval_without_one(self):
+        self.assertEqual(bench.verdict(0.90, 0.99), "faster")
+        self.assertEqual(bench.verdict(1.01, 1.10), "slower")
+        self.assertEqual(bench.verdict(0.95, 1.02), "no difference")
+        self.assertEqual(bench.verdict(0.5, 0.6, ("less", "more")), "less")
+
     def test_no_run_at_all_is_said_plainly(self):
         self.assertIn("No run finished", self.report("kudari"))
 
@@ -386,6 +413,11 @@ class Environment(unittest.TestCase):
 
     def warnings(self, *arguments, **machine):
         return [line for line in self.describe(*arguments, **machine) if line.startswith("Warning:")]
+
+    def test_builds_to_compare_are_each_named(self):
+        lines = self.describe([("kudari@main", KUDARI), ("kudari@new", {**KUDARI, "path": "/tmp/new/kudari"})])
+        self.assertTrue(any(line.startswith("kudari@main ") and KUDARI["path"] in line for line in lines))
+        self.assertTrue(any(line.startswith("kudari@new ") and "/tmp/new/kudari" in line for line in lines))
 
     def test_a_quiet_computer_set_for_performance_gives_no_warning(self):
         self.assertEqual(self.warnings(), [])
