@@ -278,6 +278,68 @@ KUDARI = {
 }
 
 
+class Scenarios(unittest.TestCase):
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: [path.unlink() for path in self.directory.iterdir()] and self.directory.rmdir())
+
+    def at(self, seconds):
+        return bench.when(stamp(seconds))
+
+    def write(self, name, lines):
+        (self.directory / name).write_text("".join(line + "\n" for line in lines))
+
+    def cpu(self, scenario, start_ns, end_ns, switches=(0, 0), memory=None):
+        lines = [f"{scenario}\tstart\t1\tmain\t{start_ns}\t0\t0", f"{scenario}\tend\t1\tmain\t{end_ns}\t{switches[0]}\t{switches[1]}"]
+        if memory:
+            lines.append(f"{scenario}\tmemory\t{memory[0]}\t{memory[1]}\t{memory[2]}")
+        return lines
+
+    def report(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            bench.scenarios(self.directory)
+        return output.getvalue()
+
+    def row(self, text, label):
+        return next(line.split() for line in text.splitlines() if line.startswith(label))
+
+    def test_each_scenario_is_timed_from_its_events(self):
+        self.write("events-1.txt", [
+            f"spawn main {self.at(1.0)}", f"bus main {self.at(1.05)}",
+            f"show hidden {self.at(5.0)}", f"show main {self.at(10.0)}", f"show main {self.at(12.0)}",
+            f"second-start main {self.at(20.0)}", f"second-end main {self.at(20.04)}",
+            f"idle shown {self.at(30.0)}", f"idle-end shown {self.at(40.0)}",
+        ])
+        self.write("main-1.log", [
+            threaded(1.14, 1), f"kudari-timing qml {self.at(1.12)}", f"kudari-timing toggle {self.at(10.003)}",
+            # 6 ms after the first showing, 8 ms after the second; a frame 3 s later is no answer.
+            threaded(10.006, 1), threaded(12.008, 1), threaded(16.0, 1),
+            # Five frames in the ten seconds of waiting.
+            *(threaded(31.0 + index, 1) for index in range(5)),
+        ])
+        self.write("hidden-1.log", [threaded(5.01, 1)])
+        # 2 ms of CPU and 30 switches in 10 s; 100 MB private after the first tab.
+        self.write("main-1.cpu", self.cpu("shown", 0, 2_000_000, (20, 10)) + self.cpu("memory-1", 0, 0, memory=(300 * 1024, 110 * 1024, 100 * 1024)))
+        # A warm-up run does not count.
+        self.write("events-w1.txt", [f"spawn main {self.at(0.0)}", f"bus main {self.at(9.0)}"])
+        text = self.report()
+        self.assertIn("1 runs of the scenarios", text)
+        self.assertEqual(self.row(text, "name on the bus")[4:6], ["50.0", "50.0"])
+        self.assertEqual(self.row(text, "first frame")[2], "140.0")
+        self.assertEqual(self.row(text, "phase qml")[2], "120.0")
+        self.assertEqual(self.row(text, "first time")[2], "10.0")
+        self.assertEqual(self.row(text, "the times after")[3:7], ["7.0", "8.0", "8.0", "2"])
+        self.assertEqual(self.row(text, "call received")[2], "3.0")
+        self.assertEqual(self.row(text, "second start")[2], "40.0")
+        self.assertEqual(self.row(text, "shown, nothing happens")[3:6], ["0.20", "3", "0.5"])
+        self.assertEqual(self.row(text, "1 tab")[2:5], ["100", "300", "110"])
+
+    def test_without_a_run_it_says_so(self):
+        self.write("events-w1.txt", [])
+        self.assertIn("No run of the scenarios finished", self.report())
+
+
 class Statistics(unittest.TestCase):
     def test_close_runs_are_no_outliers_for_the_clock_alone(self):
         self.assertEqual(bench.outliers([("1", 0.180), ("2", 0.182), ("3", 0.181)]), [])

@@ -5,8 +5,8 @@
 # each frame meanwhile, to compare terminals and a change to the drawing before and after:
 #
 #   tools/bench.sh [--binary PATH] [--runs N] [--warmup N] [--seed N] [--loads LOAD,...]
-#                  [--set GROUP.KEY=VALUE] [--scale N] [--detail] [--keep] [--keep-env]
-#                  [TERMINAL...]
+#                  [--set GROUP.KEY=VALUE] [--scale N] [--detail] [--scenarios] [--keep]
+#                  [--keep-env] [TERMINAL...]
 #
 # The terminals are kudari, yakuake, konsole, alacritty, kitty, ghostty, contour and xterm;
 # without any, every one of them that is installed. Kudari is the installed one, or else the
@@ -24,7 +24,10 @@
 # for the CPU time and the wakeups of a terminal that waits. --set gives Kudari a setting
 # for the measurement, such as --set Terminal.BlinkingCursor=true, once for each. --scale
 # scales the screen as for a HiDPI display, and --keep keeps the data and the logs of the
-# terminals.
+# terminals. --scenarios measures Kudari alone instead of the loads: its start and its
+# phases, showing the window, a second start and --version, CPU time, wakeups and frames
+# while it waits in eight situations, and its memory with 1, 5 and 10 tabs; see
+# tools/bench-scenarios.sh.
 #
 # The report starts with what was measured on what: the build of Kudari with its hash and
 # origin, the processor and its clock, the versions of Qt, KWin and Mesa. It warns about a
@@ -79,6 +82,9 @@ fi
 
 # As the session of the virtual KWin, which gives it WAYLAND_DISPLAY and DISPLAY: starts each
 # terminal in turn and waits for its loads. Messages go to progress.log, failures to failed.
+if [ "${KUDARI_BENCH_ROLE:-}" = session ] && [ -n "${KUDARI_BENCH_SCENARIOS:-}" ]; then
+    exec "$tools/bench-scenarios.sh"
+fi
 if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
     work=$KUDARI_BENCH_WORK
     say() { echo "$*" >> "$work/progress.log"; }
@@ -196,6 +202,7 @@ warmup=1
 settings=
 seed=
 detail=
+scenarios=
 terminals=
 while [ $# -gt 0 ]; do
     case $1 in
@@ -214,6 +221,7 @@ while [ $# -gt 0 ]; do
         --warmup) warmup=$2; shift 2 ;;
         --seed) seed=$2; shift 2 ;;
         --detail) detail=1; shift ;;
+        --scenarios) scenarios=1; shift ;;
         --set)
             case $2 in
                 [A-Za-z]*.[A-Za-z]*=*) ;;
@@ -223,11 +231,11 @@ while [ $# -gt 0 ]; do
             settings="$settings$(printf '\n%s' "$2")"
             shift 2
             ;;
-        -h | --help) sed -n '4,41s/^# \{0,1\}//p' "$0"; exit 0 ;;
+        -h | --help) sed -n '4,/^[^#]/s/^# \{0,1\}//p' "$0"; exit 0 ;;
         *)
             case " $all " in
                 *" $1 "*) terminals="$terminals $1"; shift ;;
-                *) die "usage: tools/bench.sh [--binary PATH] [--runs N] [--warmup N] [--seed N] [--loads LOAD,...] [--scale N] [--detail] [--keep] [--keep-env] [TERMINAL...]; the terminals are: $all" ;;
+                *) die "usage: tools/bench.sh [--binary PATH] [--runs N] [--warmup N] [--seed N] [--loads LOAD,...] [--scale N] [--detail] [--scenarios] [--keep] [--keep-env] [TERMINAL...]; the terminals are: $all" ;;
             esac
             ;;
     esac
@@ -258,6 +266,11 @@ for terminal in $terminals; do
     fi
 done
 [ -n "$terminals" ] || die "none of the terminals is installed: $all"
+if [ -n "$scenarios" ]; then
+    case $terminals in " kudari") ;; *) [ -z "$terminals" ] || echo "bench: --scenarios measures Kudari only" >&2 ;; esac
+    [ -x "$binary" ] || die "no Kudari at $binary; install it, build it with cargo build --release, or name one with --binary"
+    terminals=" kudari"
+fi
 
 # Outside: a D-Bus session of its own, which ends with the measurement.
 if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
@@ -296,9 +309,13 @@ if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
     if env -u WAYLAND_DISPLAY -u DISPLAY -u QSG_RENDER_LOOP -u QT_QUICK_BACKEND -u QSG_RHI_BACKEND $unset_variables \
         XDG_CONFIG_HOME=/nonexistent XDG_DATA_HOME=/nonexistent KUDARI_BENCH_WORK="$work" \
         dbus-run-session -- "$0" --binary "$binary" --runs "$runs" --warmup "$warmup" --seed "$seed" --scale "$scale" \
-        --loads "$(echo $loads | tr " " ",")" $terminals \
+        --loads "$(echo $loads | tr " " ",")" ${scenarios:+--scenarios} $terminals \
         < /dev/null 3>&2 2> "$work/dbus.log"; then
-        python3 "$tools/bench.py" report "$work" $terminals ${detail:+--detail}
+        if [ -n "$scenarios" ]; then
+            python3 "$tools/bench.py" scenarios "$work"
+        else
+            python3 "$tools/bench.py" report "$work" $terminals ${detail:+--detail}
+        fi
         if [ -n "$keep" ]; then echo "The data and the logs are in $work"; else rm -rf "$work"; fi
     else
         die "the measurement failed; its files are in $work"
@@ -323,6 +340,7 @@ printf '[General]\ncount=1\nrules=1\n\n[1]\nDescription=full screen\nfullscreen=
 export QT_QPA_PLATFORM=wayland QT_FORCE_STDERR_LOGGING=1
 export KUDARI_BENCH_RUNS="$runs" KUDARI_BENCH_TERMINALS="$terminals" KUDARI_BENCH_BINARY="$binary"
 export KUDARI_BENCH_LOADS="$loads" KUDARI_BENCH_SCALE="$scale" KUDARI_BENCH_WARMUP="$warmup" KUDARI_BENCH_SEED="$seed"
+export KUDARI_BENCH_SCENARIOS="$scenarios"
 : > "$work/progress.log"
 tail -f "$work/progress.log" &
 progress=$!

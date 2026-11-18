@@ -28,7 +28,9 @@ fn main() {
     if std::env::args_os().nth(1).is_some_and(|argument| argument == "mcp") {
         std::process::exit(mcp::run());
     }
+    kudari_core::timing::mark("main");
     let mut app = QApplication::new();
+    kudari_core::timing::mark("application");
     kudari_core::i18n::set_translator(kde::tr_arg);
     kudari_qt::frontend::install(&plasma::Plasma);
     // Handles --help and --version, which must work next to a running instance.
@@ -50,6 +52,7 @@ fn main() {
         }
     };
 
+    kudari_core::timing::mark("bus");
     kde::rk_init();
     kudari_core::stats::report_from_environment();
 
@@ -58,8 +61,10 @@ fn main() {
         kde::rk_setup_qml_i18n(engine.as_mut());
         engine.load(&QUrl::from("qrc:/qt/qml/io/github/marcjose/kudari/qml/Main.qml"));
     }
+    kudari_core::timing::mark("qml");
     let show_tray = settings::Settings::load(&config::KConfig).show_systray_icon;
     kde::rk_finish_startup(show_tray);
+    kudari_core::timing::mark("ready");
 
     let code = app.as_mut().map_or(1, |app| app.exec());
     drop(connection);

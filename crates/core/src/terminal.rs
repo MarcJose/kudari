@@ -126,6 +126,11 @@ pub fn scrollbar_space() -> f64 {
 /// Variables for the shell. `alacritty_terminal::tty::setup_env` would pick
 /// `TERM=alacritty`, which remote hosts usually do not know, so this uses Konsole's values.
 fn shell_environment(custom: &str) -> HashMap<String, String> {
+    shell_environment_from(custom, |name| std::env::var_os(name).is_some())
+}
+
+/// [`shell_environment`], with `present` telling which variables Kudari itself has.
+fn shell_environment_from(custom: &str, present: impl Fn(&str) -> bool) -> HashMap<String, String> {
     let mut environment = HashMap::from([
         ("TERM".to_string(), "xterm-256color".to_string()),
         ("COLORTERM".to_string(), "truecolor".to_string()),
@@ -135,6 +140,12 @@ fn shell_environment(custom: &str) -> HashMap<String, String> {
         ("WINDOWID".to_string(), String::new()),
         ("ALACRITTY_WINDOW_ID".to_string(), String::new()),
     ]);
+    // Empty, so that a Kudari started in the shell neither marks nor counts.
+    for name in crate::timing::VARIABLES {
+        if present(name) {
+            environment.insert(name.to_string(), String::new());
+        }
+    }
     environment.extend(parse_environment(custom));
     environment
 }
@@ -1269,6 +1280,10 @@ mod tests {
         assert_eq!(environment["WINDOWID"], "");
         assert_eq!(environment["ALACRITTY_WINDOW_ID"], "");
         assert_eq!(shell_environment("WINDOWID=42")["WINDOWID"], "42");
+        // The variables of the marks and counters of Kudari go out empty, if Kudari has them.
+        let environment = shell_environment_from("", |name| name == "KUDARI_TIMING");
+        assert_eq!(environment.get("KUDARI_TIMING").map(String::as_str), Some(""));
+        assert!(!environment.contains_key("KUDARI_STATS"));
     }
 
     #[test]
