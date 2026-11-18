@@ -43,7 +43,7 @@ from typing import NamedTuple
 
 WORDS = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor".split()
 CELLS = "abcdefghijklmnopqrstuvwxyz0123456789#@%&"
-LOADS = ("plain", "color", "unicode", "frames", "boxes", "seq", "partial", "idle")
+LOADS = ("plain", "color", "unicode", "frames", "boxes", "seq", "search", "typing", "burst", "scroll", "partial", "idle")
 DESCRIPTIONS = {
     "plain": "24 MB of plain text",
     "color": "28 MB of text in 256 colors",
@@ -51,12 +51,16 @@ DESCRIPTIONS = {
     "frames": "300 full screens with colors of their own in every cell",
     "boxes": "300 full screens of panels with lines, blocks and braille, as system monitors draw them",
     "seq": "the numbers up to 2,000,000",
+    "search": "the plain text with all matches of a search for a word in it highlighted, in Kudari alone",
+    "typing": "100 keys 50 ms apart, each echoed at once",
+    "burst": "100 keys at once, each echoed at once",
+    "scroll": "100 turns of the wheel up through a history of 20,000 lines and 100 down, 16 ms apart",
     "partial": "a line of status changed every 16 ms for 10 seconds, the rest of the screen kept",
     "idle": "10 seconds without output",
 }
 # Loads that take a fixed time instead of a number of bytes, and how often they change the
 # screen meanwhile.
-FIXED_TIME = {"partial": 625, "idle": 0}
+FIXED_TIME = {"typing": 100, "burst": 100, "scroll": 200, "partial": 625, "idle": 0}
 # Text of the load `unicode`: words of wide characters, emoji alone, joined and with a skin
 # tone, and letters with combining marks.
 WIDE = "日本語 中文字 한국어 テキスト 漢字仮名 終端模擬".split()
@@ -67,6 +71,24 @@ LINES = ("─│┌┐└┘├┤┬┴┼", "━┃┏┓┗┛┣┫┳┻╋
 BLOCKS = "▏▎▍▌▋▊▉█▀▄▐░▒▓▖▗▘▝"
 # The time between two changes of the load partial, in seconds.
 PARTIAL_EVERY = 0.016
+# The key that the loads typing and burst press, a, as Linux numbers it; how often, and how
+# many milliseconds apart in typing.
+KEY_A = 30
+TYPED = 100
+TYPING_GAP = 50
+# The turns of the wheel of the load scroll each way, their milliseconds apart and the value
+# of one, and the lines of history it scrolls through.
+TURNS = 100
+TURN_GAP = 16
+TURN = 15
+HISTORY = 20_000
+# The keys that open the search of Kudari (Ctrl+Shift+F), type a word of the plain text and
+# close it again (Escape).
+OPEN_SEARCH = (29, 42, 33)
+SEARCHED = (38, 24, 19, 18, 50)
+ESCAPE = 1
+# The size of the virtual screen in pixels of the device.
+SCREEN = (2560, 1440)
 SEQ_BYTES = sum(len(f"{n}\n") for n in range(1, 2_000_001))
 # The line of a frame in the log of Qt Quick, from each of its render loops: threaded, basic
 # and software. Qt gives whole milliseconds there, cut off. The time in front is the monotonic
@@ -126,6 +148,8 @@ class Load(NamedTuple):
     backlog: float | None = None
     # Whether the terminal answered; if not, the load ended with its last byte.
     answered: bool = True
+    # For the loads that type: each key as the time it was pressed and the time it came.
+    keys: list | None = None
 
 
 def cpu(path, pid, load, moment):
@@ -192,12 +216,39 @@ def round_trips(reader, writer, count=ROUND_TRIPS):
     return taken
 
 
+def typed(reader, writer, command, count):
+    """Runs `command`, which presses a key `count` times and prints the time of each press, and
+    echoes each character that comes meanwhile at once: the keys as the time each was pressed
+    and the time it came, in order."""
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, text=True)
+    came = []
+    while len(came) < count:
+        if not select.select([reader], [], [], ANSWER)[0]:
+            break
+        got = os.read(reader, 1024)
+        moment = monotonic()
+        os.write(writer, got)
+        came.extend([moment] * len(got))
+    pressed = [float(line) for line in process.communicate()[0].split()]
+    return list(zip(pressed, came))
+
+
+def press(tool, *codes):
+    """Presses the keys together and lets them go, through the fake input of KWin."""
+    subprocess.run([str(tool), "key", *map(str, codes)], check=False)
+    time.sleep(0.3)
+
+
 def workload(directory, environment):
     """As the shell of a terminal under test: waits for the window, then runs and times each
     load, and writes a line for each to KUDARI_BENCH_OUT. Only echo and the canonical input of
     the terminal are switched off, for the answers; the output goes out as it would, so that
     a new line is still a carriage return and a line feed."""
     out, loads = Path(environment["KUDARI_BENCH_OUT"]), environment["KUDARI_BENCH_LOADS"].split()
+    kudari = out.stem.rsplit("-", 1)[0].split("@")[0] == "kudari"
+    tool = directory / "input"
+    scale = float(environment.get("KUDARI_BENCH_SCALE") or 1)
+    middle = [str(size / scale / 2) for size in SCREEN]
     usage, profiled = environment["KUDARI_BENCH_CPU"], environment.get("KUDARI_BENCH_PERF")
     while not (directory / "go").exists():
         time.sleep(0.2)
@@ -223,7 +274,18 @@ def workload(directory, environment):
     note("round-trips " + " ".join(f"{taken:.6f}" for taken in round_trips(reader, writer)))
     subprocess.run(["clear"], check=False)
     for load in loads:
+        if load == "search" and not kudari:
+            continue
         time.sleep(1)
+        keys = None
+        if load == "scroll":
+            # A history to scroll through.
+            subprocess.run(["seq", "1", str(HISTORY)], check=False)
+            answer(reader, writer)
+        elif load == "search":
+            press(tool, *OPEN_SEARCH)
+            for code in SEARCHED:
+                press(tool, code)
         if load == "partial":
             # A screen full of text that stays, under the line that changes.
             os.write(writer, "\r\n".join(" ".join(WORDS)[:columns] for _ in range(rows - 1)).encode())
@@ -235,6 +297,14 @@ def workload(directory, environment):
             write_all(writer, directory / f"{load}-{rows}x{columns}.txt")
         elif load == "partial":
             partial(writer, columns)
+        elif load in ("typing", "burst"):
+            gap = TYPING_GAP if load == "typing" else 0
+            keys = typed(reader, writer, [str(tool), "type", str(KEY_A), str(TYPED), str(gap)], TYPED)
+        elif load == "scroll":
+            for value in (-TURN, TURN):
+                subprocess.run([str(tool), "scroll", *middle, str(value), str(TURNS), str(TURN_GAP)], check=False)
+        elif load == "search":
+            write_all(writer, directory / "plain.txt")
         elif load == "seq":
             # A program of its own, which writes as it always does.
             subprocess.run(["seq", "1", "2000000"], check=False)
@@ -251,6 +321,10 @@ def workload(directory, environment):
         cpu(usage, terminal, load, "end")
         time.sleep(1)
         note(f"{load} {start:.6f} {end:.6f} {written:.6f} {'answered' if answered is not None else 'unanswered'}")
+        if keys is not None:
+            note(f"keys {load} " + " ".join(f"{pressed:.6f}:{came:.6f}" for pressed, came in keys))
+        if load == "search":
+            press(tool, ESCAPE)
         subprocess.run(["clear"], check=False)
     note("done")
     while True:
@@ -468,6 +542,7 @@ def measure(directory, name):
         "plain": (directory / "plain.txt").stat().st_size,
         "color": (directory / "color.txt").stat().st_size,
         "seq": SEQ_BYTES,
+        "search": (directory / "plain.txt").stat().st_size,
         **{load: 0 for load in FIXED_TIME},
     }
     # Files that runs before these loads did not make.
@@ -485,9 +560,12 @@ def measure(directory, name):
             waits.append(found)
         elif found := snapshot(line):
             snapshots.append(found)
-    result = {}
+    result, typing = {}, {}
     for line in lines[1:]:
         parts = line.split()
+        if parts[0] == "keys" and len(parts) >= 2:
+            typing[parts[1]] = [tuple(float(moment) for moment in key.split(":")) for key in parts[2:]]
+            continue
         if parts[0] == "clock" and len(parts) == 3:
             # The counters carry the time of day; the loads, the monotonic clock.
             shift = float(parts[2]) - float(parts[1])
@@ -512,6 +590,9 @@ def measure(directory, name):
             backlog,
             answered,
         )
+    for load, keys in typing.items():
+        if load in result:
+            result[load] = result[load]._replace(keys=keys)
     return f"{columns}x{rows}", result, loops
 
 
@@ -802,11 +883,12 @@ def answers(runs, trips, terminals):
     the terminal still worked after the last byte, until it answered: in milliseconds, the
     median and the largest over the runs, and how often it did not answer at all."""
     rows = []
+    ran = [load for load in LOADS if any(load in result for measured in runs.values() for _, (_, result, _) in measured)]
     for terminal in terminals:
         taken = trips.get(terminal, [])
         cells = [terminal, f"{1000 * statistics.median(taken):.2f}" if taken else "-", f"{1000 * percentile(taken, 0.95):.2f}" if taken else "-"]
         found = False
-        for load in LOADS:
+        for load in ran:
             done = [result[load] for _, (_, result, _) in runs[terminal] if load in result and result[load].backlog is not None]
             if not done:
                 cells.append("-")
@@ -826,7 +908,39 @@ def answers(runs, trips, terminals):
     print("Then per load, the milliseconds from the last byte written to that answer: the median")
     print("over the runs and, in brackets, the largest. Without an answer within 5 s, the load")
     print("ended with its last byte, and the report counts it as unanswered.")
-    table(["terminal", "query ms", "95% ms"] + [f"{load} ms" for load in LOADS], rows)
+    table(["terminal", "query ms", "95% ms"] + [f"{load} ms" for load in ran], rows)
+
+
+def latency(runs, terminals):
+    """For the loads that type: from each key to the terminal, and in a terminal that reports
+    its frames to the first frame after the echo, in milliseconds over all runs."""
+    for load in ("typing", "burst"):
+        rows = []
+        for terminal in terminals:
+            done = [result[load] for _, (_, result, _) in runs[terminal] if load in result and result[load].keys]
+            if not done:
+                continue
+            came = [1000 * (arrived - pressed) for measured in done for pressed, arrived in measured.keys]
+            shown, per_key = [], []
+            for measured in done:
+                times = sorted(found.time for found in measured.frames)
+                for pressed, arrived in measured.keys:
+                    later = [moment for moment in times if moment >= arrived]
+                    if later:
+                        shown.append(1000 * (later[0] - pressed))
+                if times:
+                    per_key.append(len(times) / len(measured.keys))
+            missing = sum(TYPED - len(measured.keys) for measured in done)
+            cells = [terminal] + [f"{percentile(came, share):.2f}" for share in (0.5, 0.95, 0.99)]
+            cells += [f"{percentile(shown, share):.1f}" for share in (0.5, 0.95)] if shown else ["-", "-"]
+            cells += [f"{statistics.median(per_key):.2f}" if per_key else "-", str(missing)]
+            rows.append((percentile(came, 0.5), cells))
+        if not rows:
+            continue
+        print(f"\n{load}: {DESCRIPTIONS[load]}. Milliseconds from the press of each key in KWin to")
+        print("the terminal (to the PTY), over all runs; for Kudari also to the first frame after the")
+        print("echo, as Qt logs it when drawn, and the frames per key. Lost are keys that never came.")
+        table(["terminal", "to PTY p50", "p95", "p99", "to frame p50", "p95", "frames/key", "lost"], [row for _, row in sorted(rows, key=lambda row: row[0])])
 
 
 def processor(runs, terminals):
@@ -894,8 +1008,9 @@ def drawing(terminal, measured, detail):
         if not done:
             continue
         rates = [len(load_run.frames) / load_run.window for load_run in done]
-        # Without output, frames come only from the cursor and are not late.
-        quiet = load == "idle"
+        # Without output, frames come only from the cursor, and keys 50 ms apart leave gaps
+        # between theirs: neither is late.
+        quiet = load in ("idle", "typing")
         frames = [found for load_run in done for found in load_run.frames]
         between = [gap for load_run in done for gap in gaps(load_run.frames)]
         blocked = [wait for load_run in done for wait in load_run.blocked]
@@ -1069,6 +1184,7 @@ def report(directory, order, detail=False):
     print("The terminals differ in their fonts and so in their cells, and the frames load in its size:")
     print("the highest throughput comes first.")
     throughput(runs, terminals)
+    latency(runs, terminals)
     answers(runs, taken, terminals)
     processor(runs, terminals)
     memory(runs, terminals)

@@ -237,7 +237,7 @@ class Report(unittest.TestCase):
         self.assertEqual(row[:5], ["plain", "100", "50", "100", "1024"])
         self.assertEqual(row[7], "150")
 
-    def monotonic_run(self, name, log_lines, loads, trips=(), wall=None):
+    def monotonic_run(self, name, log_lines, loads, trips=(), wall=None, keys=None):
         """A run as the driver writes it now: seconds on the monotonic clock, from 1000 on, and
         for each load the last byte written and whether the terminal answered."""
         lines = ["size 40 100"]
@@ -246,6 +246,8 @@ class Report(unittest.TestCase):
         lines.append("round-trips " + " ".join(f"{taken:.6f}" for taken in trips))
         for load, start, end, written, answered in loads:
             lines.append(f"{load} {1000 + start:.6f} {1000 + end:.6f} {1000 + written:.6f} {'answered' if answered else 'unanswered'}")
+            if keys and load in keys:
+                lines.append(f"keys {load} " + " ".join(f"{1000 + pressed:.6f}:{1000 + came:.6f}" for pressed, came in keys[load]))
         (self.directory / f"{name}.txt").write_text("\n".join(lines + ["done"]) + "\n")
         (self.directory / f"{name}.log").write_text("\n".join(log_lines) + "\n")
 
@@ -277,6 +279,23 @@ class Report(unittest.TestCase):
         counted = bench.measure(self.directory, "kudari-1")[1]["plain"].counters
         self.assertEqual(counted["wakeups"], 40)
         self.assertAlmostEqual(counted["seconds"], 0.4)
+
+    def test_typing_gives_the_time_from_each_key_to_the_terminal_and_to_its_frame(self):
+        frame = "{:.3f} qt.scenegraph.time.renderloop [render thread 0x1] syncAndRender: frame rendered in 3ms, sync=1, render=1, swap=1"
+        # Keys 0.1 s apart, each at the terminal 1 ms after its press and drawn 8 ms after it.
+        keys = [(0.1 * index, 0.1 * index + 0.001) for index in range(100)]
+        frames = [frame.format(1000 + pressed + 0.008) for pressed, _ in keys]
+        self.monotonic_run("kudari-1", frames, (("typing", 0.0, 10.0, 10.0, True),), keys={"typing": keys})
+        self.monotonic_run("alacritty-1", [], (("typing", 0.0, 10.0, 10.0, True),), keys={"typing": keys[:98]})
+        text = self.report("kudari", "alacritty")
+        part = text.split("typing: 100 keys")[1].splitlines()
+        kudari = next(line.split() for line in part if line.startswith("kudari "))
+        self.assertEqual(kudari[1:], ["1.00", "1.00", "1.00", "8.0", "8.0", "1.00", "0"])
+        alacritty = next(line.split() for line in part if line.startswith("alacritty "))
+        # Without frames in its log; two keys never came.
+        self.assertEqual(alacritty[4:], ["-", "-", "-", "2"])
+        # A load of keys has no throughput, but a cost per key.
+        self.assertNotIn("\ntyping: 100 keys 50 ms apart, each echoed at once\n", text)
 
     def test_older_runs_on_the_time_of_day_still_read(self):
         self.run_of("kudari-1", [threaded(0.1, 1)])
@@ -650,6 +669,22 @@ class Driver(unittest.TestCase):
         self.assertIn(changes, range(9, 12))
         self.assertEqual(written.count("\x1b7\x1b[1;1H"), changes)
         self.assertEqual(written.count("\x1b8"), changes)
+
+    def test_each_key_that_comes_is_echoed_and_paired_with_its_press(self):
+        import sys as system
+
+        def keys():
+            for _ in range(3):
+                time.sleep(0.05)
+                os.write(self.master, b"a")
+
+        self.threading.Thread(target=keys, daemon=True).start()
+        presses = "import time\nfor _ in range(3):\n    print(time.clock_gettime(time.CLOCK_MONOTONIC), flush=True)\n    time.sleep(0.05)\n"
+        paired = bench.typed(self.slave, self.slave, [system.executable, "-c", presses], 3)
+        self.assertEqual(len(paired), 3)
+        self.assertTrue(all(pressed < bench.monotonic() and came <= bench.monotonic() for pressed, came in paired))
+        # The echo goes back to the terminal.
+        self.assertEqual(os.read(self.master, 64), b"aaa")
 
     def test_a_file_goes_out_whole_in_blocks(self):
         source = Path(tempfile.mkdtemp()) / "load.txt"
