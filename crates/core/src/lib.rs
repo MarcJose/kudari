@@ -28,6 +28,8 @@ pub mod menus;
 pub mod options;
 pub mod pipe;
 pub mod process;
+#[cfg(test)]
+mod random_states;
 pub mod remote;
 pub mod render;
 pub mod services;
