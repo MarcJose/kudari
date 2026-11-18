@@ -604,6 +604,54 @@ needed = [stats["wakeups"], stats["reports"], stats["refreshes"], stats["paints"
 needed += [stats[name]["count"] for name in ("lock_wait", "lock_hold", "queue", "frame_build", "frame_draw", "frame_copy")]
 print("yes" if all(needed) else stats)' "$first_terminal")
 check "the counters count the work of a terminal" yes "$counted"
+
+# What is painted while nothing happens: nothing. A paint costs the render thread and the
+# graphics card, and on a laptop the battery. Each check counts for two seconds, and a cursor
+# that blinks shows that the counting sees the paints that are there.
+paints() { # terminal id, or "all" for the terminals of all tabs
+    hook Stats | python3 -c '
+import json, sys
+paints, terminal = json.load(sys.stdin)["paints"], sys.argv[1]
+print(sum(paints.values()) if terminal == "all" else paints.get(terminal, 0))' "$1"
+}
+quiet() { hook ResetStats; sleep 2; paints "${1:-all}"; }
+run "clear"
+idle=$(quiet)
+hook SetSetting BlinkingCursor true; sleep 0.3
+blinking=$(quiet)
+hook SetSetting CursorBlinkTimeout 1; sleep 1.5
+rested=$(quiet)
+hook SetSetting CursorBlinkTimeout 15; input key 42; sleep 0.3
+window toggleWindowState; sleep 1
+hidden=$(quiet)
+window toggleWindowState; sleep 1
+# Only the terminal with the focus blinks; the other one of a split stays as it is.
+split=$(sessions splitTerminalLeftRight "$first_terminal"); sleep 0.8
+input key 42; sleep 0.3
+unfocused=$first_terminal
+[ "$(sessions activeTerminalId)" = "$first_terminal" ] && unfocused=$split
+hook ResetStats; sleep 2
+beside=$(paints "$unfocused")
+sessions removeTerminal "$split"; sleep 0.6
+hook SetSetting BlinkingCursor false; sleep 0.3
+check "nothing is painted while nothing happens" "0 yes 0 0 0" \
+    "$idle $([ "$blinking" -gt 0 ] && echo yes || echo "no: $blinking") $rested $hidden $beside"
+background=$(sessions addSession); sleep 1
+sessions raiseSession "$background"; sleep 0.4
+hook ResetStats
+sessions runCommandInTerminal "$first_terminal" "seq 1 40"; sleep 1
+# Neither does it refresh: the terminal of the new tab has no output either.
+behind="$(paints "$first_terminal") $(hook Stats | python3 -c 'import json, sys; print(json.load(sys.stdin)["refreshes"])')"
+sessions removeSession "$background"; sleep 0.8
+sessions raiseSession "$first"; sleep 0.4
+check "output in a tab in the background neither refreshes nor paints" "0 0" "$behind"
+# A key that the shell echoes paints the terminal once.
+run "clear"
+hook ResetStats
+input key 30; sleep 0.6
+typed=$(paints "$first_terminal")
+input key 14; sleep 0.4
+check "a typed key paints once" yes "$([ "$typed" -ge 1 ] && [ "$typed" -le 1 ] && echo yes || echo "no: $typed")"
 check "a terminal in a tab in the background has no size until it shows" "1 1 0" "$sizeless_in_background $sizeless_shown $sizeless_closed"
 run "clear"
 
