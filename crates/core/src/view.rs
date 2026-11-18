@@ -13,7 +13,7 @@ use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
-use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::cell::{Flags, LineLength};
 use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vi_mode::ViMotion;
@@ -109,23 +109,70 @@ pub const WHEEL_NOTCH: f64 = 120.0;
 /// Lines that one notch scrolls.
 const NOTCH_LINES: f64 = 3.0;
 
-/// The text from `start` to `end`, as `Term::bounds_to_string` gives it, without its fault:
-/// where the last line ends at the last column on the spacer of a wide character that wrapped
-/// into the next line, it takes the first cell of the line before instead of that character,
-/// and from the top line of a screen without history a line outside the grid. Here the text
-/// ends a cell before, and the character comes from the line after, if the range is not at the
-/// bottom of the grid.
+/// The text from `start` to `end`, as `Term::bounds_to_string` gives it, without its faults.
+///
+/// Where a line ends at the last column on the spacer of a wide character that wrapped into the
+/// next line, it takes the first cell of the line before instead of that character, and from
+/// the top line of a screen without history a line outside the grid. Here the text ends a cell
+/// before, and the character comes from the line after.
+///
+/// Where a line starts with the second half of a wide character whose first half went, as
+/// deleting characters leaves it, it reads the column before the first one. `repair_view` takes
+/// such halves out of the lines on the screen, but not of those that went into the history
+/// before it could. Here such a line starts a part of the text of its own, after that cell.
 pub fn text_between<T>(term: &Term<T>, start: Point, end: Point) -> String {
+    text_with(term, start, end, true)
+}
+
+/// The text of [`text_between`]; with `wrapped_wide`, a wide character that wrapped from the
+/// end of the range into the next line belongs to it.
+fn text_with<T>(term: &Term<T>, start: Point, end: Point, wrapped_wide: bool) -> String {
+    let last = term.last_column();
+    let mut text = String::new();
+    let mut from = start;
+    for line in start.line.0 + 1..=end.line.0 {
+        let row = &term.grid()[Line(line)];
+        if !row[Column(0)].flags.contains(Flags::WIDE_CHAR_SPACER) {
+            continue;
+        }
+        text += &part_between(term, from, Point::new(Line(line - 1), last), true);
+        let before = &term.grid()[Line(line - 1)];
+        let length = before.line_length();
+        if length == Column(0) || !before[length - 1].flags.contains(Flags::WRAPLINE) {
+            text.push('\n');
+        }
+        from = Point::new(Line(line), Column(0));
+    }
+    let row = &term.grid()[from.line];
+    if from.column == Column(0) && row[Column(0)].flags.contains(Flags::WIDE_CHAR_SPACER) {
+        // The cell shows as blank, as `repair_view` makes it.
+        if end.line > from.line || end.column > Column(0) {
+            if row.line_length() > Column(1) {
+                text.push(' ');
+            }
+            from.column = Column(1);
+        } else {
+            return text;
+        }
+    }
+    text + &part_between(term, from, end, wrapped_wide)
+}
+
+/// The text from `start` to `end` for [`text_between`], where no line after the first starts
+/// with half a wide character.
+fn part_between<T>(term: &Term<T>, start: Point, end: Point, wrapped_wide: bool) -> String {
     let last = term.last_column();
     let wrapped = end.column == last && end > start && term.grid()[end].flags.contains(Flags::LEADING_WIDE_CHAR_SPACER);
     if !wrapped {
         return term.bounds_to_string(start, end);
     }
     let mut text = term.bounds_to_string(start, Point::new(end.line, last - 1));
-    if end.line < term.bottommost_line() {
+    if wrapped_wide && end.line < term.bottommost_line() {
         let cell = &term.grid()[Line(end.line.0 + 1)][Column(0)];
-        text.push(cell.c);
-        text.extend(cell.zerowidth().into_iter().flatten());
+        if cell.flags.contains(Flags::WIDE_CHAR) {
+            text.push(cell.c);
+            text.extend(cell.zerowidth().into_iter().flatten());
+        }
     }
     text
 }
@@ -1180,8 +1227,7 @@ pub fn selected_text<T>(term: &Term<T>, options: &Options) -> Option<String> {
     let selection = term.selection.as_ref()?;
     let range = selection.to_range(term)?;
     let text = match selection.ty {
-        // Each line of a block can end on such a spacer; see `text_between`.
-        SelectionType::Block => term.selection_to_string()?,
+        SelectionType::Block => block_text(term, range.start, range.end),
         SelectionType::Lines => text_between(term, range.start, range.end) + "\n",
         _ => text_between(term, range.start, range.end),
     };
@@ -1189,6 +1235,22 @@ pub fn selected_text<T>(term: &Term<T>, options: &Options) -> Option<String> {
         return Some(text);
     }
     Some(trim_lines(&text, options.trim_leading, options.trim_trailing))
+}
+
+/// The text of a block from `start` to `end`, as `Term::selection_to_string` gives it, without
+/// the faults that [`text_between`] goes around: each line of the block can end on the spacer
+/// of a wide character that wrapped, and start with half of one.
+fn block_text<T>(term: &Term<T>, start: Point, end: Point) -> String {
+    (start.line.0..=end.line.0)
+        .map(|line| {
+            // As the emulator does: the wide character that wrapped belongs to the last line,
+            // and to the others only where the block does not start at the first column.
+            let wrapped_wide = line == end.line.0 || start.column.0 != 0;
+            let (from, to) = (Point::new(Line(line), start.column), Point::new(Line(line), end.column));
+            text_with(term, from, to, wrapped_wide).trim_end().to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn trim_lines(text: &str, leading: bool, trailing: bool) -> String {
@@ -2577,6 +2639,33 @@ mod tests {
         assert!(view.matches().is_empty());
         assert_eq!(view.search_lines(&term), None);
         assert!(term.selection.is_some(), "the selection of the last match stays");
+    }
+
+    #[test]
+    fn copying_lines_that_start_with_half_a_wide_character_works() {
+        // Deleting the first character of a line leaves the second half of a wide one in its
+        // first column; then the line goes into the history before anything repairs it.
+        let mut term = term_of(10, "a\r\n界x\r\x1b[P\r\nb\r\n\x1b[2;1H界y\r\x1b[P\x1b[3;1H");
+        assert!(term.grid()[Line(1)][Column(0)].flags.contains(Flags::WIDE_CHAR_SPACER));
+        let text = |term: &Term<VoidListener>, start: Point, end: Point| text_between(term, start, end);
+        let end = Point::new(Line(2), term.last_column());
+        assert_eq!(text(&term, Point::new(Line(0), Column(0)), end), "a\n y\nb");
+        assert_eq!(text(&term, Point::new(Line(1), Column(0)), end), " y\nb");
+        assert_eq!(
+            text(&term, Point::new(Line(1), Column(0)), Point::new(Line(1), Column(0))),
+            ""
+        );
+        select_all(&mut term);
+        // With the empty lines of the screen below.
+        assert_eq!(
+            selected_text(&term, &Options::default()).as_deref(),
+            Some("a\n y\nb\n\n")
+        );
+        // A block from the first column, over the same lines.
+        let mut block = Selection::new(SelectionType::Block, Point::new(Line(0), Column(0)), Side::Left);
+        block.update(Point::new(Line(2), Column(1)), Side::Right);
+        term.selection = Some(block);
+        assert_eq!(selected_text(&term, &Options::default()).as_deref(), Some("a\n y\nb"));
     }
 
     #[test]
