@@ -26,8 +26,9 @@
 # build with the feature stats (cargo build --release --features stats) adds what Kudari
 # counted during each load: wakeups, refreshes and paints a second, the waits for the lock of
 # a terminal and in the queue of the Qt thread, and the parts of a frame.
-# --loads picks some of plain, color, frames and seq, or idle: ten seconds without output,
-# for the CPU time and the wakeups of a terminal that waits. --set gives Kudari a setting
+# --loads picks some of plain, color, unicode, frames, boxes and seq; or partial, a line of
+# status that changes every 16 ms for ten seconds, for the cost of a small change; or idle:
+# ten seconds without output, for the CPU time and the wakeups of a terminal that waits. --set gives Kudari a setting
 # for the measurement, such as --set Terminal.BlinkingCursor=true, once for each. --scale
 # scales the screen as for a HiDPI display, and --keep keeps the data and the logs of the
 # terminals. --scenarios measures Kudari alone instead of the loads: its start and its
@@ -46,8 +47,11 @@
 #
 # All of them run full screen in a virtual KWin of 2560x1440, xterm through Xwayland, on a
 # D-Bus and with settings of their own, so the desktop and its settings stay out of it. The
-# loads are plain text, text in 256 colors, 300 full screens with colors of their own in
-# every cell, as a busy program draws them, and the numbers up to 2,000,000. A load is timed
+# loads are plain text, text in 256 colors, wide characters, emoji and combining marks, 300
+# full screens with colors of their own in every cell, as a busy program draws them, 300 of
+# panels framed in lines with bars of blocks and graphs of braille, as system monitors draw
+# them, and the numbers up to 2,000,000. Kudari draws lines and blocks itself, and braille
+# with the font unless --set Terminal.FontBrailleCharacters=false. A load is timed
 # on the monotonic clock from its first byte to the answer of the terminal to a query of the
 # cursor (DSR) after its last, when the terminal has read and parsed all of it; the report
 # gives that query alone and how long each terminal still worked after the last byte. Each
@@ -236,7 +240,7 @@ variants=${KUDARI_BENCH_VARIANTS:-}
 revisions=
 runs=5
 scale=1
-loads="plain color frames seq"
+loads="plain color unicode frames boxes seq"
 keep=
 keep_env=
 warmup=1
@@ -267,7 +271,10 @@ while [ $# -gt 0 ]; do
         --loads)
             loads=$(echo "$2" | tr ',' ' ')
             for load in $loads; do
-                case $load in plain | color | frames | seq | idle) ;; *) die "no load $load; there are plain, color, frames, seq and idle" ;; esac
+                case $load in
+                    plain | color | unicode | frames | boxes | seq | partial | idle) ;;
+                    *) die "no load $load; there are plain, color, unicode, frames, boxes, seq, partial and idle" ;;
+                esac
             done
             shift 2
             ;;
