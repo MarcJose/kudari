@@ -298,6 +298,7 @@ fn main() {
 /// A real session with its PTY, as Kudari runs it, with a front end of its own.
 #[cfg(unix)]
 mod pty {
+    use std::os::unix::fs::DirBuilderExt as _;
     use std::path::{Path, PathBuf};
     use std::sync::mpsc::{Sender, channel};
     use std::sync::{Arc, Mutex, OnceLock};
@@ -410,8 +411,10 @@ time.sleep(0.5)
     fn session(id: i32, program: &Path, load: &Path, held: u64) -> Option<(f64, f64)> {
         let result = load.with_extension(format!("{id}.result"));
         let _ = std::fs::remove_file(&result);
+        // Each path in quotes of its own, as a temporary directory may hold spaces.
+        let quoted = |path: &Path| format!("'{}'", path.display().to_string().replace('\'', r"'\''"));
         terminal::apply_options(Options {
-            command: format!("python3 {} {} {}", program.display(), load.display(), result.display()),
+            command: format!("python3 {} {} {}", quoted(program), quoted(load), quoted(&result)),
             shell_integration: false,
             ..Options::default()
         });
@@ -446,6 +449,16 @@ time.sleep(0.5)
         Some((seconds, cpu))
     }
 
+    /// Writes a file that must not be there yet.
+    fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        use std::io::Write as _;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?
+            .write_all(bytes)
+    }
+
     /// The CPU time of this process so far, of all its threads, in seconds.
     fn cpu_seconds() -> f64 {
         // SAFETY: `getrusage` fills the struct it is given, which lives on this stack.
@@ -457,13 +470,21 @@ time.sleep(0.5)
     }
 
     pub fn run(settings: &Settings) {
-        let directory: PathBuf = std::env::temp_dir().join(format!("kudari-pty-{}", std::process::id()));
-        if std::fs::create_dir_all(&directory).is_err() {
-            eprintln!("pty: no directory {}", directory.display());
+        // A directory of its own, made here and for this user alone: a directory or a link
+        // that someone else made under that name beforehand would hand them the program that
+        // runs here.
+        let started = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let directory: PathBuf = std::env::temp_dir().join(format!("kudari-pty-{}-{started}", std::process::id()));
+        if let Err(error) = std::fs::DirBuilder::new().mode(0o700).create(&directory) {
+            eprintln!("pty: no directory {}: {error}", directory.display());
             return;
         }
         let program = directory.join("program.py");
-        if std::fs::write(&program, PROGRAM).is_err() {
+        if write_new(&program, PROGRAM.as_bytes()).is_err() {
+            let _ = std::fs::remove_dir_all(&directory);
             return;
         }
         front();
@@ -478,7 +499,7 @@ time.sleep(0.5)
         let mut id = 1_000;
         for (name, data) in common::loads() {
             let load = directory.join(format!("{name}.txt"));
-            if std::fs::write(&load, &data).is_err() {
+            if write_new(&load, &data).is_err() {
                 continue;
             }
             for held in HELD {
