@@ -375,6 +375,16 @@ impl View {
         context: &Context,
     ) -> Vec<Effect> {
         let Physical { digit, base } = physical;
+        // A character of AltGr on Windows, where Ctrl and Alt stand for it: typed as it is,
+        // and Ctrl and Alt neither show the link numbers nor pick one.
+        let (key, base, modifiers) = match input::altgr_text(modifiers, base, text) {
+            Some(character) => (
+                Key::Character(character),
+                None,
+                modifiers.without(Modifiers::CONTROL | Modifiers::ALT),
+            ),
+            None => (key, base, modifiers),
+        };
         let options = context.options;
         let hints_held = !options.url_hints_modifiers.is_empty() && modifiers.held() == options.url_hints_modifiers;
         let mut effects = vec![Effect::Hints(hints_held)];
@@ -2075,6 +2085,33 @@ mod tests {
             &context,
         );
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::OpenLink(_))));
+    }
+
+    #[test]
+    fn altgr_on_windows_types_its_character_without_alt_or_link_numbers() {
+        let mut term = term_with("https://a.org");
+        let mut view = View::default();
+        // Link numbers on Ctrl+Alt, which AltGr holds as well on Windows.
+        let options = Options {
+            url_hints_modifiers: Modifiers::CONTROL | Modifiers::ALT,
+            ..Options::default()
+        };
+        let context = context(&options, true, &nowhere);
+        view.set_hints(links_on_screen(&term, None));
+        let ctrl_alt = Modifiers::CONTROL | Modifiers::ALT;
+        let typed = |view: &mut View, term: &mut Term<VoidListener>, key, digit, base, text| {
+            view.key_at(term, key, Physical { digit, base }, ctrl_alt, text, &context)
+        };
+        // AltGr and + on a German keyboard: the tilde alone, as for the home directory.
+        let effects = typed(&mut view, &mut term, Key::Character('~'), None, Some('+'), "~");
+        assert_eq!(effects, [Effect::Hints(false), Effect::Type(b"~".to_vec())]);
+        // AltGr and 7 types `{`: not the link of number 7.
+        let effects = typed(&mut view, &mut term, Key::Character('{'), Some(7), Some('7'), "{");
+        assert_eq!(effects, [Effect::Hints(false), Effect::Type(b"{".to_vec())]);
+        // A real Ctrl+Alt with a key types the key itself and stays a combination: Escape
+        // first, and the link numbers show.
+        let effects = typed(&mut view, &mut term, Key::Character('+'), None, Some('+'), "+");
+        assert_eq!(effects, [Effect::Hints(true), Effect::Type(b"\x1b+".to_vec())]);
     }
 
     #[test]
