@@ -31,6 +31,9 @@
 #include <QPainter>
 #include <QPrintDialog>
 #include <QPrinter>
+#include <QQuickWindow>
+#include <QSGImageNode>
+#include <QSGTexture>
 #include <QTextDocument>
 // Private, as nothing public names the key of a key event on its first level.
 #include <QtGui/private/qkeymapper_p.h>
@@ -165,61 +168,59 @@ std::uint32_t rk_glyph_index(const QRawFont &font, std::uint32_t character)
 // grows to the largest of them, and each draws into its top left corner. It shrinks to the
 // frame again once it has been more than twice as large for a while, as after full screen,
 // and not for a single smaller terminal among larger ones. Null when the target has no size.
-std::unique_ptr<RkFrame> rk_frame_begin(QPainter &target, bool opaque)
+RkImageItem::RkImageItem(QQuickItem *parent)
+    : QQuickItem(parent)
 {
-    // Frames in a row for which the image was more than twice as large as needed.
-    constexpr int roomyFrames = 120;
-    thread_local QImage image;
-    thread_local int roomy = 0;
-    QPaintDevice *device = target.device();
-    if (device == nullptr || device->width() <= 0 || device->height() <= 0) {
+    setFlag(ItemHasContents, true);
+}
+
+void RkImageItem::setOpaquePainting(bool opaque)
+{
+    m_opaque = opaque;
+}
+
+QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
+{
+    QQuickWindow *shown = window();
+    const qreal ratio = shown ? shown->effectiveDevicePixelRatio() : 1.0;
+    const QSize size = (QSizeF(width(), height()) * ratio).toSize();
+    if (!shown || size.isEmpty()) {
+        // A terminal in a tab in the background has no size: neither its pixels nor its
+        // texture stay.
+        m_image = QImage();
+        delete node;
         return nullptr;
     }
-    const QSize size(device->width(), device->height());
-    const qint64 needed = qint64(size.width()) * size.height();
-    if (image.width() < size.width() || image.height() < size.height()) {
-        image = QImage(size.expandedTo(image.size()), QImage::Format_ARGB32_Premultiplied);
-        roomy = 0;
-    } else if (qint64(image.width()) * image.height() > 2 * needed) {
-        if (++roomy > roomyFrames) {
-            image = QImage(size, QImage::Format_ARGB32_Premultiplied);
-            roomy = 0;
-        }
-    } else {
-        roomy = 0;
+    if (m_image.size() != size) {
+        m_image = QImage(size, QImage::Format_ARGB32_Premultiplied);
     }
-    image.setDevicePixelRatio(device->devicePixelRatioF());
+    m_image.setDevicePixelRatio(ratio);
     // An opaque terminal paints its background over all of it first.
-    if (!opaque) {
-        for (int y = 0; y < size.height(); ++y) {
-            std::memset(image.scanLine(y), 0, size_t(size.width()) * 4);
-        }
+    if (!m_opaque) {
+        m_image.fill(Qt::transparent);
     }
-    auto frame = std::make_unique<RkFrame>();
-    frame->image = &image;
-    frame->size = size;
-    frame->painter.begin(&image);
-    frame->painter.setTransform(target.transform());
-    frame->painter.setRenderHints(target.renderHints());
-    return frame;
-}
-
-QPainter &rk_frame_painter(RkFrame &frame)
-{
-    return frame.painter;
-}
-
-// Replaces every pixel of the item, transparent ones as well: the item has no fill color,
-// so Qt leaves what the last frame drew, and a translucent frame comes cleared from
-// `rk_frame_begin`.
-void rk_frame_end(QPainter &target, std::unique_ptr<RkFrame> frame)
-{
-    frame->painter.end();
-    target.save();
-    target.resetTransform();
-    target.setCompositionMode(QPainter::CompositionMode_Source);
-    target.drawImage(QPointF(), *frame->image, QRectF(QPointF(), frame->size));
-    target.restore();
+    {
+        QPainter painter(&m_image);
+        paint(&painter);
+    }
+    auto *image = static_cast<QSGImageNode *>(node);
+    if (!image) {
+        image = shown->createImageNode();
+        image->setOwnsTexture(true);
+    }
+    QSGTexture *texture =
+        shown->createTextureFromImage(m_image, m_opaque ? QQuickWindow::TextureIsOpaque : QQuickWindow::TextureHasAlphaChannel);
+    // The node deletes the texture it owns, but whether it does so when another takes its
+    // place differs between the nodes of Qt: this deletes it once, either way.
+    QSGTexture *previous = image->texture();
+    image->setOwnsTexture(false);
+    image->setTexture(texture);
+    image->setOwnsTexture(true);
+    delete previous;
+    image->setRect(QRectF(0, 0, width(), height()));
+    image->setSourceRect(QRectF(QPointF(), QSizeF(size)));
+    image->setFiltering(smooth() ? QSGTexture::Linear : QSGTexture::Nearest);
+    return image;
 }
 
 // Positions on the baseline. One run per font and color spares the text layout that

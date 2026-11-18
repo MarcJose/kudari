@@ -52,7 +52,7 @@ PREPARED = re.compile(r"^(\S+) .*\[gui thread\] Frame prepared, .*blockedForSync
 # A line of the counters of a build with the feature stats: the seconds since 1970 and JSON.
 STATS = re.compile(r"^kudari-stats (\d+(?:\.\d+)?) (\{.*\})$")
 # The counted times of the counters, as they name them and as the report does.
-TIMED = (("lock_wait", "lock wait"), ("lock_hold", "lock hold"), ("queue", "queue"), ("frame_build", "build"), ("frame_draw", "draw"), ("frame_copy", "copy"))
+TIMED = (("lock_wait", "lock wait"), ("lock_hold", "lock hold"), ("queue", "queue"), ("frame_build", "build"), ("frame_draw", "draw"))
 # A frame shows the output a moment after it arrived: frames this long after a load count.
 TAIL = 0.05
 # A gap between two frames this long, in milliseconds, left out one at 60 Hz.
@@ -672,7 +672,7 @@ def counters(terminal, measured):
             count = sum(found[name]["count"] for found in done)
             return f"{sum(found[name]['total_us'] for found in done) / count:.0f}" if count else "-"
 
-        rows.append([load, rate("wakeups"), rate("refreshes"), rate("paints"), p95("lock_wait"), p95("lock_hold"), p95("queue"), mean("frame_build"), mean("frame_draw"), mean("frame_copy")])
+        rows.append([load, rate("wakeups"), rate("refreshes"), rate("paints"), p95("lock_wait"), p95("lock_hold"), p95("queue"), mean("frame_build"), mean("frame_draw")])
     if not rows:
         return
     print(f"\n{terminal}: what the build with the feature stats counted during each load")
@@ -680,8 +680,8 @@ def counters(terminal, measured):
     print("the lines of the counters around the load. p95 is the upper end of the bucket of powers of two")
     print("that holds 95 % of the times, over all runs, in microseconds: the wait for the lock of a")
     print("terminal, how long it was held, and the wait in the queue of the Qt thread. A frame is")
-    print("built, drawn into its image and copied into the item; those are the means.")
-    table(["load", "wakeups/s", "refreshes/s", "paints/s", "lock wait p95", "lock hold p95", "queue p95", "build µs", "draw µs", "copy µs"], rows)
+    print("built and drawn into its image; those are the means.")
+    table(["load", "wakeups/s", "refreshes/s", "paints/s", "lock wait p95", "lock hold p95", "queue p95", "build µs", "draw µs"], rows)
 
 
 def ranged(whole, width):

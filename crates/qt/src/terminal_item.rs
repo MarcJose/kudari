@@ -79,15 +79,15 @@ pub mod qobject {
     }
 
     unsafe extern "C++" {
-        include!(<QtQuick/QQuickPaintedItem>);
-        type QQuickPaintedItem;
+        include!("qtbridge.h");
+        type RkImageItem;
     }
 
     #[auto_cxx_name]
     unsafe extern "RustQt" {
         #[qobject]
         #[qml_element]
-        #[base = QQuickPaintedItem]
+        #[base = RkImageItem]
         #[qproperty(i32, terminal_id, cxx_name = "terminalId")]
         #[qproperty(QFont, term_font, cxx_name = "termFont")]
         #[qproperty(f64, cell_width, cxx_name = "cellWidth")]
@@ -139,11 +139,6 @@ pub mod qobject {
 
         #[inherit]
         fn update(self: Pin<&mut Self>);
-
-        /// The color Qt fills the image of the item with before each paint; none if invalid.
-        #[inherit]
-        #[cxx_name = "setFillColor"]
-        fn set_fill_color(self: Pin<&mut Self>, color: &QColor);
 
         /// Whether the item covers all its pixels, so that Qt draws it without blending.
         #[inherit]
@@ -274,9 +269,6 @@ impl cxx_qt::Initialize for qobject::TerminalItem {
     fn initialize(mut self: Pin<&mut Self>) {
         // SAFETY: the pointer is only used during the call.
         unsafe { qobject::rk_enable_input_method(self.as_mut().get_unchecked_mut()) };
-        // Every frame replaces all pixels of the item (see `rk_frame_end`), so Qt need not clear
-        // them first, one pass over the whole image less.
-        self.as_mut().set_fill_color(&QColor::default());
         // An opaque terminal paints its background over all of it: Qt then draws it without
         // blending and leaves out what lies behind.
         let opaque = *self.opaque();
@@ -1031,30 +1023,17 @@ impl qobject::TerminalItem {
     /// # Safety
     ///
     /// `painter` must be null or valid for the duration of the call, which Qt guarantees.
-    pub unsafe fn paint(mut self: Pin<&mut Self>, painter: *mut qobject::QPainter) {
+    pub unsafe fn paint(self: Pin<&mut Self>, painter: *mut qobject::QPainter) {
         // SAFETY: Qt passes null or a painter that is valid during this call and stays in place.
         let Some(painter) = (unsafe { painter.as_mut() }) else {
             return;
         };
         // SAFETY: Qt keeps the painter in place during this call.
-        let mut target = unsafe { Pin::new_unchecked(painter) };
+        let target = unsafe { Pin::new_unchecked(painter) };
         stats::paint(*self.terminal_id());
-        // Text draws much faster into the image of `rk_frame_begin` than into the item's own.
-        let opaque = *self.opaque();
-        let mut frame = kde::rk_frame_begin(target.as_mut(), opaque);
-        let drawn = if let Some(inner) = frame.as_mut() {
-            self.as_mut().paint_frame(kde::rk_frame_painter(inner));
-            true
-        } else {
-            false
-        };
-        if drawn {
-            let copy = stats::Stopwatch::start();
-            kde::rk_frame_end(target, frame);
-            copy.stop(stats::Time::FrameCopy);
-        } else {
-            self.paint_frame(target);
-        }
+        // The painter draws into the image of the item itself, which goes to the screen as it
+        // is; see `RkImageItem` in qtbridge.h.
+        self.paint_frame(target);
     }
 
     /// Looks for files among the words of the link numbers on a thread of its own, without
