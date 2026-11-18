@@ -38,7 +38,9 @@
 # 100,000 lines with a working directory, links, marks of the prompt and copies to the
 # clipboard; bells, 300,000 of them; queries, 100,000 queries of the device attributes in
 # batches of 1,000, each answered before the next, whose answers the report counts; and
-# combining, cells with four combining marks each. --set gives Kudari a setting
+# combining, cells with four combining marks each. query asks 200 times each for the place
+# of the cursor, the device attributes and the color of the background, alone and while the
+# frames load goes to the terminal, and the report gives the round trips. --set gives Kudari a setting
 # for the measurement, such as --set Terminal.BlinkingCursor=true, once for each. --scale
 # scales the screen as for a HiDPI display, and --keep keeps the data and the logs of the
 # terminals. --scenarios measures Kudari alone instead of the loads: its start and its
@@ -290,8 +292,8 @@ while [ $# -gt 0 ]; do
             for load in $loads; do
                 case $load in
                     plain | color | unicode | frames | boxes | seq | partial | idle | typing | burst | scroll | search) ;;
-                    titles | osc | bells | queries | combining) ;;
-                    *) die "no load $load; there are plain, color, unicode, frames, boxes, seq, partial, idle, typing, burst, scroll, search, titles, osc, bells, queries and combining" ;;
+                    titles | osc | bells | queries | combining | query) ;;
+                    *) die "no load $load; there are plain, color, unicode, frames, boxes, seq, partial, idle, typing, burst, scroll, search, titles, osc, bells, queries, combining and query" ;;
                 esac
             done
             shift 2
