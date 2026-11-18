@@ -48,15 +48,28 @@ void rk_draw_badge(QPainter &painter,
                    const QFont &terminalFont,
                    int cellHeight);
 void rk_font_rendering(QFont &font, bool antiAlias, bool hinting);
-/// A frame of a terminal on its way to the item; see `rk_frame_begin`.
-struct RkFrame {
-    QImage *image;
-    QSize size;
-    QPainter painter;
+/// An item that paints into an image of its own and shows it as a texture: the base of the
+/// terminal. Its image has the format that text draws fastest into and that most graphics
+/// drivers take as it is, so no frame is converted or copied on its way to the screen, as
+/// they are with QQuickPaintedItem. An item without a size keeps neither image nor texture.
+class RkImageItem : public QQuickItem
+{
+public:
+    explicit RkImageItem(QQuickItem *parent = nullptr);
+
+    /// Paints a frame; the painter draws into the image of the item, in logical pixels.
+    virtual void paint(QPainter *painter) = 0;
+    /// Whether every frame covers all of the item: it is then neither cleared before nor
+    /// blended with what lies behind it.
+    void setOpaquePainting(bool opaque);
+
+protected:
+    QSGNode *updatePaintNode(QSGNode *node, UpdatePaintNodeData *data) override;
+
+private:
+    QImage m_image;
+    bool m_opaque = false;
 };
-std::unique_ptr<RkFrame> rk_frame_begin(QPainter &target, bool opaque);
-QPainter &rk_frame_painter(RkFrame &frame);
-void rk_frame_end(QPainter &target, std::unique_ptr<RkFrame> frame);
 std::unique_ptr<QRawFont> rk_raw_font(const QPainter &painter, const QFont &font);
 std::uint32_t rk_glyph_index(const QRawFont &font, std::uint32_t character);
 void rk_draw_glyphs(QPainter &painter,
