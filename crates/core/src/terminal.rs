@@ -59,18 +59,23 @@ impl Drop for Pending {
     }
 }
 
-/// Lets the PTY thread of a terminal report output at most once a frame. A report leads to a
-/// refresh of the item, which asks for a frame; its [`Pending`] then waits for that frame, and
-/// output meanwhile goes into the frame instead of reports of its own. Under a lot of output
-/// that is thousands of reports, each with the lock of the terminal, fewer a second.
+/// Lets the PTY thread of a terminal report output at most once a frame, and a terminal that
+/// nobody sees a few times a second. A report leads to a refresh of the item, which asks for a
+/// frame; its [`Pending`] then waits for that frame, and output meanwhile goes into the frame
+/// instead of reports of its own. Under a lot of output that is thousands of reports, each
+/// with the lock of the terminal, fewer a second.
 ///
-/// A report that asked for no frame, as for a terminal nobody sees, lets go at once, so that
-/// watching for activity and silence still hears of all output. A frame that was asked for and
-/// does not come, as when the terminal is hidden meanwhile, is given up after a while.
+/// A report that asked for no frame, as for a terminal in a tab in the background or in a
+/// hidden window, waits for the next [`FrameGate::release`], which the front end calls a few
+/// times a second, or for the first frame when the terminal shows. The first output after it
+/// is reported at once, so that watching for activity hears of it without delay, and silence
+/// is seen at most that much later. A frame that was asked for and does not come, as when the
+/// terminal is hidden meanwhile, is given up after a while as well.
 #[derive(Debug, Default)]
 pub struct FrameGate {
     asked: std::collections::HashSet<crate::sessions::TerminalId>,
-    held: HashMap<crate::sessions::TerminalId, (Pending, Instant)>,
+    /// The marks that wait, with when they came and whether a frame was asked for.
+    held: HashMap<crate::sessions::TerminalId, (Pending, Instant, bool)>,
 }
 
 impl FrameGate {
@@ -80,11 +85,10 @@ impl FrameGate {
     }
 
     /// A report of output of `terminal` was handled: its mark waits for the frame it asked
-    /// for, or goes.
+    /// for, or for the next release.
     pub fn hold(&mut self, terminal: crate::sessions::TerminalId, pending: Pending) {
-        if self.asked.contains(&terminal) {
-            self.held.insert(terminal, (pending, Instant::now()));
-        }
+        let asked = self.asked.contains(&terminal);
+        self.held.insert(terminal, (pending, Instant::now(), asked));
     }
 
     /// The frame of `terminal` begins: its output is reported again.
@@ -93,12 +97,13 @@ impl FrameGate {
         self.held.remove(&terminal);
     }
 
-    /// Gives up the frames that marks waited for longer than `longest`.
+    /// Lets go of the marks of terminals that asked for no frame, and gives up the frames
+    /// that marks waited for longer than `longest`.
     pub fn release(&mut self, longest: std::time::Duration) {
         let late: Vec<_> = self
             .held
             .iter()
-            .filter(|(_, (_, since))| since.elapsed() >= longest)
+            .filter(|(_, (_, since, asked))| !asked || since.elapsed() >= longest)
             .map(|(terminal, _)| *terminal)
             .collect();
         for terminal in late {
@@ -1337,9 +1342,21 @@ mod tests {
         assert!(flag.load(Ordering::Acquire));
         gate.painted(1);
         assert!(!flag.load(Ordering::Acquire));
-        // Without a frame asked for, as for a terminal nobody sees, the mark goes at once.
+    }
+
+    #[test]
+    fn a_terminal_nobody_sees_reports_at_each_release_or_when_it_shows() {
+        let mut gate = FrameGate::default();
         let (mark, flag) = pending();
         gate.hold(1, mark);
+        // No frame was asked for: the mark waits for the next release, whatever its age.
+        assert!(flag.load(Ordering::Acquire));
+        gate.release(std::time::Duration::from_secs(60));
+        assert!(!flag.load(Ordering::Acquire));
+        // Or for the first frame when the terminal shows.
+        let (mark, flag) = pending();
+        gate.hold(1, mark);
+        gate.painted(1);
         assert!(!flag.load(Ordering::Acquire));
     }
 
@@ -1353,9 +1370,10 @@ mod tests {
         assert!(flag.load(Ordering::Acquire), "not yet");
         gate.release(std::time::Duration::ZERO);
         assert!(!flag.load(Ordering::Acquire));
-        // Nor does the next output wait for it.
+        // Nor does the next output wait for it, but only for the next release.
         let (mark, flag) = pending();
         gate.hold(1, mark);
+        gate.release(std::time::Duration::from_secs(60));
         assert!(!flag.load(Ordering::Acquire));
     }
 

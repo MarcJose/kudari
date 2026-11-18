@@ -815,6 +815,7 @@ WAITING = (
     ("fading", "shown, with a fading cursor"),
     ("output-behind", "ten lines a second in a tab in the background"),
     ("output-hidden", "the same, with the window hidden"),
+    ("flood-behind", "endless output in a tab in the background"),
 )
 MEMORY = (("memory-1", "1 tab"), ("memory-5", "5 tabs"), ("memory-10", "10 tabs"), ("memory-closed", "closed to 1"))
 # The phases that Kudari marks through KUDARI_TIMING while it starts, in their order: the
@@ -900,7 +901,8 @@ def scenarios(directory):
                 continue
             length = end - start
             frames_meanwhile = sum(start <= time <= end for times in drawn.values() for time in times)
-            waiting.setdefault(scenario, []).append((sum(used[scenario].values()) / length, sum((woken.get(scenario) or {}).values()) / length, frames_meanwhile / length))
+            per_thread = {group: used_ms / length for group, used_ms in used[scenario].items()}
+            waiting.setdefault(scenario, []).append((sum(used[scenario].values()) / length, sum((woken.get(scenario) or {}).values()) / length, frames_meanwhile / length, per_thread))
         for label, _ in MEMORY:
             if label in sizes:
                 memory.setdefault(label, []).append(sizes[label])
@@ -915,12 +917,16 @@ def scenarios(directory):
     print("\nA second start, which only toggles the running Kudari, and kudari --version, to their end, in ms.")
     table(["", "median", "p95", "max", "times"], [["second start", *summary(seconds)], ["--version", *summary(versions)]])
     print("\nWaiting, ten seconds each: CPU time of all threads, how often they went to sleep or were")
-    print("put aside, and the frames that Qt Quick drew; the median of the runs.")
+    print("put aside, the frames that Qt Quick drew, and the three busiest threads; the median of the")
+    print("runs, in milliseconds a second.")
     rows = []
     for scenario, description in WAITING:
         if found := waiting.get(scenario):
-            rows.append([description, f"{statistics.median(cpu for cpu, _, _ in found):.2f}", f"{statistics.median(wakeups for _, wakeups, _ in found):.0f}", f"{statistics.median(frames for _, _, frames in found):.1f}"])
-    table(["", "CPU ms/s", "wakeups/s", "frames/s"], rows)
+            groups = {group for *_, per_thread in found for group in per_thread}
+            busiest = sorted(((statistics.median(per_thread.get(group, 0.0) for *_, per_thread in found), group) for group in groups), reverse=True)[:3]
+            threads = ", ".join(f"{group} {used_ms:.2f}" for used_ms, group in busiest)
+            rows.append([description, f"{statistics.median(found_[0] for found_ in found):.2f}", f"{statistics.median(found_[1] for found_ in found):.0f}", f"{statistics.median(found_[2] for found_ in found):.1f}", threads])
+    table(["", "CPU ms/s", "wakeups/s", "frames/s", "busiest threads"], rows)
     print("\nMemory in MB, median of the runs: private, resident (RSS) and proportional (PSS).")
     rows = []
     for label, description in MEMORY:

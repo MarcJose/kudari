@@ -12,7 +12,8 @@
 #   version     kudari --version to its end
 #   idle        ten seconds each of CPU time, wakeups and frames: never shown, shown, hidden,
 #               a blinking cursor, one that rests, a fading one, output in a tab in the
-#               background, and output while the window is hidden
+#               background, output while the window is hidden, and endless output in a tab
+#               in the background
 #   memory      after the start, with 5 and with 10 tabs, and after closing them again
 #
 # Every time is the clock of the computer in seconds since 1970, in events-RUN.txt, next to
@@ -161,6 +162,18 @@ while [ "$round" -le $((KUDARI_BENCH_WARMUP + KUDARI_BENCH_RUNS)) ]; do
     toggle hide main
     sleep 1
     idle output-hidden
+    # Output as fast as it comes, as from a build, in a tab in the background.
+    toggle show main
+    sleep 1
+    sessions removeSession "$behind" > /dev/null
+    flood=$(sessions addSession)
+    sessions raiseSession "$first" > /dev/null
+    sleep 1
+    terminal=$(sessions terminalIdsForSessionId "$flood" | cut -d, -f1)
+    sessions runCommandInTerminal "$terminal" 'yes' > /dev/null
+    sleep 2
+    idle flood-behind
+    sessions removeSession "$flood" > /dev/null
     stop
 
     say "$title: a blinking cursor, and one that rests"
