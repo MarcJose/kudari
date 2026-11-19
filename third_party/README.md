@@ -11,7 +11,22 @@ version with the change named here and nothing else, so it can be compared with 
 | `cxx-qt-build` | 0.10.0 | Takes a build with `DEBUG` set to `false` or `none` for one without debugging, as `is_debug` meant to: its `\|\| debug != "none"` made every build count as one for debugging, so the C++ parts of release builds lacked `QT_NO_DEBUG` and kept the asserts of Qt. | [KDAB/cxx-qt#1510](https://github.com/KDAB/cxx-qt/pull/1510) |
 
 The first two are needed for a reproducible build of Kudari. Once a release of cxx-qt
-contains all three, delete this directory and the `[patch.crates-io]` section, and run
-`cargo update`.
+contains all three, delete these two directories and their lines in `[patch.crates-io]`, and
+run `cargo update`.
 
 The crates are under `MIT OR Apache-2.0`, © Klarälvdalens Datakonsult AB, a KDAB Group company.
+
+## The terminal emulator
+
+`alacritty_terminal` 0.26.0 and the parser it uses, `vte` 0.15.0, are copied as published,
+without the recorded sessions in `tests/` of `alacritty_terminal` and the example of `vte`,
+which their manifests no longer name. They carry fixes of faults that freeze or end the
+terminals of Kudari, or show the wrong text; `crates/core/src/upstream_tests.rs` has a test
+for each, which runs against these copies.
+
+No change yet; each fix adds a line here, with the crate, its change and the test.
+
+Once releases of both carry a fix, delete it here; once they carry all of them, delete both
+directories and their lines in `[patch.crates-io]`, update the versions in `Cargo.toml`, and
+run `cargo update`. `alacritty_terminal` is under `Apache-2.0`, `vte` under
+`Apache-2.0 OR MIT`, © the authors of Alacritty.

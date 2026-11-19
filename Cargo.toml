@@ -126,3 +126,5 @@ strip = "none"
 [patch.crates-io]
 cxx-qt-build = { path = "third_party/cxx-qt-build" }
 qt-build-utils = { path = "third_party/qt-build-utils" }
+alacritty_terminal = { path = "third_party/alacritty_terminal" }
+vte = { path = "third_party/vte" }

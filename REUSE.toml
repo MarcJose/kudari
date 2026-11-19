@@ -22,6 +22,16 @@ SPDX-FileCopyrightText = "2026 Marc Jose <marc@hahn-jose.de>"
 SPDX-License-Identifier = "CC0-1.0"
 
 [[annotations]]
+path = ["third_party/alacritty_terminal/**"]
+SPDX-FileCopyrightText = "The authors of Alacritty"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ["third_party/vte/**"]
+SPDX-FileCopyrightText = "The authors of Alacritty"
+SPDX-License-Identifier = "Apache-2.0 OR MIT"
+
+[[annotations]]
 path = ["third_party/cxx-qt-build/Cargo.toml", "third_party/qt-build-utils/Cargo.toml"]
 SPDX-FileCopyrightText = "Klarälvdalens Datakonsult AB, a KDAB Group company <info@kdab.com>"
 SPDX-License-Identifier = "MIT OR Apache-2.0"
