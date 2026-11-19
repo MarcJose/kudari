@@ -628,8 +628,12 @@ impl<T> Term<T> {
             && line_length.0 >= 2
             && grid_line[line_length - 1].flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
             && include_wrapped_wide
+            && line < self.bottommost_line()
         {
-            text.push(self.grid[line - 1i32][Column(0)].c);
+            // The wide character went to the start of the next line.
+            let cell = &self.grid[line + 1i32][Column(0)];
+            text.push(cell.c);
+            text.extend(cell.zerowidth().into_iter().flatten());
         }
 
         text
@@ -1572,16 +1576,22 @@ impl<T: EventListener> Handler for Term<T> {
         let cursor = &self.grid.cursor;
         let bg = cursor.template.bg;
 
-        // Ensure deleting within terminal bounds.
-        let count = cmp::min(count, columns);
-
+        // Ensure deleting within terminal bounds: from the cursor to the end of the line, and
+        // nothing before the cursor.
         let start = cursor.point.column.0;
+        let count = cmp::min(count, columns - start);
+
         let end = cmp::min(start + count, columns - 1);
         let num_cells = columns - end;
 
         let line = cursor.point.line;
         self.damage.damage_line(line.0 as usize, 0, self.columns() - 1);
         let row = &mut self.grid[line][..];
+
+        // Deleting from the second half of a wide character takes the first half with it.
+        if start > 0 && row[start].flags.contains(Flags::WIDE_CHAR_SPACER) {
+            row[start - 1] = bg.into();
+        }
 
         for offset in 0..num_cells {
             row.swap(start + offset, end + offset);
@@ -1592,6 +1602,13 @@ impl<T: EventListener> Handler for Term<T> {
         let end = columns - count;
         for cell in &mut row[end..] {
             *cell = bg.into();
+        }
+
+        // A second half of a wide character whose first half was deleted is left alone at the
+        // cursor; it is a blank cell then, as a spacer with nothing before it breaks the cells
+        // around it.
+        if row[start].flags.contains(Flags::WIDE_CHAR_SPACER) {
+            row[start] = bg.into();
         }
     }
 
@@ -1789,8 +1806,8 @@ impl<T: EventListener> Handler for Term<T> {
             ansi::ClearMode::Above => {
                 let cursor = self.grid.cursor.point;
 
-                // If clearing more than one line.
-                if cursor.line > 1 {
+                // If clearing more than one line: all lines above that of the cursor.
+                if cursor.line > 0 {
                     // Fully clear all lines before the current line.
                     self.grid.reset_region(..cursor.line);
                 }

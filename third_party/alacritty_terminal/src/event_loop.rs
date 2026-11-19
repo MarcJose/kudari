@@ -129,9 +129,11 @@ where
 
         loop {
             // Read from the PTY.
+            let mut nothing_new = false;
             match self.pty.reader().read(&mut buf[unprocessed..]) {
                 // This is received on Windows/macOS when no more data is readable from the PTY.
                 Ok(0) if unprocessed == 0 => break,
+                Ok(0) => nothing_new = true,
                 Ok(got) => unprocessed += got,
                 Err(err) => match err.kind() {
                     ErrorKind::Interrupted | ErrorKind::WouldBlock => {
@@ -139,6 +141,7 @@ where
                         if unprocessed == 0 {
                             break;
                         }
+                        nothing_new = true;
                     },
                     _ => return Err(err),
                 },
@@ -147,8 +150,9 @@ where
             // Attempt to lock the terminal.
             if terminal.is_none() {
                 terminal = Some(match self.terminal.try_lock_unfair() {
-                    // Force block if we are at the buffer size limit.
-                    None if unprocessed >= READ_BUFFER_SIZE => self.terminal.lock_unfair(),
+                    // Force block if we are at the buffer size limit, and where the PTY has
+                    // nothing more to read: reading again at once would only spin.
+                    None if unprocessed >= READ_BUFFER_SIZE || nothing_new => self.terminal.lock_unfair(),
                     None => continue,
                     Some(terminal) => terminal,
                 });

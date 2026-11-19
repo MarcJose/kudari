@@ -363,9 +363,12 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
             }
         }
 
-        // Reverse iterator and use it as the new grid storage.
+        // Reverse iterator and use it as the new grid storage. The history keeps as many lines of
+        // output as before: a line that now wraps into more rows counts once, as its rows join
+        // again when the grid grows wider, and holds about the same cells.
         let mut reversed: Vec<Row<T>> = new_raw.drain(..).rev().collect();
-        reversed.truncate(self.max_scroll_limit + self.lines);
+        let kept = kept_rows(&reversed, self.lines, self.max_scroll_limit, columns);
+        reversed.truncate(kept);
         self.raw.replace_inner(reversed);
 
         // Clamp display offset in case some lines went off.
@@ -386,4 +389,22 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         // Clamp the saved cursor to the grid.
         self.saved_cursor.point.column = min(self.saved_cursor.point.column, Column(columns - 1));
     }
+}
+
+/// How many of `rows`, the newest first, to keep: those of at most `limit` and `lines` lines of
+/// output, as the grid holds `limit` lines of history and `lines` on the screen, a line of
+/// output being a row and those above it that wrap into it; and the rows of the screen at least.
+fn kept_rows<T: GridCell>(rows: &[Row<T>], lines: usize, limit: usize, columns: usize) -> usize {
+    let mut output_lines = 0;
+    for (index, row) in rows.iter().enumerate() {
+        let last = columns.min(row.len());
+        let wraps = last > 0 && row[Column(last - 1)].flags().contains(Flags::WRAPLINE);
+        if !wraps {
+            output_lines += 1;
+            if output_lines > limit + lines {
+                return index.max(lines);
+            }
+        }
+    }
+    rows.len()
 }
