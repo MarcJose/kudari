@@ -9,9 +9,10 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::JoinHandle;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use log::error;
+use parking_lot::MutexGuard;
 use polling::{Event as PollingEvent, Events, PollMode, Poller};
 
 use crate::event::{self, Event, EventListener, WindowSize};
@@ -25,6 +26,14 @@ pub(crate) const READ_BUFFER_SIZE: usize = 0x10_0000;
 
 /// Max bytes to read from the PTY while the terminal is locked.
 const MAX_LOCKED_READ: usize = u16::MAX as usize;
+
+/// Bytes parsed at a time, so that the time the terminal is locked can be looked at between them.
+const PARSE_SLICE: usize = 512;
+
+/// The longest the terminal stays locked for parsing before others waiting for it may have it.
+/// Output that costs much work for each byte, as a repeat of a character or a screen filled
+/// with E, would else hold it for seconds while nothing else draws or takes input.
+const MAX_LOCKED_TIME: Duration = Duration::from_millis(8);
 
 /// Messages that may be sent to the `EventLoop`.
 #[derive(Debug)]
@@ -114,8 +123,9 @@ where
         let mut processed = 0;
 
         // Reserve the next terminal lock for PTY reading.
-        let _terminal_lease = Some(self.terminal.lease());
+        let mut terminal_lease = Some(self.terminal.lease());
         let mut terminal = None;
+        let mut locked_since = Instant::now();
 
         loop {
             // Read from the PTY.
@@ -135,23 +145,45 @@ where
             }
 
             // Attempt to lock the terminal.
-            let terminal = match &mut terminal {
-                Some(terminal) => terminal,
-                None => terminal.insert(match self.terminal.try_lock_unfair() {
+            if terminal.is_none() {
+                terminal = Some(match self.terminal.try_lock_unfair() {
                     // Force block if we are at the buffer size limit.
                     None if unprocessed >= READ_BUFFER_SIZE => self.terminal.lock_unfair(),
                     None => continue,
                     Some(terminal) => terminal,
-                }),
-            };
+                });
+                locked_since = Instant::now();
+            }
 
             // Write a copy of the bytes to the ref test file.
             if let Some(writer) = &mut writer {
                 writer.write_all(&buf[..unprocessed]).unwrap();
             }
 
-            // Parse the incoming bytes.
-            state.parser.advance(&mut **terminal, &buf[..unprocessed]);
+            // Parse the incoming bytes, a slice at a time.
+            let mut parsed = 0;
+            while parsed < unprocessed {
+                let end = (parsed + PARSE_SLICE).min(unprocessed);
+                if let Some(terminal) = terminal.as_mut() {
+                    state.parser.advance(&mut **terminal, &buf[parsed..end]);
+                }
+                parsed = end;
+
+                // Locked for long: those who wait for the terminal, as to draw it, have it
+                // first, and its output so far is shown; then parsing goes on.
+                if parsed < unprocessed && locked_since.elapsed() >= MAX_LOCKED_TIME {
+                    if let Some(terminal) = terminal.take() {
+                        MutexGuard::unlock_fair(terminal);
+                    }
+                    if let Some(lease) = terminal_lease.take() {
+                        MutexGuard::unlock_fair(lease);
+                    }
+                    self.event_proxy.send_event(Event::Wakeup);
+                    terminal_lease = Some(self.terminal.lease());
+                    terminal = Some(self.terminal.lock_unfair());
+                    locked_since = Instant::now();
+                }
+            }
 
             processed += unprocessed;
             unprocessed = 0;
