@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::term::{Term, TermDamage, TermMode};
@@ -384,6 +385,13 @@ pub struct TerminalItemRust {
     press_position: Option<(f64, f64)>,
     /// The words on the screen that the link numbers were found in.
     hint_words: Vec<view::HintWord>,
+    /// What the last refresh read from the terminal for the properties of the item.
+    read: Option<Read>,
+    /// How often the properties were refreshed, so that a refresh that a frame queued can see
+    /// that one came since.
+    refreshes: u64,
+    /// A frame queued a refresh of the properties that has not run yet.
+    properties_queued: bool,
     /// Whether the last frame showed only what the emulator tells changes of, so that the next
     /// may paint only the lines that changed; see `paint_lines`.
     plain_last: bool,
@@ -434,6 +442,9 @@ impl Default for TerminalItemRust {
             view: View::default(),
             press_position: None,
             hint_words: Vec::new(),
+            read: None,
+            refreshes: 0,
+            properties_queued: false,
             plain_last: false,
             hint_generation: 0,
             hint_looking: Arc::default(),
@@ -598,19 +609,34 @@ impl qobject::TerminalItem {
     fn refresh(mut self: Pin<&mut Self>) {
         stats::count(stats::Count::Refreshes);
         terminal::frame_asked(*self.terminal_id());
+        self.as_mut().refresh_properties();
+        stats::key(*self.terminal_id(), stats::Step::Refreshed);
+        #[cfg(feature = "test-hooks")]
+        slow_refresh();
+        // Output changes lines of the screen, which the emulator tells; everything else that
+        // changes what a frame shows asks for a whole one, or makes the next one whole.
+        self.update_lines();
+    }
+
+    /// Sets what the item tells QML of the terminal: the scrollbar, the place of the cursor for
+    /// input methods, whether the cursor blinks, and the selection mode.
+    fn refresh_properties(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().refreshes += 1;
         if let Some(backend) = self.as_ref().backend() {
             let term = backend.lock();
-            let history = term.grid().history_size() as f64;
-            let lines = term.screen_lines() as f64;
-            let offset = term.grid().display_offset() as f64;
-            let cursor = term.grid().cursor.point;
-            // Blinking and fading would only redraw the same frame while the cursor is hidden
-            // by the program or below the screen, many times a second for the fading one.
-            let blinks = term.cursor_style().blinking && render::cursor_on_screen(&term);
-            let selection_mode = view::selection_mode(&term);
+            let read = Read::of(&term);
             let (origin_x, origin_y) = self.as_ref().text_origin(term.columns(), term.screen_lines());
             drop(term);
-            stats::key(*self.terminal_id(), stats::Step::Refreshed);
+            self.as_mut().rust_mut().read = Some(read);
+            let Read {
+                history,
+                lines,
+                offset,
+                cursor,
+                blinks,
+                selection_mode,
+            } = read;
+            let (history, lines, offset) = (history as f64, lines as f64, offset as f64);
             self.as_mut().set_cursor_blinks(blinks);
             self.as_mut().set_selection_mode(selection_mode);
             let total = history + lines;
@@ -629,11 +655,25 @@ impl qobject::TerminalItem {
                 self.as_mut().set_search_lines_stale(true);
             }
         }
-        #[cfg(feature = "test-hooks")]
-        slow_refresh();
-        // Output changes lines of the screen, which the emulator tells; everything else that
-        // changes what a frame shows asks for a whole one, or makes the next one whole.
-        self.update_lines();
+    }
+
+    /// Output that came after the last refresh read the terminal shows in the frame that paints
+    /// now, but nothing would refresh the properties for it: the report of output waits for
+    /// this frame and holds back further ones meanwhile. Where the terminal differs from what
+    /// the properties were read from, they are refreshed on the thread of Qt, unless a refresh
+    /// comes first, as under more output. Called while the frame holds the terminal.
+    fn follow_output<T: EventListener>(mut self: Pin<&mut Self>, term: &Term<T>) {
+        if self.properties_queued || self.read == Some(Read::of(term)) {
+            return;
+        }
+        self.as_mut().rust_mut().properties_queued = true;
+        let seen = self.refreshes;
+        let _ = self.qt_thread().queue(move |mut item| {
+            item.as_mut().rust_mut().properties_queued = false;
+            if item.refreshes == seen {
+                item.refresh_properties();
+            }
+        });
     }
 
     /// Runs `action` on the view with the locked terminal, then carries out its effects.
@@ -1134,6 +1174,7 @@ impl qobject::TerminalItem {
                 TermDamage::Partial(lines) => Some(lines.map(|line| line.line as i32).collect::<Vec<_>>()),
             };
             term.reset_damage();
+            self.as_mut().follow_output(&term);
             let plain = self.as_ref().plain(&term, &options);
             let was_plain = std::mem::replace(&mut self.as_mut().rust_mut().plain_last, plain);
             // Decided before anything else is made. Under endless output the emulator tells all
@@ -1424,6 +1465,7 @@ impl qobject::TerminalItem {
             // The matches of "highlight all" in the text this frame shows: output that came
             // since the last refresh would else be painted with the matches of the text before.
             self.as_mut().rust_mut().view.update_matches(term);
+            self.as_mut().follow_output(term);
             let plain = self.as_ref().plain(term, &options);
             self.as_mut().rust_mut().plain_last = plain;
             let (origin_x, origin_y) = self.as_ref().text_origin(term.columns(), term.screen_lines());
@@ -1649,6 +1691,32 @@ fn bands_of(changed: &[i32], lines: i32) -> Vec<std::ops::Range<i32>> {
         }
     }
     bands
+}
+
+/// What a refresh reads from the terminal for the properties of the item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Read {
+    history: usize,
+    lines: usize,
+    offset: usize,
+    cursor: Point,
+    /// Blinking and fading would only redraw the same frame while the cursor is hidden by
+    /// the program or below the screen, many times a second for the fading one.
+    blinks: bool,
+    selection_mode: bool,
+}
+
+impl Read {
+    fn of<T: EventListener>(term: &Term<T>) -> Self {
+        Self {
+            history: term.grid().history_size(),
+            lines: term.screen_lines(),
+            offset: term.grid().display_offset(),
+            cursor: term.grid().cursor.point,
+            blinks: term.cursor_style().blinking && render::cursor_on_screen(term),
+            selection_mode: view::selection_mode(term),
+        }
+    }
 }
 
 fn qcolor(rgb: Rgb) -> QColor {

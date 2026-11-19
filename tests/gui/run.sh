@@ -604,6 +604,18 @@ matched=$(hook MatchedText "$(sessions activeTerminalId)")
 astray=$(printf '%s\n' "$matched" | grep -vx gef | head -n 3 | tr '\n' '|')
 check "highlighted matches lie on the word after much output" "yes" "$([ -n "$matched" ] && [ -z "$astray" ] && echo yes || echo "no: ${astray:-none}")"
 input key 1; settle
+# Output that comes between a refresh and its frame, with nothing after it for a while: the
+# frame shows it, and the scrollbar follows it as well, here a history after a clear screen.
+run "clear"
+hook SlowRefresh 60
+mark
+run_open "printf 'a\\n'; sleep 0.03; seq 1 200; sleep 3"
+sleep 1
+late=$(hook Property terminal scrollSize | grep -o '[0-9.][0-9.]*' | head -n 1)
+hook SlowRefresh 0
+wait_prompt "$mark_before" "the output after a refresh"; settle
+check "output between a refresh and its frame reaches the scrollbar" yes \
+    "$(awk -v size="$late" 'BEGIN { print (size != "" && size < 1) ? "yes" : "no: " size }')"
 for action in edit_select_all edit_copy select-line select-mode select-mode; do hook Trigger "$action"; settle; done
 
 # A blinking cursor that a program hid, as htop does, stops blinking: each blink would draw
