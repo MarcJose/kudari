@@ -20,7 +20,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::{Config, Term};
+use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vi_mode::ViMotion;
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
@@ -82,16 +82,25 @@ fn within<R: Send + 'static>(limit: Duration, case: impl FnOnce() -> R + Send + 
 const SECONDS: Duration = Duration::from_secs(5);
 
 #[test]
-#[ignore = "alacritty_terminal 0.26 removes from the stack of titles instead of the keyboard modes, and panics when it is empty"]
 fn many_kitty_keyboard_modes_do_not_end_the_terminal() {
+    // `alacritty_terminal` 0.26 took the oldest from the stack of titles instead of the keyboard
+    // modes once that was full, and panicked when it was empty; fixed in `third_party`..
     let result = within(SECONDS, || {
         let config = Config {
             kitty_keyboard: true,
             ..Config::default()
         };
-        term(80, 24, config, "\x1b[>u".repeat(4097).as_bytes()).columns()
+        let mut bytes = "\x1b[>u".repeat(4096);
+        // The newest goes on top of a full stack and is the one in force.
+        bytes.push_str("\x1b[>5u");
+        let term = term(80, 24, config, bytes.as_bytes());
+        (
+            term.columns(),
+            term.mode()
+                .contains(TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS),
+        )
     });
-    assert_eq!(result, Ok(80));
+    assert_eq!(result, Ok((80, true)));
 }
 
 #[test]

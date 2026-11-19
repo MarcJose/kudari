@@ -24,7 +24,9 @@ which their manifests no longer name. They carry fixes of faults that freeze or 
 terminals of Kudari, or show the wrong text; `crates/core/src/upstream_tests.rs` has a test
 for each, which runs against these copies.
 
-No change yet; each fix adds a line here, with the crate, its change and the test.
+| Crate | Change | Test |
+|---|---|---|
+| `alacritty_terminal` | When the stack of kitty keyboard modes is full, takes the oldest from it, not from the stack of titles, which panicked when that was empty. | `many_kitty_keyboard_modes_do_not_end_the_terminal` |
 
 Once releases of both carry a fix, delete it here; once they carry all of them, delete both
 directories and their lines in `[patch.crates-io]`, update the versions in `Cargo.toml`, and
