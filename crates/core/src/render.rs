@@ -6,7 +6,8 @@
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::Point;
+use alacritty_terminal::grid::Indexed;
+use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::search::Match;
@@ -468,7 +469,6 @@ pub fn lines_into<T: EventListener>(
     out: &mut Vec<Paint>,
 ) {
     out.clear();
-    let wanted = |line: i32| lines.as_ref().is_none_or(|lines| lines.contains(&line));
     let scheme = scene.scheme;
     let geometry = &scene.geometry;
     let (grid_columns, grid_lines) = (term.columns() as i32, term.screen_lines() as i32);
@@ -488,8 +488,15 @@ pub fn lines_into<T: EventListener>(
     let backgrounds = out;
     let mut run: Option<Run> = None;
 
+    // Only the lines asked for, from the top: walking all of the screen to paint a few of its
+    // lines took longer than painting them.
+    let shown = lines.map_or(0..grid_lines, |lines| lines.start.max(0)..lines.end.min(grid_lines));
+    let wanted = {
+        let shown = shown.clone();
+        move |line: i32| shown.contains(&line)
+    };
     // About one glyph a cell: room for them at once, rather than growing again and again.
-    let mut glyphs = Vec::with_capacity((grid_columns * grid_lines).max(0) as usize);
+    let mut glyphs = Vec::with_capacity((shown.len() as i32 * grid_columns).max(0) as usize);
     let mut cursor_glyph = None;
     // The matches come in the order of the cells, so one index walks along with them; a
     // search over all matches for each cell took long with a frequent pattern.
@@ -503,16 +510,24 @@ pub fn lines_into<T: EventListener>(
             .get(next_match)
             .is_some_and(|found| found.contains(&point))
     };
-    for cell in content.display_iter {
+    let grid = term.grid();
+    let cells = shown.clone().flat_map(|line| {
+        let row = Line(line - offset);
+        (0..grid_columns as usize).map(move |column| {
+            let point = Point::new(row, Column(column));
+            Indexed {
+                point,
+                cell: &grid[point],
+            }
+        })
+    });
+    for cell in cells {
         let flags = cell.flags;
         if flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
             continue;
         }
         let point = cell.point;
         let line = point.line.0 + offset;
-        if !wanted(line) {
-            continue;
-        }
         let column = point.column.0 as i32;
         let (mut foreground, mut back) = cell_colors(cell.cell, palette, scheme, scene.bold_intense);
         if selection.is_some_and(|range| range.contains(point)) {
@@ -813,6 +828,37 @@ mod tests {
         // Without lines, all of them.
         lines_into(&term, &options, &scene, None, &mut some);
         assert_eq!(some, whole);
+    }
+
+    #[test]
+    fn the_paints_of_some_lines_follow_a_view_scrolled_back_and_wide_characters() {
+        let scheme = crate::colors::active();
+        let mut term = term_with("a\r\nb\r\n中文x\r\n\x1b[42mgreen\x1b[0m\r\nlast\r\nend");
+        term.scroll_display(alacritty_terminal::grid::Scroll::Delta(2));
+        assert_eq!(term.grid().display_offset(), 2);
+        let options = Options::default();
+        let scene = scene(&scheme, &[], &[]);
+        let whole = frame(&term, &options, &scene);
+        let line_of = |y: f64| ((y - GEOMETRY.origin_y) / GEOMETRY.cell_height).floor() as i32;
+        let screen = term.screen_lines() as i32;
+        for wanted in [0..1, 1..3, 0..screen, 2..screen + 5, -3..1] {
+            let mut some = Vec::new();
+            lines_into(&term, &options, &scene, Some(wanted.clone()), &mut some);
+            let within = |paint: &Paint| match paint {
+                Paint::Text { y, .. } => wanted.contains(&line_of(*y - GEOMETRY.ascent)),
+                Paint::Fill(rect, _) | Paint::Shade(rect, ..) => wanted.contains(&line_of(rect.y)),
+            };
+            assert_eq!(
+                some,
+                whole.iter().filter(|paint| within(paint)).cloned().collect::<Vec<_>>(),
+                "{wanted:?}"
+            );
+        }
+        // The top line of the view is from the history: "b", two lines back.
+        let mut top = Vec::new();
+        lines_into(&term, &options, &scene, Some(0..1), &mut top);
+        let glyphs: Vec<&str> = texts(&top).iter().map(|(text, ..)| *text).collect();
+        assert_eq!(glyphs, ["b"]);
     }
 
     #[test]
