@@ -610,6 +610,7 @@ impl qobject::TerminalItem {
             let selection_mode = view::selection_mode(&term);
             let (origin_x, origin_y) = self.as_ref().text_origin(term.columns(), term.screen_lines());
             drop(term);
+            stats::key(*self.terminal_id(), stats::Step::Refreshed);
             self.as_mut().set_cursor_blinks(blinks);
             self.as_mut().set_selection_mode(selection_mode);
             let total = history + lines;
@@ -694,6 +695,7 @@ impl qobject::TerminalItem {
             crate::input::Key::Character(base) => Some(base),
             _ => None,
         };
+        stats::key(*self.terminal_id(), stats::Step::Pressed);
         let text = text.to_string();
         let physical = view::Physical {
             digit: qt_input::digit_key(scan_code),
@@ -1206,6 +1208,7 @@ impl qobject::TerminalItem {
         }
         kde::rk_painter_unclip(painter.as_mut());
         clock.stop(stats::Time::FrameDraw);
+        stats::key(*self.terminal_id(), stats::Step::Painted);
         PAINTED
     }
 
@@ -1469,6 +1472,7 @@ impl qobject::TerminalItem {
         }
         draw(painter.as_mut(), &fonts, &paints);
         clock.stop(stats::Time::FrameDraw);
+        stats::key(*self.terminal_id(), stats::Step::Painted);
         paints.clear();
         PAINTS.set(paints);
     }
