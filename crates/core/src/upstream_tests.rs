@@ -82,6 +82,11 @@ fn within<R: Send + 'static>(limit: Duration, case: impl FnOnce() -> R + Send + 
 
 const SECONDS: Duration = Duration::from_secs(5);
 
+/// Held by the tests that run a real PTY, one at a time: one measures the time of the thread of
+/// the PTY of its own, which those of others would add to.
+#[cfg(unix)]
+static REAL_PTY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn many_kitty_keyboard_modes_do_not_end_the_terminal() {
     // `alacritty_terminal` 0.26 took the oldest from the stack of titles instead of the keyboard
@@ -169,6 +174,7 @@ fn costly_output_lets_others_have_the_terminal() {
     // A screen filled with E (DECALN) for every four bytes: in `alacritty_terminal` 0.26 the
     // thread of the PTY parsed up to 1 MiB of it while it held the terminal, for seconds, and
     // nothing else could draw it or take input meanwhile; fixed in `third_party`.
+    let _alone = REAL_PTY.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let term = Arc::new(FairMutex::new(Term::new(
         Config::default(),
         &TermSize::new(80, 24),
@@ -213,8 +219,9 @@ fn costly_output_lets_others_have_the_terminal() {
 }
 
 #[test]
-#[ignore = "alacritty_terminal 0.26 leaves the spacer of a wide character in column 0 after DCH, where the cursor of the selection mode panics"]
 fn deleting_half_of_a_wide_character_leaves_a_cursor_that_moves() {
+    // `alacritty_terminal` 0.26 left the second half of a wide character in column 0 after
+    // DCH, where the cursor of the selection mode panicked; fixed in `third_party`.
     let result = within(SECONDS, || {
         let mut term = term(10, 3, Config::default(), "界\r\x1b[P".as_bytes());
         term.toggle_vi_mode();
@@ -242,15 +249,17 @@ fn a_wide_character_below_the_scrolling_region_keeps_the_cursor_in_the_grid() {
 }
 
 #[test]
-#[ignore = "alacritty_terminal 0.26 counts DCH past the end of the line from the end, and deletes cells before the cursor"]
 fn deleting_past_the_end_of_the_line_keeps_what_is_before_the_cursor() {
+    // `alacritty_terminal` 0.26 counted DCH past the end of the line from the end, and deleted
+    // cells before the cursor; fixed in `third_party`.
     let term = term(10, 3, Config::default(), b"abcdefghij\r\x1b[5C\x1b[6P");
     assert_eq!(line_text(&term, 0), "abcde");
 }
 
 #[test]
-#[ignore = "alacritty_terminal 0.26 leaves the lines above the line of the cursor as they are with ED 1"]
 fn erasing_to_the_cursor_erases_the_lines_above() {
+    // `alacritty_terminal` 0.26 left the first line as it was with ED 1 from the second; fixed
+    // in `third_party`.
     let term = term(10, 3, Config::default(), b"erste\r\nzweite\x1b[2;3H\x1b[1J");
     assert_eq!(
         (line_text(&term, 0), line_text(&term, 1)),
@@ -259,8 +268,9 @@ fn erasing_to_the_cursor_erases_the_lines_above() {
 }
 
 #[test]
-#[ignore = "alacritty_terminal 0.26 takes the first cell of the line before for the wide character that wrapped"]
 fn copying_to_the_end_of_a_line_takes_the_wide_character_that_wrapped() {
+    // `alacritty_terminal` 0.26 took the first cell of the line before for the wide character
+    // that wrapped; fixed in `third_party`.
     let mut term = term(10, 4, Config::default(), "x\r\naaaaaaaaa界".as_bytes());
     let mut selection = Selection::new(SelectionType::Simple, Point::new(Line(1), Column(0)), Side::Left);
     selection.update(Point::new(Line(1), Column(9)), Side::Right);
@@ -269,8 +279,9 @@ fn copying_to_the_end_of_a_line_takes_the_wide_character_that_wrapped() {
 }
 
 #[test]
-#[ignore = "alacritty_terminal 0.26 drops the oldest lines of a full history when a narrower grid wraps them, and does not get them back"]
 fn a_narrower_and_wider_grid_keeps_a_full_history() {
+    // `alacritty_terminal` 0.26 dropped the oldest lines of a full history when a narrower
+    // grid wrapped them, and did not get them back; fixed in `third_party`.
     let config = Config {
         scrolling_history: 100,
         ..Config::default()
@@ -321,4 +332,83 @@ fn a_pseudo_console_that_fails_is_an_error_not_a_panic() {
     let mut pty = tty::new(&Pty::default(), size, 0).expect("a pseudo console");
     let resized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pty.on_resize(nothing)));
     assert!(resized.is_ok());
+}
+
+#[test]
+fn deleting_a_half_of_a_wide_character_deletes_all_of_it() {
+    // From the first half, and from the second: the character goes, the rest moves up.
+    let first = term(10, 3, Config::default(), "a界b\r\x1b[C\x1b[P".as_bytes());
+    assert_eq!(line_text(&first, 0), "a b");
+    let second = term(10, 3, Config::default(), "a界b\r\x1b[2C\x1b[P".as_bytes());
+    assert_eq!(line_text(&second, 0), "a b");
+    for term in [first, second] {
+        let row = &term.grid()[Line(0)];
+        assert!((0..10).all(|column| !row[Column(column)].flags.contains(Flags::WIDE_CHAR_SPACER)));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_thread_of_the_pty_waits_for_the_terminal_without_spinning() {
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    use alacritty_terminal::event::WindowSize;
+    use alacritty_terminal::event_loop::{EventLoop, Msg};
+    use alacritty_terminal::sync::FairMutex;
+    use alacritty_terminal::tty::{self, Options as Pty, Shell};
+
+    /// The CPU time of the thread of this process named "PTY reader" so far.
+    fn reader_time() -> Duration {
+        let tasks = std::fs::read_dir("/proc/self/task").into_iter().flatten().flatten();
+        tasks
+            .filter(|task| {
+                std::fs::read_to_string(task.path().join("comm")).is_ok_and(|name| name.trim() == "PTY reader")
+            })
+            .filter_map(|task| std::fs::read_to_string(task.path().join("schedstat")).ok())
+            .filter_map(|stat| stat.split_whitespace().next()?.parse().ok())
+            .map(Duration::from_nanos)
+            .sum()
+    }
+
+    // `alacritty_terminal` 0.26 read again at once while the terminal was locked and the PTY
+    // had nothing new, and spun on a core for as long as the lock was held; fixed in
+    // `third_party`.
+    let _alone = REAL_PTY.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let term = Arc::new(FairMutex::new(Term::new(
+        Config::default(),
+        &TermSize::new(80, 24),
+        VoidListener,
+    )));
+    let options = Pty {
+        shell: Some(Shell::new(
+            "sh".to_string(),
+            vec!["-c".to_string(), "while :; do printf x; sleep 0.01; done".to_string()],
+        )),
+        ..Pty::default()
+    };
+    let size = WindowSize {
+        num_lines: 24,
+        num_cols: 80,
+        cell_width: 8,
+        cell_height: 16,
+    };
+    let pty = tty::new(&options, size, 0).expect("a PTY");
+    let event_loop = EventLoop::new(Arc::clone(&term), VoidListener, pty, false, false).expect("an event loop");
+    let channel = event_loop.channel();
+    let thread = event_loop.spawn();
+    std::thread::sleep(Duration::from_millis(300));
+    // Holding the terminal for a second, as a long search does, while output comes slowly.
+    let locked = term.lock();
+    let before = reader_time();
+    let started = Instant::now();
+    std::thread::sleep(Duration::from_secs(1));
+    let spent = reader_time().saturating_sub(before);
+    drop(locked);
+    let _ = channel.send(Msg::Shutdown);
+    let _ = thread.join();
+    assert!(
+        spent < started.elapsed() / 10,
+        "the thread of the PTY took {spent:?} of a second"
+    );
 }

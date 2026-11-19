@@ -32,6 +32,12 @@ for each, which runs against these copies.
 | `alacritty_terminal` | Parses output 512 bytes at a time, and once it has held the terminal for 8 ms, lets those waiting for it have it first. | `costly_output_lets_others_have_the_terminal` |
 | `alacritty_terminal` | On the last line of the screen below the scrolling region, where a line feed does not move on, marks no line as going on in the next and leaves no spacer for a wide character there. | `a_wide_character_below_the_scrolling_region_keeps_the_cursor_in_the_grid`, `the_last_line_below_the_scrolling_region_goes_on_in_no_other` |
 | `alacritty_terminal` | On Windows, gives an error where creating a pseudo console fails and warns where resizing it does, instead of asserting. | `a_pseudo_console_that_fails_is_an_error_not_a_panic` |
+| `alacritty_terminal` | Deletes characters (DCH) from the cursor to the end of the line at most, not before it. | `deleting_past_the_end_of_the_line_keeps_what_is_before_the_cursor` |
+| `alacritty_terminal` | Erasing to the cursor (ED 1) from the second line erases the first as well. | `erasing_to_the_cursor_erases_the_lines_above` |
+| `alacritty_terminal` | Deleting a half of a wide character (DCH) deletes all of it, and leaves no second half alone at the cursor. | `deleting_a_half_of_a_wide_character_deletes_all_of_it`, `deleting_half_of_a_wide_character_leaves_a_cursor_that_moves` |
+| `alacritty_terminal` | A copy to the end of a line takes the wide character that wrapped from the line after, not the first cell of the line before. | `copying_to_the_end_of_a_line_takes_the_wide_character_that_wrapped` |
+| `alacritty_terminal` | A narrower grid keeps as many lines of output as before, counting a line that wraps into more rows once, so that a wider one gets the history back. | `a_narrower_and_wider_grid_keeps_a_full_history` |
+| `alacritty_terminal` | Waits for the terminal where the PTY has nothing new to read, instead of reading again at once while others hold it. | `the_thread_of_the_pty_waits_for_the_terminal_without_spinning` |
 
 Once releases of both carry a fix, delete it here; once they carry all of them, delete both
 directories and their lines in `[patch.crates-io]`, update the versions in `Cargo.toml`, and

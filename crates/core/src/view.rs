@@ -2083,11 +2083,18 @@ mod tests {
         assert_eq!(read_view(&term), 50);
     }
 
+    /// The second half of a wide character alone in the first column of `line`, as DCH on its
+    /// first half left it in versions of the emulator before the fix in `third_party`.
+    fn orphan(term: &mut Term<VoidListener>, line: i32) {
+        let cell = &mut term.grid_mut()[Line(line)][Column(0)];
+        cell.c = ' ';
+        cell.flags = Flags::WIDE_CHAR_SPACER;
+    }
+
     #[test]
     fn deleting_half_of_a_wide_character_leaves_a_terminal_that_works() {
-        // DCH on the first half of a wide character in column 0 leaves its spacer there.
-        let mut term = term_of(10, "界x\r\x1b[P");
-        assert!(term.grid()[Line(0)][Column(0)].flags.contains(Flags::WIDE_CHAR_SPACER));
+        let mut term = term_of(10, " x\r");
+        orphan(&mut term, 0);
         assert!(repair_view(&mut term));
         assert!(!term.grid()[Line(0)][Column(0)].flags.contains(Flags::WIDE_CHAR_SPACER));
         // The cursor shows where it is, a copy keeps the rest of the line, and the cursor of
@@ -2099,8 +2106,9 @@ mod tests {
             Some("x".to_string())
         );
         // One scrolled into the history is taken out once the view shows it.
-        let mut scrolled = term_of(10, "界x\r\x1b[P\r\n\n\n\n\n\n");
+        let mut scrolled = term_of(10, " x\r\n\n\n\n\n\n");
         let line = -(scrolled.grid().history_size() as i32);
+        orphan(&mut scrolled, line);
         assert!(
             line < 0
                 && scrolled.grid()[Line(line)][Column(0)]
@@ -2842,10 +2850,10 @@ mod tests {
 
     #[test]
     fn copying_lines_that_start_with_half_a_wide_character_works() {
-        // Deleting the first character of a line leaves the second half of a wide one in its
-        // first column; then the line goes into the history before anything repairs it.
-        let mut term = term_of(10, "a\r\n界x\r\x1b[P\r\nb\r\n\x1b[2;1H界y\r\x1b[P\x1b[3;1H");
-        assert!(term.grid()[Line(1)][Column(0)].flags.contains(Flags::WIDE_CHAR_SPACER));
+        // A line that starts with the second half of a wide character, which went into the
+        // history before anything repaired it.
+        let mut term = term_of(10, "a\r\n y\r\nb\x1b[3;1H");
+        orphan(&mut term, 1);
         let text = |term: &Term<VoidListener>, start: Point, end: Point| text_between(term, start, end);
         let end = Point::new(Line(2), term.last_column());
         assert_eq!(text(&term, Point::new(Line(0), Column(0)), end), "a\n y\nb");
