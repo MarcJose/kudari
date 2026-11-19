@@ -816,6 +816,42 @@ paint_check() { # directory, what for
 }
 mkdir -p "$work/pixels"
 paint_check "$work/pixels" "at 100 %"
+# With a badge, a frame of lines paints it again under the lines it paints, and a typed key
+# still paints only those. The badge follows the program without output of its own: the poll
+# makes it anew and has a terminal whose badge changed paint it.
+hook SetSetting BadgeEnabled true; hook SetSetting BadgeText "%n"; settle
+run "clear"
+hook ResetStats
+input key 30; settle
+badge_lines=$(hook Stats | python3 -c 'import json, sys; print(json.load(sys.stdin)["line_paints"])')
+input key 14; settle
+check "with a badge, a typed key paints only the lines that changed" 1 "$badge_lines"
+mkdir -p "$work/pixels-badge"
+paint_check "$work/pixels-badge" "with a badge"
+run "clear"
+mkdir -p "$work/badge"
+hook PaintTerminals "$work/badge/prompt"; settle
+mark
+# The program changes half a second after the last output, and nothing paints for it.
+run_open "sleep 0.5; timeout 2 cat"
+sleep 1.6
+hook PaintTerminals "$work/badge/program"; settle
+# The corner of the badge, at the top right of what the window shows.
+cat > "$work/corner" <<'EOF2'
+import sys
+from pngread import read
+def corner(path):
+    width, height, channels, rows = read(path)
+    return [bytes(row[width * channels * 2 // 3:]) for row in rows[: height // 4]]
+print("yes" if corner(sys.argv[1]) != corner(sys.argv[2]) else "no: the same badge")
+EOF2
+for before in "$work"/badge/prompt-[0-9]*-shown.png; do break; done
+for shown in "$work"/badge/program-[0-9]*-shown.png; do break; done
+followed=$(cd "$work" && python3 corner "$before" "$shown")
+stale=$(cd "$work" && python3 pixels.py "${shown%-shown.png}.png" "$shown")
+check "the badge follows the program without output" "yes 0 0" "$followed $stale"
+wait_prompt "$mark_before" "the end of timeout"; settle
+hook SetSetting BadgeEnabled false; settle
 check "a terminal in a tab in the background has no size until it shows" "1 1 0" "$sizeless_in_background $sizeless_shown $sizeless_closed"
 run "clear"
 
