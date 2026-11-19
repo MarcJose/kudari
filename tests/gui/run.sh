@@ -832,9 +832,12 @@ run "clear"
 mkdir -p "$work/badge"
 hook PaintTerminals "$work/badge/prompt"; settle
 mark
-# The program changes half a second after the last output, and nothing paints for it.
-run_open "sleep 0.5; timeout 2 cat"
-sleep 1.6
+# The program changes half a second after the last output, and nothing paints for it. The
+# poll makes the badge anew twice a second; the window has to have painted it before the
+# check takes it, as on a slow computer the poll may come just before.
+run_open "sleep 0.5; timeout 4 cat"
+sleep 2.5
+settle
 hook PaintTerminals "$work/badge/program"; settle
 # The corner of the badge, at the top right of what the window shows.
 cat > "$work/corner" <<'EOF2'
