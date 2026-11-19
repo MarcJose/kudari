@@ -154,6 +154,11 @@ std::unique_ptr<QRawFont> rk_raw_font(const QPainter &painter, const QFont &font
     return std::make_unique<QRawFont>(QRawFont::fromFont(QFont(font, painter.device())));
 }
 
+int rk_painter_dpi(const QPainter &painter)
+{
+    return painter.device() ? painter.device()->logicalDpiY() : 0;
+}
+
 // 0 when the font lacks the character, which then needs the fallback of `QPainter::drawText`.
 std::uint32_t rk_glyph_index(const QRawFont &font, std::uint32_t character)
 {
@@ -167,13 +172,9 @@ std::uint32_t rk_glyph_index(const QRawFont &font, std::uint32_t character)
     return glyphs[0];
 }
 
-// Qt Quick has an item paint into an image in RGBA8888, for which the raster engine of Qt has
-// no fast way to draw text: it converts every pixel of every glyph to 64 bits and back. Into
-// ARGB32_Premultiplied it draws text several times faster, so a frame goes there first and
-// then to the item in one piece. One image per thread serves all terminals of a window: it
-// grows to the largest of them, and each draws into its top left corner. It shrinks to the
-// frame again once it has been more than twice as large for a while, as after full screen,
-// and not for a single smaller terminal among larger ones. Null when the target has no size.
+// Each item paints into an image of its own in ARGB32_Premultiplied, which the raster engine of
+// Qt draws text into several times faster than into RGBA8888, and which most graphics drivers
+// take as it is; see `updatePaintNode`.
 RkImageItem::RkImageItem(QQuickItem *parent)
     : QQuickItem(parent)
 {

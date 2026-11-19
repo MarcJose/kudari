@@ -101,6 +101,7 @@ private:
     bool m_linesDirty = false;
 };
 std::unique_ptr<QRawFont> rk_raw_font(const QPainter &painter, const QFont &font);
+int rk_painter_dpi(const QPainter &painter);
 std::uint32_t rk_glyph_index(const QRawFont &font, std::uint32_t character);
 void rk_draw_glyphs(QPainter &painter,
                     const QRawFont &font,
