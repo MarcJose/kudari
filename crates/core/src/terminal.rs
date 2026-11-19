@@ -384,6 +384,7 @@ impl EventListener for Proxy {
         let mailbox = &self.mailbox;
         if matches!(event, Event::Wakeup) {
             stats::count(stats::Count::Wakeups);
+            stats::key(id, stats::Step::Output);
         }
         match event {
             Event::Wakeup if !mailbox.repaint_queued.swap(true, Ordering::AcqRel) => {
@@ -738,6 +739,8 @@ impl Backend {
     /// Input always returns the view to the bottom of the scrollback.
     pub fn write_user_input(&self, bytes: Vec<u8>) {
         self.lock().scroll_display(Scroll::Bottom);
+        // On the thread of the key, which knows its terminal.
+        stats::key(0, stats::Step::Written);
         self.write(bytes);
     }
 

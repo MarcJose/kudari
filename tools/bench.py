@@ -134,6 +134,15 @@ PREPARED = re.compile(r"^\s*(\S+) .*\[gui thread\] Frame prepared, .*blockedForS
 STATS = re.compile(r"^kudari-stats (\d+(?:\.\d+)?) (\{.*\})$")
 # The counted times of the counters, as they name them and as the report does.
 TIMED = (("lock_wait", "lock wait"), ("lock_hold", "lock hold"), ("queue", "queue"), ("frame_build", "build"), ("frame_draw", "draw"))
+# The steps of the path of a key that the counters follow, one key at a time, as they name
+# them and as the report does.
+STEPS = (
+    ("key_write", "key to its bytes written"),
+    ("key_output", "to the output read"),
+    ("key_refresh", "to the refresh"),
+    ("key_paint", "to the paint"),
+    ("key_total", "key to paint in all"),
+)
 # A frame shows the output a moment after it arrived: frames this long after a load count.
 TAIL = 0.05
 # Bytes written at a time, as `cat` does.
@@ -714,7 +723,7 @@ def counted(snapshots, start, end):
     for name in ("wakeups", "reports", "refreshes"):
         result[name] = new.get(name, 0) - old.get(name, 0)
     result["paints"] = sum(new.get("paints", {}).values()) - sum(old.get("paints", {}).values())
-    for name, _ in TIMED:
+    for name, _ in TIMED + STEPS:
         was, now = old.get(name, {}), new.get(name, {})
         earlier = was.get("buckets") or []
         buckets = [later - (earlier[index] if index < len(earlier) else 0) for index, later in enumerate(now.get("buckets", []))]
@@ -1390,6 +1399,32 @@ def counters(terminal, measured):
     print("terminal, how long it was held, and the wait in the queue of the Qt thread. A frame is")
     print("built and drawn into its image; those are the means.")
     table(["load", "wakeups/s", "refreshes/s", "paints/s", "lock wait p95", "lock hold p95", "queue p95", "build µs", "draw µs"], rows)
+    key_path(terminal, measured)
+
+
+def key_path(terminal, measured):
+    """For a build with the feature stats and the loads that type: the steps of the path of a
+    key through Kudari, as its counters follow them."""
+    for load in ("typing", "burst"):
+        done = [result[load].counters for _, (_, result, _) in measured if load in result and result[load].counters]
+        if not done or not any(found.get("key_total", {}).get("count") for found in done):
+            continue
+        rows = []
+        for name, description in STEPS:
+            count = sum(found.get(name, {}).get("count", 0) for found in done)
+            if not count:
+                rows.append([description, "0", "-", "-"])
+                continue
+            total = sum(found[name]["total_us"] for found in done)
+            width = max(len(found[name]["buckets"]) for found in done)
+            pooled = [sum(found[name]["buckets"][index] for found in done if index < len(found[name]["buckets"])) for index in range(width)]
+            rows.append([description, str(count), f"{total / count:.0f}", str(bucket_quantile(pooled, 0.95))])
+        print(f"\n{terminal}, {load}: the path of a key through Kudari, in microseconds over all runs. The")
+        print("counters follow one key at a time, from its press in the terminal to the end of the next")
+        print("paint of its lines; a key that comes while one is on its way is not followed, so a burst")
+        print("has few. Each step counts from the one before; the mean, and the upper end of the bucket")
+        print("of powers of two that holds 95 %. From the paint to the screen, see the frames above.")
+        table(["step", "keys", "mean µs", "p95 µs"], rows)
 
 
 def ratio_interval(base, other, seed=SEED, rounds=2000):

@@ -39,16 +39,43 @@ pub enum Time {
     FrameBuild,
     /// Drawing the paints of a frame into its image, which goes to the screen as it is.
     FrameDraw,
+    /// The path of a key, step by step; see [`key`]. From the key to its bytes written for
+    /// the PTY.
+    KeyWrite,
+    /// From the bytes of a key written to the first output of its terminal after them, as
+    /// the PTY thread reads it: mostly the echo of the program.
+    KeyOutput,
+    /// From that output to the next refresh of the terminal on the Qt thread.
+    KeyRefresh,
+    /// From that refresh to the end of the next paint of the terminal that drew its lines.
+    KeyPaint,
+    /// From the key to the end of that paint.
+    KeyTotal,
+}
+
+/// The steps of the path of a key that [`key`] follows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    /// A key came to a terminal.
+    Pressed,
+    /// The bytes of a key went to the thread that writes them to the PTY.
+    Written,
+    /// The PTY thread read output of the terminal.
+    Output,
+    /// The terminal refreshed what it shows.
+    Refreshed,
+    /// The terminal painted its lines.
+    Painted,
 }
 
 #[cfg(feature = "stats")]
 mod counting {
     use std::collections::BTreeMap;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
     use std::sync::{Mutex, PoisonError};
     use std::time::{Duration, Instant};
 
-    use super::{Count, Time};
+    use super::{Count, Step, Time};
 
     /// Buckets of powers of two in microseconds: under 1, 1 to 2, 2 to 4, and so on; the last
     /// takes everything from about 34 minutes on.
@@ -124,7 +151,7 @@ mod counting {
     }
 
     pub static COUNTS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
-    pub static TIMES: [Histogram; 5] = [const { Histogram::new() }; 5];
+    pub static TIMES: [Histogram; 10] = [const { Histogram::new() }; 10];
     /// Paints for each terminal, by its id.
     pub static PAINTS: Mutex<BTreeMap<i32, u64>> = Mutex::new(BTreeMap::new());
     /// Work queued for the Qt thread that has not run yet.
@@ -150,6 +177,67 @@ mod counting {
             Time::Queue => 2,
             Time::FrameBuild => 3,
             Time::FrameDraw => 4,
+            Time::KeyWrite => 5,
+            Time::KeyOutput => 6,
+            Time::KeyRefresh => 7,
+            Time::KeyPaint => 8,
+            Time::KeyTotal => 9,
+        }
+    }
+
+    /// The key that is followed: its terminal, and when it reached each step, in microseconds
+    /// from the first use of these counters plus one, so that nothing means not yet.
+    pub static KEY_TERMINAL: AtomicI64 = AtomicI64::new(0);
+    pub static KEY_STEPS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+    /// A key whose path ends nowhere, as one that writes nothing, gives way after this long.
+    pub const KEY_GIVEN_UP_MICROS: u64 = 1_000_000;
+
+    /// Follows the key a step further, if it reached the step before and not this one yet.
+    pub fn key(terminal: i32, step: Step) {
+        let now = since_start() + 1;
+        let [pressed, written, output, refreshed, painted] = &KEY_STEPS;
+        let (before, this, time) = match step {
+            Step::Pressed => {
+                let started = pressed.load(Ordering::Acquire);
+                // A key whose path is still on its way is followed to its end; one that wrote
+                // nothing is replaced at once.
+                if started != 0
+                    && written.load(Ordering::Acquire) != 0
+                    && painted.load(Ordering::Acquire) == 0
+                    && now - started < KEY_GIVEN_UP_MICROS
+                {
+                    return;
+                }
+                for later in [written, output, refreshed, painted] {
+                    later.store(0, Ordering::Release);
+                }
+                KEY_TERMINAL.store(i64::from(terminal), Ordering::Release);
+                pressed.store(now, Ordering::Release);
+                return;
+            }
+            Step::Written => (pressed, written, Time::KeyWrite),
+            Step::Output => (written, output, Time::KeyOutput),
+            Step::Refreshed => (output, refreshed, Time::KeyRefresh),
+            Step::Painted => (refreshed, painted, Time::KeyPaint),
+        };
+        // The bytes of the key are written on the thread of the key, before anything else.
+        if step != Step::Written && KEY_TERMINAL.load(Ordering::Acquire) != i64::from(terminal) {
+            return;
+        }
+        let before = before.load(Ordering::Acquire);
+        if before == 0
+            || this
+                .compare_exchange(0, now, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            return;
+        }
+        super::record(time, Duration::from_micros(now - before));
+        if step == Step::Painted {
+            super::record(
+                Time::KeyTotal,
+                Duration::from_micros(now - pressed.load(Ordering::Acquire)),
+            );
         }
     }
 
@@ -190,6 +278,21 @@ pub fn paint(terminal: i32) {
     }
     #[cfg(not(feature = "stats"))]
     let _ = terminal;
+}
+
+/// Follows the path of a key through Kudari, one key at a time, for the times of [`Time::KeyTotal`] and its steps: a
+/// key pressed in the terminal `terminal`, its bytes written, the first output of that
+/// terminal after them, its next refresh and the end of its next paint of its lines. A key
+/// that comes while the one before is on its way is not followed, as in a burst; one that
+/// writes nothing gives way to the next. The bytes are written on the thread of the key,
+/// so `Written` does not look at `terminal`. Only when each step was reached is noted,
+/// nothing of what the key was.
+#[inline]
+pub fn key(terminal: i32, step: Step) {
+    #[cfg(feature = "stats")]
+    counting::key(terminal, step);
+    #[cfg(not(feature = "stats"))]
+    let _ = (terminal, step);
 }
 
 /// Adds a time of `what` that was measured elsewhere.
@@ -348,6 +451,11 @@ pub fn json() -> String {
             "queue": time(Time::Queue),
             "frame_build": time(Time::FrameBuild),
             "frame_draw": time(Time::FrameDraw),
+            "key_write": time(Time::KeyWrite),
+            "key_output": time(Time::KeyOutput),
+            "key_refresh": time(Time::KeyRefresh),
+            "key_paint": time(Time::KeyPaint),
+            "key_total": time(Time::KeyTotal),
         })
         .to_string()
     }
@@ -398,6 +506,9 @@ pub fn reset() {
         for histogram in &counting::TIMES {
             histogram.reset();
         }
+        for step in &counting::KEY_STEPS {
+            step.store(0, Ordering::Relaxed);
+        }
         counting::paints().clear();
         counting::QUEUED_MOST.store(counting::QUEUED.load(Ordering::Relaxed), Ordering::Relaxed);
     }
@@ -437,11 +548,47 @@ mod tests {
         assert_eq!(stats["queue"]["count"], 1);
         assert_eq!(stats["queued"], 0);
         assert_eq!(stats["queued_max"], 1);
+
+        // The path of a key: steps out of order and of other terminals do not count.
+        reset();
+        key(7, Step::Output);
+        key(7, Step::Pressed);
+        key(7, Step::Refreshed);
+        key(0, Step::Written);
+        key(9, Step::Output);
+        key(9, Step::Refreshed);
+        key(9, Step::Painted);
+        let stats: serde_json::Value = serde_json::from_str(&json()).unwrap_or_default();
+        assert_eq!(stats["key_write"]["count"], 1);
+        assert_eq!(stats["key_output"]["count"], 0);
+        key(7, Step::Output);
+        // A second key on the way of the first is not followed.
+        key(7, Step::Pressed);
+        key(0, Step::Written);
+        key(7, Step::Output);
+        key(7, Step::Refreshed);
+        key(9, Step::Painted);
+        key(7, Step::Painted);
+        key(7, Step::Painted);
+        let stats: serde_json::Value = serde_json::from_str(&json()).unwrap_or_default();
+        for name in ["key_write", "key_output", "key_refresh", "key_paint", "key_total"] {
+            assert_eq!(stats[name]["count"], 1, "{name}");
+        }
+        // A key that writes nothing gives way to the next at once.
+        key(7, Step::Pressed);
+        key(8, Step::Pressed);
+        key(0, Step::Written);
+        key(8, Step::Output);
+        let stats: serde_json::Value = serde_json::from_str(&json()).unwrap_or_default();
+        assert_eq!(stats["key_write"]["count"], 2);
+        assert_eq!(stats["key_output"]["count"], 2);
+
         reset();
         let stats: serde_json::Value = serde_json::from_str(&json()).unwrap_or_default();
         assert_eq!(stats["wakeups"], 0);
         assert_eq!(stats["paints"], serde_json::json!({}));
         assert_eq!(stats["lock_wait"]["count"], 0);
+        assert_eq!(stats["key_total"]["count"], 0);
     }
 
     #[test]

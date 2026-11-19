@@ -339,6 +339,30 @@ class Report(unittest.TestCase):
         # A load of keys has no throughput, but a cost per key.
         self.assertNotIn("\ntyping: 100 keys 50 ms apart, each echoed at once\n", text)
 
+    def test_the_path_of_a_key_comes_from_the_counters_step_by_step(self):
+        wall = 1000 + 5000
+
+        def line(seconds, keys):
+            counters = json.loads(self.stats(0, 0, {}, [], (0, 0)).split(" ", 2)[2])
+            # Each key: written after 10 µs, output after 300, refreshed after 2000, painted after 500.
+            for name, micros, bucket in (("key_write", 10, 4), ("key_output", 300, 9), ("key_refresh", 2000, 11), ("key_paint", 500, 9), ("key_total", 2810, 12)):
+                buckets = [0] * 32
+                buckets[bucket] = keys
+                counters[name] = {"count": keys, "total_us": keys * micros, "buckets": buckets}
+            return f"kudari-stats {wall + seconds:.3f} {json.dumps(counters)}"
+
+        keys = [(0.1 * index, 0.1 * index + 0.001) for index in range(100)]
+        self.monotonic_run("kudari-1", [line(-0.1, 0), line(10.5, 100)], (("typing", 0.0, 10.0, 10.0, True),), wall=wall, keys={"typing": keys})
+        text = self.report("kudari")
+        part = text.split("kudari, typing: the path of a key")[1].splitlines()
+        rows = {description: line.removeprefix(description).split() for description in [found for _, found in bench.STEPS] for line in part if line.startswith(description)}
+        self.assertEqual(rows["key to its bytes written"], ["100", "10", "16"])
+        self.assertEqual(rows["to the refresh"], ["100", "2000", "2048"])
+        self.assertEqual(rows["key to paint in all"], ["100", "2810", "4096"])
+        # A build without the steps, as an older one, shows no path.
+        self.monotonic_run("kudari-1", [line(-0.1, 0), line(10.5, 0)], (("typing", 0.0, 10.0, 10.0, True),), wall=wall, keys={"typing": keys})
+        self.assertNotIn("the path of a key", self.report("kudari"))
+
     def test_a_terminal_that_ended_during_a_load_is_named_with_it(self):
         self.monotonic_run("alacritty-1", [], (("plain", 0.0, 0.2, 0.2, True),))
         with open(self.directory / "alacritty-1.txt") as file:
