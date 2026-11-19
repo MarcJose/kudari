@@ -1233,22 +1233,24 @@ impl qobject::TerminalItem {
         stats::paint(*self.terminal_id());
         stats::count(stats::Count::LinePaints);
         let (built, origin_y) = bands;
-        let fonts = Fonts::new(self.term_font(), &options);
-        let (width, cell_height) = (self.size().width(), *self.cell_height());
-        painter.as_mut().set_font(&fonts.regular);
-        for (band, band_paints) in &built {
-            let rect = QRectF::new(
-                0.0,
-                origin_y + f64::from(band.start) * cell_height,
-                width,
-                f64::from(band.end - band.start) * cell_height,
-            );
-            kde::rk_painter_band(painter.as_mut(), &rect, !*self.opaque());
-            if *self.opaque() {
-                painter.as_mut().fill_rect(&rect, &qcolor(scheme.background));
+        let (width, cell_height, opaque) = (self.size().width(), *self.cell_height(), *self.opaque());
+        let dpi = kde::rk_painter_dpi(&painter);
+        Glyphs::with(dpi, self.term_font(), &options, |glyphs| {
+            painter.as_mut().set_font(&glyphs.fonts.regular);
+            for (band, band_paints) in &built {
+                let rect = QRectF::new(
+                    0.0,
+                    origin_y + f64::from(band.start) * cell_height,
+                    width,
+                    f64::from(band.end - band.start) * cell_height,
+                );
+                kde::rk_painter_band(painter.as_mut(), &rect, !opaque);
+                if opaque {
+                    painter.as_mut().fill_rect(&rect, &qcolor(scheme.background));
+                }
+                draw(painter.as_mut(), glyphs, band_paints);
             }
-            draw(painter.as_mut(), &fonts, band_paints);
-        }
+        });
         kde::rk_painter_unclip(painter.as_mut());
         clock.stop(stats::Time::FrameDraw);
         stats::key(*self.terminal_id(), stats::Step::Painted);
@@ -1337,9 +1339,11 @@ impl qobject::TerminalItem {
             *kept = true;
             return rect;
         }
-        let fonts = Fonts::new(self.term_font(), &options);
-        painter.as_mut().set_font(&fonts.regular);
-        draw(painter, &fonts, &drawn.1);
+        let dpi = kde::rk_painter_dpi(&painter);
+        Glyphs::with(dpi, self.term_font(), &options, |glyphs| {
+            painter.as_mut().set_font(&glyphs.fonts.regular);
+            draw(painter.as_mut(), glyphs, &drawn.1);
+        });
         self.as_mut().rust_mut().cursor_drawn = Some(drawn);
         rect
     }
@@ -1441,7 +1445,6 @@ impl qobject::TerminalItem {
             );
         }
         let options = options.clone();
-        let fonts = Fonts::new(self.term_font(), &options);
         let mut paints = PAINTS.take();
         let fresh_words = {
             let term: &Term<terminal::Proxy> = &term;
@@ -1499,7 +1502,10 @@ impl qobject::TerminalItem {
             self.as_mut().look_for_hint_files(words, Arc::clone(backend));
         }
 
-        painter.as_mut().set_font(&fonts.regular);
+        let (base, dpi) = (self.term_font().clone(), kde::rk_painter_dpi(&painter));
+        Glyphs::with(dpi, &base, &options, |glyphs| {
+            painter.as_mut().set_font(&glyphs.fonts.regular);
+        });
         if let Some((text, badge)) = badge.filter(|(text, _)| !text.is_empty()) {
             kde::rk_draw_badge(
                 painter.as_mut(),
@@ -1514,7 +1520,7 @@ impl qobject::TerminalItem {
                 *self.cell_height() as i32,
             );
         }
-        draw(painter.as_mut(), &fonts, &paints);
+        Glyphs::with(dpi, &base, &options, |glyphs| draw(painter.as_mut(), glyphs, &paints));
         clock.stop(stats::Time::FrameDraw);
         stats::key(*self.terminal_id(), stats::Step::Painted);
         paints.clear();
@@ -1529,20 +1535,41 @@ thread_local! {
     static PAINTS: std::cell::Cell<Vec<Paint>> = const { std::cell::Cell::new(Vec::new()) };
 }
 
-/// The glyphs of a frame by font and color, so that each group takes one call of
-/// `QPainter::drawGlyphRun` instead of one `drawText` per cell, which costs a text layout each
-/// time. Glyphs of one group do not overlap, so their order within it does not matter.
-#[derive(Default)]
-struct GlyphRuns {
+/// The fonts of a terminal with what drawing makes of them, kept from frame to frame: making
+/// a raw font and looking up the glyph of each character across the bridge cost more than
+/// the frame of a typed key paints, and a frame of lines does it for each band. Glyphs are
+/// grouped by font and color, so that each group takes one call of `QPainter::drawGlyphRun`
+/// instead of one `drawText` per cell, which costs a text layout each time; glyphs of one
+/// group do not overlap, so their order within it does not matter.
+///
+/// A raw font belongs to the thread that made it, so these live on the thread that paints,
+/// in [`GLYPHS`], and go with it.
+struct Glyphs {
+    /// What the fonts were made from; other fonts, or another density of pixels, need others.
+    key: GlyphKey,
+    fonts: Fonts,
     /// The fonts of `Fonts::get`, made on first use.
-    fonts: [Option<cxx::UniquePtr<kde::QRawFont>>; Fonts::SLOTS],
-    /// The glyph of each character in each font so far; 0 when the font has none.
-    glyphs: std::collections::HashMap<(usize, char), u32>,
-    /// The groups in the order of their first glyph, which keeps the drawing the same from
-    /// frame to frame.
+    raw: [Option<cxx::UniquePtr<kde::QRawFont>>; Fonts::SLOTS],
+    /// The glyph of each ASCII character in each font, `UNKNOWN` until looked up; 0 when the
+    /// font has none.
+    ascii: [[u32; 128]; Fonts::SLOTS],
+    /// The glyphs of the other characters, as `ascii`.
+    other: std::collections::HashMap<(usize, char), u32>,
+    /// The groups, of which the first `used` hold glyphs; the others keep their memory for the
+    /// next ones.
     runs: Vec<Run>,
-    /// The index in `runs` by font and color, as `0xRRGGBB`.
+    used: usize,
+    /// The index in `runs` by font and color, as `0xRRGGBB`, for the glyphs drawn next.
     by_key: std::collections::HashMap<(usize, u32), usize>,
+}
+
+#[derive(PartialEq)]
+struct GlyphKey {
+    font: QFont,
+    anti_alias: bool,
+    hinting: bool,
+    emoji_font: String,
+    dpi: i32,
 }
 
 struct Run {
@@ -1552,49 +1579,118 @@ struct Run {
     positions: Vec<QPointF>,
 }
 
-impl GlyphRuns {
+thread_local! {
+    /// The fonts of the last terminals that painted on this thread, the latest first: the
+    /// terminals of a window can differ in their font or its size.
+    static GLYPHS: std::cell::RefCell<Vec<Glyphs>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl Glyphs {
+    /// A glyph not looked up yet.
+    const UNKNOWN: u32 = u32::MAX;
+    /// How many terminals with different fonts keep theirs on a thread.
+    const KEPT: usize = 4;
+    /// More groups than this are not kept for the next frame, nor more glyphs of characters
+    /// beyond ASCII: a program with many colors or characters must not let them grow for good.
+    const MOST_RUNS: usize = 1024;
+    const MOST_OTHER: usize = 65_536;
+
+    /// Gives `work` the fonts for `base` with the options of the view, as they draw on a
+    /// device of `dpi`, from `kde::rk_painter_dpi`.
+    fn with<R>(dpi: i32, base: &QFont, view: &terminal::Options, work: impl FnOnce(&mut Self) -> R) -> R {
+        let key = GlyphKey {
+            font: base.clone(),
+            anti_alias: view.anti_alias,
+            hinting: view.hinting,
+            emoji_font: view.emoji_font.clone(),
+            dpi,
+        };
+        GLYPHS.with_borrow_mut(|kept| {
+            if let Some(found) = kept.iter().position(|glyphs| glyphs.key == key) {
+                if let Some(latest) = kept.get_mut(..=found) {
+                    latest.rotate_right(1);
+                }
+            } else {
+                kept.insert(0, Self::new(key, view));
+                kept.truncate(Self::KEPT);
+            }
+            match kept.first_mut() {
+                Some(glyphs) => work(glyphs),
+                None => unreachable!("a font was just kept"),
+            }
+        })
+    }
+
+    fn new(key: GlyphKey, view: &terminal::Options) -> Self {
+        Self {
+            fonts: Fonts::new(&key.font, view),
+            key,
+            raw: Default::default(),
+            ascii: [[Self::UNKNOWN; 128]; Fonts::SLOTS],
+            other: std::collections::HashMap::new(),
+            runs: Vec::new(),
+            used: 0,
+            by_key: std::collections::HashMap::new(),
+        }
+    }
+
     /// Adds a glyph at a point on its baseline. False if `text` is not one character of the
     /// font, such as a character with combining marks or one that only a fallback font has:
     /// those need `drawText`.
-    fn add(
-        &mut self,
-        painter: &qobject::QPainter,
-        fonts: &Fonts,
-        slot: usize,
-        text: &str,
-        (x, y): (f64, f64),
-        color: Rgb,
-    ) -> bool {
+    fn add(&mut self, painter: &qobject::QPainter, slot: usize, text: &str, (x, y): (f64, f64), color: Rgb) -> bool {
         let mut characters = text.chars();
         let (Some(character), None) = (characters.next(), characters.next()) else {
             return false;
         };
-        let Some(raw) = self.fonts.get_mut(slot) else {
+        let Some(raw) = self.raw.get_mut(slot) else {
             return false;
         };
+        let fonts = &self.fonts;
         let Some(raw) = raw
             .get_or_insert_with(|| kde::rk_raw_font(painter, fonts.get(slot)))
             .as_ref()
         else {
             return false;
         };
-        let glyph = *self
-            .glyphs
-            .entry((slot, character))
-            .or_insert_with(|| kde::rk_glyph_index(raw, character.into()));
+        let ascii = self
+            .ascii
+            .get_mut(slot)
+            .and_then(|table| table.get_mut(character as usize));
+        let known = if let Some(known) = ascii {
+            known
+        } else {
+            if self.other.len() >= Self::MOST_OTHER {
+                self.other.clear();
+            }
+            self.other.entry((slot, character)).or_insert(Self::UNKNOWN)
+        };
+        if *known == Self::UNKNOWN {
+            *known = kde::rk_glyph_index(raw, character.into());
+        }
+        let glyph = *known;
         if glyph == 0 {
             return false;
         }
         let key = (slot, u32::from_be_bytes([0, color.r, color.g, color.b]));
-        let index = *self.by_key.entry(key).or_insert_with(|| {
-            self.runs.push(Run {
-                slot,
-                color,
-                glyphs: Vec::new(),
-                positions: Vec::new(),
-            });
-            self.runs.len() - 1
-        });
+        let index = if let Some(&index) = self.by_key.get(&key) {
+            index
+        } else {
+            let index = self.used;
+            if let Some(run) = self.runs.get_mut(index) {
+                run.slot = slot;
+                run.color = color;
+            } else {
+                self.runs.push(Run {
+                    slot,
+                    color,
+                    glyphs: Vec::new(),
+                    positions: Vec::new(),
+                });
+            }
+            self.used += 1;
+            self.by_key.insert(key, index);
+            index
+        };
         let Some(run) = self.runs.get_mut(index) else {
             return false;
         };
@@ -1603,19 +1699,20 @@ impl GlyphRuns {
         true
     }
 
-    /// Draws the glyphs so far and empties the groups.
+    /// Draws the glyphs so far and empties the groups, in the order of their first glyph,
+    /// which keeps the drawing the same from frame to frame.
     fn draw(&mut self, mut painter: Pin<&mut qobject::QPainter>) {
-        for run in &mut self.runs {
-            if run.glyphs.is_empty() {
-                continue;
-            }
-            let font = self.fonts.get(run.slot).and_then(Option::as_ref);
+        for run in self.runs.iter_mut().take(self.used) {
+            let font = self.raw.get(run.slot).and_then(Option::as_ref);
             if let Some(font) = font.and_then(|font| font.as_ref()) {
                 kde::rk_draw_glyphs(painter.as_mut(), font, &qcolor(run.color), &run.glyphs, &run.positions);
             }
             run.glyphs.clear();
             run.positions.clear();
         }
+        self.used = 0;
+        self.by_key.clear();
+        self.runs.truncate(Self::MOST_RUNS);
     }
 }
 
@@ -1789,19 +1886,18 @@ fn reference_drawing() -> bool {
 }
 
 /// Draws the paints of a frame or of the cursor with the fonts of the terminal.
-fn draw(mut painter: Pin<&mut qobject::QPainter>, fonts: &Fonts, paints: &[Paint]) {
-    let mut runs = GlyphRuns::default();
+fn draw(mut painter: Pin<&mut qobject::QPainter>, glyphs: &mut Glyphs, paints: &[Paint]) {
     for paint in paints {
         match paint {
             Paint::Fill(rect, color) => {
                 // What comes before a fill stays under it.
-                runs.draw(painter.as_mut());
+                glyphs.draw(painter.as_mut());
                 painter
                     .as_mut()
                     .fill_rect(&QRectF::new(rect.x, rect.y, rect.width, rect.height), &qcolor(*color));
             }
             Paint::Shade(rect, color, alpha) => {
-                runs.draw(painter.as_mut());
+                glyphs.draw(painter.as_mut());
                 let mut color = qcolor(*color);
                 color.set_alpha_f(f32::from(*alpha) / 255.0);
                 painter
@@ -1815,16 +1911,16 @@ fn draw(mut painter: Pin<&mut qobject::QPainter>, fonts: &Fonts, paints: &[Paint
                 color,
                 font,
             } => {
-                let slot = fonts.slot(*font);
-                if reference_drawing() || !runs.add(&painter, fonts, slot, text.as_str(), (*x, *y), *color) {
-                    painter.as_mut().set_font(fonts.get(slot));
+                let slot = glyphs.fonts.slot(*font);
+                if reference_drawing() || !glyphs.add(&painter, slot, text.as_str(), (*x, *y), *color) {
+                    painter.as_mut().set_font(glyphs.fonts.get(slot));
                     painter.as_mut().set_pen(&QPen::from(&qcolor(*color)));
                     kde::rk_draw_text(painter.as_mut(), &QPointF::new(*x, *y), &QString::from(text.as_str()));
                 }
             }
         }
     }
-    runs.draw(painter.as_mut());
+    glyphs.draw(painter.as_mut());
 }
 
 #[cfg(test)]

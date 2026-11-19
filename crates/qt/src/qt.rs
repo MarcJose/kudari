@@ -49,6 +49,8 @@ pub mod ffi {
         /// shows in its place; nothing without the test hooks.
         fn rk_test_paint_terminals(path: &QString);
         fn rk_raw_font(painter: &QPainter, font: &QFont) -> UniquePtr<QRawFont>;
+        /// The dots per inch of what `painter` paints on, which a font is made for.
+        fn rk_painter_dpi(painter: &QPainter) -> i32;
         /// The glyph of `character` in `font`, or 0 when the font has none.
         fn rk_glyph_index(font: &QRawFont, character: u32) -> u32;
         /// Draws each glyph with its point on the baseline, all in one color.
