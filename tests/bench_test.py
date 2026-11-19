@@ -213,7 +213,7 @@ class Report(unittest.TestCase):
         text = self.report("kudari")
         row = next(line.split() for line in text.split("Memory of each terminal")[1].splitlines() if line.startswith("kudari "))
         # Runs before the peak was noted have none.
-        self.assertEqual(row, ["kudari", "95", "96", "310", "120", "-"])
+        self.assertEqual(row, ["kudari", "95", "96", "310", "120", "-", "-", "-"])
         self.assertIn("after plain  after idle", text)
 
     def test_the_peak_of_memory_is_the_most_ever_resident(self):
@@ -222,7 +222,30 @@ class Report(unittest.TestCase):
             self.cpu_of(f"kudari-{run}", "bells", (1, "main", 0, 1), memory=(300 * 1024, 110 * 1024, 90 * 1024, peak))
         text = self.report("kudari")
         row = next(line.split() for line in text.split("Memory of each terminal")[1].splitlines() if line.startswith("kudari "))
-        self.assertEqual(row[-1], "450")
+        self.assertEqual(row[-3], "450")
+
+    def test_the_memory_on_the_graphics_card_comes_from_the_fdinfo_of_each_client(self):
+        card = "drm-driver:\tamdgpu\ndrm-pdev:\t0000:03:00.0\ndrm-client-id:\t{}\ndrm-total-vram:\t{}\ndrm-total-gtt:\t{}\ndrm-memory-vram:\t1 KiB\n"
+        # The same client opened twice counts once; MiB and KiB both come as kilobytes.
+        infos = [card.format(7, "2 MiB", "512 KiB"), card.format(7, "2 MiB", "512 KiB"), card.format(8, "1024 KiB", "0")]
+        self.assertEqual(bench.on_card(infos), (3072, 512))
+        # Older kernels name the regions drm-memory- only.
+        self.assertEqual(bench.on_card(["drm-client-id:\t3\ndrm-memory-vram:\t300 KiB\ndrm-memory-gtt: \t20 KiB\n"]), (300, 20))
+        # A device without a client, or none at all, is drawing in software.
+        self.assertIsNone(bench.on_card(["drm-driver:\tvirtio\n"]))
+        self.assertIsNone(bench.on_card([]))
+
+    def test_the_memory_on_the_graphics_card_after_the_last_load(self):
+        for run, vram in (("1", 40 * 1024), ("2", 60 * 1024), ("3", 50 * 1024)):
+            self.run_of(f"kudari-{run}", [], (("plain", 0.0, 0.2),))
+            self.cpu_of(f"kudari-{run}", "plain", (1, "main", 0, 1), memory=(300 * 1024, 110 * 1024, 90 * 1024, 400 * 1024, vram, 8 * 1024))
+            self.run_of(f"xterm-{run}", [], (("plain", 0.0, 0.2),))
+            self.cpu_of(f"xterm-{run}", "plain", (1, "main", 0, 1), memory=(30 * 1024, 11 * 1024, 9 * 1024, 40 * 1024))
+        text = self.report("kudari", "xterm")
+        rows = {line.split()[0]: line.split() for line in text.split("Memory of each terminal")[1].splitlines() if line.startswith(("kudari ", "xterm "))}
+        self.assertEqual(rows["kudari"][-2:], ["50", "8"])
+        # A terminal that draws through another process has none of its own.
+        self.assertEqual(rows["xterm"][-2:], ["-", "-"])
 
     def test_the_answers_to_the_queries_are_counted(self):
         for run, answered in (("1", bench.QUERIES), ("2", bench.QUERIES - 5)):
@@ -512,6 +535,22 @@ class Scenarios(unittest.TestCase):
         # The busiest thread, in milliseconds a second.
         self.assertEqual(self.row(text, "shown, nothing happens")[6:], ["main", "0.20"])
         self.assertEqual(self.row(text, "1 tab")[2:5], ["100", "300", "110"])
+
+    def test_the_memory_hidden_on_the_card_and_of_a_full_history(self):
+        for run, added in (("1", 120 * 1024), ("2", 140 * 1024), ("3", 130 * 1024)):
+            self.write(f"events-{run}.txt", [f"spawn main {self.at(1.0)}"])
+            lines = self.cpu("memory-10", 0, 0, memory=(400 * 1024, 200 * 1024, 150 * 1024))
+            lines[-1] += f"\t0\t{30 * 1024}\t{4 * 1024}"
+            lines += self.cpu("memory-hidden", 0, 0, memory=(400 * 1024, 200 * 1024, 140 * 1024))
+            self.write(f"main-{run}.cpu", lines)
+            self.write(f"history-{run}.cpu", self.cpu("history-empty", 0, 0, memory=(90 * 1024, 70 * 1024, 60 * 1024))
+                       + self.cpu("history-full", 0, 0, memory=(90 * 1024, 70 * 1024, 60 * 1024 + added)))
+            self.write(f"size-{run}.txt", ["50 250"])
+        text = self.report()
+        self.assertEqual(self.row(text, "10 tabs ")[2:], ["150", "400", "200", "30", "4"])
+        self.assertEqual(self.row(text, "10 tabs, window hidden")[4:], ["140", "400", "200", "-", "-"])
+        # 130 MB for 20000 lines: 6.5 MB per 1000 lines, 27.3 bytes per cell of 250 columns.
+        self.assertEqual(self.row(text, "250 "), ["250", "6.50", "27.3", "3"])
 
     def test_without_a_run_it_says_so(self):
         self.write("events-w1.txt", [])
