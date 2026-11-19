@@ -84,7 +84,7 @@ const SECONDS: Duration = Duration::from_secs(5);
 #[test]
 fn many_kitty_keyboard_modes_do_not_end_the_terminal() {
     // `alacritty_terminal` 0.26 took the oldest from the stack of titles instead of the keyboard
-    // modes once that was full, and panicked when it was empty; fixed in `third_party`..
+    // modes once that was full, and panicked when it was empty; fixed in `third_party`.
     let result = within(SECONDS, || {
         let config = Config {
             kitty_keyboard: true,
