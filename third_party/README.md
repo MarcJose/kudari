@@ -30,6 +30,8 @@ for each, which runs against these copies.
 | `vte` | Hands a repeat (REP) to the handler as one call, `Handler::repeat`, which repeats as before unless the handler knows better. | `repeating_a_character_fills_no_more_than_the_screen` |
 | `alacritty_terminal` | Repeats a character no more than a screen and a line, by whole lines fewer, which ends with the same screen and cursor; a character of no width at most 16 times. | `a_repeat_ends_as_writing_the_character_that_often` |
 | `alacritty_terminal` | Parses output 512 bytes at a time, and once it has held the terminal for 8 ms, lets those waiting for it have it first. | `costly_output_lets_others_have_the_terminal` |
+| `alacritty_terminal` | On the last line of the screen below the scrolling region, where a line feed does not move on, marks no line as going on in the next and leaves no spacer for a wide character there. | `a_wide_character_below_the_scrolling_region_keeps_the_cursor_in_the_grid`, `the_last_line_below_the_scrolling_region_goes_on_in_no_other` |
+| `alacritty_terminal` | On Windows, gives an error where creating a pseudo console fails and warns where resizing it does, instead of asserting. | `a_pseudo_console_that_fails_is_an_error_not_a_panic` |
 
 Once releases of both carry a fix, delete it here; once they carry all of them, delete both
 directories and their lines in `[patch.crates-io]`, update the versions in `Cargo.toml`, and

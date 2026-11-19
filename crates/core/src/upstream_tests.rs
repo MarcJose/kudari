@@ -226,8 +226,10 @@ fn deleting_half_of_a_wide_character_leaves_a_cursor_that_moves() {
 }
 
 #[test]
-#[ignore = "alacritty_terminal 0.26 wraps a wide character in the last line below the scrolling region into a cell outside the grid"]
 fn a_wide_character_below_the_scrolling_region_keeps_the_cursor_in_the_grid() {
+    // `alacritty_terminal` 0.26 marked the last line of the screen below the scrolling region as
+    // going on in the next and left a spacer there, though a line feed does not move on, and a
+    // move right in the selection mode went below the screen; fixed in `third_party`.
     let result = within(SECONDS, || {
         let mut term = term(10, 5, Config::default(), "\x1b[1;3r\x1b[5Habcdefghi界".as_bytes());
         term.toggle_vi_mode();
@@ -279,4 +281,44 @@ fn a_narrower_and_wider_grid_keeps_a_full_history() {
     term.resize(TermSize::new(8, 5));
     term.resize(TermSize::new(10, 5));
     assert_eq!(term.grid().history_size(), before);
+}
+
+#[test]
+fn the_last_line_below_the_scrolling_region_goes_on_in_no_other() {
+    let term = term(10, 5, Config::default(), "\x1b[1;3r\x1b[5Habcdefghi界".as_bytes());
+    let last = &term.grid()[Line(4)];
+    // The wide character starts the line again; the last cell is an ordinary blank one.
+    assert!(last[Column(0)].flags.contains(Flags::WIDE_CHAR));
+    assert!(
+        !last[Column(9)]
+            .flags
+            .intersects(Flags::WRAPLINE | Flags::LEADING_WIDE_CHAR_SPACER)
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn a_pseudo_console_that_fails_is_an_error_not_a_panic() {
+    use alacritty_terminal::event::{OnResize, WindowSize};
+    use alacritty_terminal::tty::{self, Options as Pty};
+
+    // `alacritty_terminal` 0.26 asserted that CreatePseudoConsole and ResizePseudoConsole work,
+    // and a release of Kudari ended with every terminal where they did not; fixed in
+    // `third_party`. A size of nothing is one that the console takes for neither.
+    let nothing = WindowSize {
+        num_lines: 0,
+        num_cols: 0,
+        cell_width: 8,
+        cell_height: 16,
+    };
+    let created = std::panic::catch_unwind(|| tty::new(&Pty::default(), nothing, 0).is_err());
+    assert_eq!(created.ok(), Some(true));
+    let size = WindowSize {
+        num_lines: 24,
+        num_cols: 80,
+        ..nothing
+    };
+    let mut pty = tty::new(&Pty::default(), size, 0).expect("a pseudo console");
+    let resized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pty.on_resize(nothing)));
+    assert!(resized.is_ok());
 }
