@@ -118,8 +118,18 @@ fi
 
 # As the session of the virtual KWin, which gives it WAYLAND_DISPLAY and DISPLAY: starts each
 # terminal in turn and waits for its loads. Messages go to progress.log, failures to failed.
-if [ "${KUDARI_BENCH_ROLE:-}" = session ] && [ -n "${KUDARI_BENCH_SCENARIOS:-}" ]; then
-    exec "$tools/bench-scenarios.sh"
+if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
+    # KWin's --scale only enlarges the virtual screen; the scale that programs see is a setting
+    # of the screen.
+    if [ "$KUDARI_BENCH_SCALE" != 1 ]; then
+        output=$(kscreen-doctor -o 2> /dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk '/^Output:/ { print $3; exit }')
+        if ! kscreen-doctor "output.$output.scale.$KUDARI_BENCH_SCALE" > /dev/null 2>&1; then
+            echo "could not scale the screen to $KUDARI_BENCH_SCALE" > "$KUDARI_BENCH_WORK/failed"
+            exit 1
+        fi
+        sleep 1
+    fi
+    [ -z "${KUDARI_BENCH_SCENARIOS:-}" ] || exec "$tools/bench-scenarios.sh"
 fi
 if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
     work=$KUDARI_BENCH_WORK
@@ -144,13 +154,6 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
         owner=$(qdbus6 org.freedesktop.DBus / org.freedesktop.DBus.GetConnectionUnixProcessID "$1" 2> /dev/null || true)
         [ "$owner" = "$pid" ] || fail "$terminal ended after it started; see $log"
     }
-    # KWin's --scale only enlarges the virtual screen; the scale that programs see is a setting
-    # of the screen.
-    if [ "$KUDARI_BENCH_SCALE" != 1 ]; then
-        output=$(kscreen-doctor -o 2> /dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk '/^Output:/ { print $3; exit }')
-        kscreen-doctor "output.$output.scale.$KUDARI_BENCH_SCALE" > /dev/null 2>&1 || fail "could not scale the screen to $KUDARI_BENCH_SCALE"
-        sleep 1
-    fi
     # The warm-up runs come first, as w1, w2 and so on; the report leaves them out.
     round=1
     while [ "$round" -le $((KUDARI_BENCH_WARMUP + KUDARI_BENCH_RUNS)) ]; do
