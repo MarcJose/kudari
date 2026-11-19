@@ -1145,6 +1145,15 @@ def answers(runs, trips, terminals):
     table(["terminal", "query ms", "95% ms"] + [f"{load} ms" for load in ran], rows)
 
 
+def shown_at(times, moment):
+    """When the first frame of the sorted `times` after `moment` was drawn, or None. Qt logs the
+    time of a frame cut off to whole milliseconds, so a frame in the millisecond of `moment`
+    shows before it: that frame counts, at the middle of its millisecond, or at `moment` when
+    that is later."""
+    later = [time for time in times if time + 0.001 > moment]
+    return max(later[0] + 0.0005, moment) if later else None
+
+
 def zooming(runs, terminals):
     """For the load resize: in a terminal that reports its frames, the milliseconds from each
     shortcut to the first frame after it and the longest gap between two frames meanwhile,
@@ -1158,9 +1167,8 @@ def zooming(runs, terminals):
         for measured in done:
             times = sorted(found.time for found in measured.frames)
             for pressed, _ in measured.keys:
-                later = [moment for moment in times if moment >= pressed]
-                if later:
-                    shown.append(1000 * (later[0] - pressed))
+                if (drawn := shown_at(times, pressed)) is not None:
+                    shown.append(1000 * (drawn - pressed))
             gap.extend(gaps(measured.frames))
         cells = [terminal, str(sum(len(measured.keys) for measured in done))]
         cells += [f"{percentile(shown, 0.5):.1f}", f"{percentile(shown, 0.95):.1f}", f"{max(shown):.1f}"] if shown else ["-", "-", "-"]
@@ -1187,9 +1195,8 @@ def latency(runs, terminals):
             for measured in done:
                 times = sorted(found.time for found in measured.frames)
                 for pressed, arrived in measured.keys:
-                    later = [moment for moment in times if moment >= arrived]
-                    if later:
-                        shown.append(1000 * (later[0] - pressed))
+                    if (drawn := shown_at(times, arrived)) is not None:
+                        shown.append(1000 * (drawn - pressed))
                 if times:
                     per_key.append(len(times) / len(measured.keys))
             missing = sum(TYPED - len(measured.keys) for measured in done)
@@ -1201,7 +1208,8 @@ def latency(runs, terminals):
             continue
         print(f"\n{load}: {DESCRIPTIONS[load]}. Milliseconds from the press of each key in KWin to")
         print("the terminal (to the PTY), over all runs; for Kudari also to the first frame after the")
-        print("echo, as Qt logs it when drawn, and the frames per key. Lost are keys that never came.")
+        print("echo, as Qt logs it when drawn (in whole milliseconds: at the middle of its millisecond),")
+        print("and the frames per key. Lost are keys that never came.")
         table(["terminal", "to PTY p50", "p95", "p99", "to frame p50", "p95", "frames/key", "lost"], [row for _, row in sorted(rows, key=lambda row: row[0])])
 
 

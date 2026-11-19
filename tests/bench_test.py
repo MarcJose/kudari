@@ -332,12 +332,30 @@ class Report(unittest.TestCase):
         text = self.report("kudari", "alacritty")
         part = text.split("typing: 100 keys")[1].splitlines()
         kudari = next(line.split() for line in part if line.startswith("kudari "))
-        self.assertEqual(kudari[1:], ["1.00", "1.00", "1.00", "8.0", "8.0", "1.00", "0"])
+        # The frames at the middle of the millisecond that Qt cut their time off to.
+        self.assertEqual(kudari[1:], ["1.00", "1.00", "1.00", "8.5", "8.5", "1.00", "0"])
         alacritty = next(line.split() for line in part if line.startswith("alacritty "))
         # Without frames in its log; two keys never came.
         self.assertEqual(alacritty[4:], ["-", "-", "-", "2"])
         # A load of keys has no throughput, but a cost per key.
         self.assertNotIn("\ntyping: 100 keys 50 ms apart, each echoed at once\n", text)
+
+    def test_a_frame_in_the_millisecond_of_the_echo_is_its_frame(self):
+        frame = "{:.3f} qt.scenegraph.time.renderloop [render thread 0x1] syncAndRender: frame rendered in 0ms, sync=0, render=0, swap=0"
+        # Each key at the terminal 0.2 ms after its press, drawn 0.5 ms after that: Qt cuts the
+        # time of the frame off to the millisecond of the press, before the echo came. The next
+        # frame comes only with the next key.
+        keys = [(0.1 * index + 0.0001, 0.1 * index + 0.0003) for index in range(100)]
+        frames = [frame.format(1000 + 0.1 * index) for index in range(101)]
+        self.monotonic_run("kudari-1", frames, (("typing", 0.0, 10.0, 10.0, True),), keys={"typing": keys})
+        part = self.report("kudari").split("typing: 100 keys")[1].splitlines()
+        kudari = next(line.split() for line in part if line.startswith("kudari "))
+        # From the press to the echo, as the frame cannot show it earlier: not 100 ms.
+        self.assertEqual(kudari[4:6], ["0.4", "0.4"])
+        self.assertEqual(bench.shown_at([1.000, 1.050], 1.0003), 1.0005)
+        self.assertEqual(bench.shown_at([1.000, 1.050], 1.0008), 1.0008)
+        self.assertEqual(bench.shown_at([1.000, 1.050], 1.001), 1.0505)
+        self.assertIsNone(bench.shown_at([1.000], 1.002))
 
     def test_the_path_of_a_key_comes_from_the_counters_step_by_step(self):
         wall = 1000 + 5000
@@ -396,7 +414,8 @@ class Report(unittest.TestCase):
         self.monotonic_run("kudari-1", frames, (("resize", 0.0, 10.0, 10.0, True),), keys={"resize": [(pressed, pressed) for pressed in presses]})
         part = self.report("kudari").split("resize: 10 steps")[1].splitlines()
         row = next(line.split() for line in part if line.startswith("kudari "))
-        self.assertEqual(row[1:], ["20", "30.0", "30.0", "30.0", "500"])
+        # The frames at the middle of the millisecond that Qt cut their time off to.
+        self.assertEqual(row[1:], ["20", "30.5", "30.5", "30.5", "500"])
 
     def test_older_runs_on_the_time_of_day_still_read(self):
         self.run_of("kudari-1", [threaded(0.1, 1)])
