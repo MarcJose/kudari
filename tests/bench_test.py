@@ -747,9 +747,12 @@ class Driver(unittest.TestCase):
         seen = []
 
         def terminal(limit):
-            asked = 0
+            asked, rest = 0, b""
             while asked < 2500:
-                got = os.read(self.master, 65536).count(b"\x1b[c")
+                # A query can come split over two reads.
+                read = rest + os.read(self.master, 65536)
+                got = read.count(b"\x1b[c")
+                rest = read[read.rfind(b"\x1b[c") + 3 :][-2:] if got else read[-2:]
                 seen.append(got)
                 # A terminal that answers no more than `limit` of all questions.
                 for _ in range(max(0, min(got, limit - asked))):
