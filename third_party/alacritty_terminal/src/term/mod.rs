@@ -968,7 +968,16 @@ impl<T> Term<T> {
 
         trace!("Wrapping input");
 
-        self.grid.cursor_cell().flags.insert(Flags::WRAPLINE);
+        // On the last line of the screen below the scrolling region, a line feed does not move
+        // on: the line goes on in no other, and a spacer for a wide character that wraps would
+        // point to a line below the screen. The cell stays a blank one.
+        let stuck = self.grid.cursor.point.line + 1 > self.scroll_region.end
+            && self.grid.cursor.point.line.0 as usize + 1 >= self.screen_lines();
+        if stuck {
+            self.grid.cursor_cell().flags.remove(Flags::LEADING_WIDE_CHAR_SPACER);
+        } else {
+            self.grid.cursor_cell().flags.insert(Flags::WRAPLINE);
+        }
 
         if self.grid.cursor.point.line + 1 >= self.scroll_region.end {
             self.linefeed();

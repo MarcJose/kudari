@@ -129,7 +129,11 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
         )
     };
 
-    assert_eq!(result, S_OK);
+    // A failure, as with a size of nothing or a conpty.dll without its OpenConsole.exe, is an
+    // error for the caller rather than a panic that ends every terminal.
+    if result != S_OK {
+        return Err(Error::other(format!("CreatePseudoConsole failed: {result:#x}")));
+    }
 
     let mut success;
 
@@ -303,7 +307,10 @@ fn add_windows_env_key_value_to_block(block: &mut Vec<u16>, key: &OsStr, value: 
 impl OnResize for Conpty {
     fn on_resize(&mut self, window_size: WindowSize) {
         let result = unsafe { (self.api.resize)(self.handle, window_size.into()) };
-        assert_eq!(result, S_OK);
+        // A console host that ended, or a size it does not take, leaves the size as it was.
+        if result != S_OK {
+            warn!("ResizePseudoConsole failed: {result:#x}");
+        }
     }
 }
 
