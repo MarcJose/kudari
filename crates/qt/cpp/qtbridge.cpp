@@ -32,12 +32,17 @@
 #include <QPrintDialog>
 #include <QPrinter>
 #include <QQuickWindow>
+#include <QRegion>
 #include <QSGImageNode>
 #include <QSGNode>
 #include <QSGTexture>
 #include <QTextDocument>
+#include <QVarLengthArray>
 // Private, as nothing public names the key of a key event on its first level.
 #include <QtGui/private/qkeymapper_p.h>
+// With limited guarantees of compatibility, for a texture that takes only the parts of the
+// frame that changed.
+#include <rhi/qrhi.h>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #endif
@@ -197,8 +202,15 @@ void RkImageItem::updateLines()
     update();
 }
 
+// The bands that a frame of lines paints, in pixels of the device, while
+// `RkImageItem::updatePaintNode` collects them on its thread.
+static thread_local QRegion *t_bands = nullptr;
+
 void rk_painter_band(QPainter &painter, const QRectF &band, bool clear)
 {
+    if (t_bands) {
+        *t_bands += painter.deviceTransform().mapRect(band).toAlignedRect();
+    }
     painter.setClipRect(band);
     if (clear) {
         painter.save();
@@ -224,6 +236,84 @@ void RkImageItem::geometryChange(const QRectF &newGeometry, const QRectF &oldGeo
     }
 }
 
+// The texture of a frame where Qt Quick draws through the RHI: it keeps its storage on the
+// graphics card from frame to frame and takes only the parts of the image that changed, where
+// a new texture would take all of it each time. The image is held only until the render
+// thread takes it, before the next frame paints into it again.
+class RkFrameTexture : public QSGTexture
+{
+public:
+    ~RkFrameTexture() override { delete m_texture; }
+
+    qint64 comparisonKey() const override { return qint64(quintptr(this)); }
+    QRhiTexture *rhiTexture() const override { return m_texture; }
+    QSize textureSize() const override { return m_size; }
+    bool hasAlphaChannel() const override { return m_alpha; }
+    bool hasMipmaps() const override { return false; }
+
+    // The image to show; only `parts` of it changed since the last, in pixels of the device,
+    // or all of it if `whole`.
+    void take(const QImage &image, bool alpha, const QRegion &parts, bool whole)
+    {
+        m_whole = m_whole || whole || image.size() != m_size || alpha != m_alpha;
+        m_parts += parts;
+        m_image = image;
+        m_size = image.size();
+        m_alpha = alpha;
+    }
+
+    void commitTextureOperations(QRhi *rhi, QRhiResourceUpdateBatch *batch) override
+    {
+        if (m_image.isNull()) {
+            return;
+        }
+        // As Qt's own textures take an image: as it is where the device can, else converted.
+        const bool bgra = rhi->isTextureFormatSupported(QRhiTexture::BGRA8);
+        const QRhiTexture::Format format = bgra ? QRhiTexture::BGRA8 : QRhiTexture::RGBA8;
+        if (!m_texture || m_texture->pixelSize() != m_size || m_texture->format() != format) {
+            delete m_texture;
+            m_texture = rhi->newTexture(format, m_size);
+            if (!m_texture->create()) {
+                delete m_texture;
+                m_texture = nullptr;
+                return;
+            }
+            m_whole = true;
+        }
+        const QRegion parts = m_whole ? QRegion(QRect(QPoint(), m_size)) : (m_parts & QRect(QPoint(), m_size));
+        QVarLengthArray<QRhiTextureUploadEntry, 8> entries;
+        for (const QRect &part : parts) {
+            QRhiTextureSubresourceUploadDescription description;
+            if (bgra) {
+                description = QRhiTextureSubresourceUploadDescription(m_image);
+                description.setSourceTopLeft(part.topLeft());
+                description.setSourceSize(part.size());
+            } else {
+                description = QRhiTextureSubresourceUploadDescription(
+                    m_image.copy(part).convertToFormat(QImage::Format_RGBA8888_Premultiplied));
+            }
+            description.setDestinationTopLeft(part.topLeft());
+            entries.append(QRhiTextureUploadEntry(0, 0, description));
+        }
+        if (!entries.isEmpty()) {
+            QRhiTextureUploadDescription upload;
+            upload.setEntries(entries.cbegin(), entries.cend());
+            batch->uploadTexture(m_texture, upload);
+        }
+        m_image = QImage();
+        m_parts = QRegion();
+        m_whole = false;
+    }
+
+private:
+    QRhiTexture *m_texture = nullptr;
+    QImage m_image;
+    QSize m_size;
+    QRegion m_parts;
+    bool m_alpha = true;
+    bool m_whole = true;
+};
+
 // Gives `node` the image as a new texture, deleting the one it had once, whether or not the
 // node does so itself when another takes its place.
 static void showImage(QQuickWindow *window, QSGImageNode *node, const QImage &image, bool opaque, const QRectF &rect, const QSize &size, bool smooth)
@@ -238,6 +328,32 @@ static void showImage(QQuickWindow *window, QSGImageNode *node, const QImage &im
     node->setRect(rect);
     node->setSourceRect(QRectF(QPointF(), QSizeF(size)));
     node->setFiltering(smooth ? QSGTexture::Linear : QSGTexture::Nearest);
+}
+
+// Shows the frame in `node`: through the RHI in the texture it keeps, with only `parts` of
+// the image new unless `whole`; in software as a new texture.
+static void showFrame(QQuickWindow *window, QSGImageNode *node, const QImage &image, bool opaque, const QRectF &rect, const QSize &size, bool smooth, const QRegion &parts, bool whole)
+{
+    if (!window->rhi()) {
+        showImage(window, node, image, opaque, rect, size, smooth);
+        return;
+    }
+    auto texture = dynamic_cast<RkFrameTexture *>(node->texture());
+    if (!texture) {
+        texture = new RkFrameTexture;
+        QSGTexture *previous = node->texture();
+        node->setOwnsTexture(false);
+        node->setTexture(texture);
+        node->setOwnsTexture(true);
+        delete previous;
+        whole = true;
+    }
+    texture->take(image, !opaque, parts, whole);
+    node->setRect(rect);
+    node->setSourceRect(QRectF(QPointF(), QSizeF(size)));
+    node->setFiltering(smooth ? QSGTexture::Linear : QSGTexture::Nearest);
+    // The same texture with new content: the frame has to be drawn again.
+    node->markDirty(QSGNode::DirtyMaterial);
 }
 
 #ifdef RK_TEST_HOOKS
@@ -349,14 +465,17 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
     bool linesPainted = false;
     if (m_linesDirty && !m_contentDirty && m_image.size() == size) {
         int painted = NoLines;
+        QRegion bands;
         {
             QPainter painter(&m_image);
+            t_bands = &bands;
             painted = paintLines(&painter);
+            t_bands = nullptr;
         }
         if (painted == WholeFrame) {
             m_contentDirty = true;
-        } else if (painted == SomeLines) {
-            showImage(shown, content, m_image, m_opaque, place, size, smooth());
+        } else if (painted == SomeLines || painted == AllLines) {
+            showFrame(shown, content, m_image, m_opaque, place, size, smooth(), bands, painted == AllLines);
             linesPainted = true;
         }
     }
@@ -375,7 +494,7 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
             QPainter painter(&m_image);
             paint(&painter);
         }
-        showImage(shown, content, m_image, m_opaque, place, size, smooth());
+        showFrame(shown, content, m_image, m_opaque, place, size, smooth(), QRegion(), true);
         m_contentDirty = false;
     } else if (content->rect() != place) {
         // The item moved by a part of a pixel, with the same image.

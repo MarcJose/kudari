@@ -1096,7 +1096,8 @@ impl qobject::TerminalItem {
     /// that the emulator tells with a line on each side, for glyphs and lines that reach over.
     /// The whole frame where it tells all of them, or where this or the last frame shows what
     /// it does not tell changes of: a selection, the matches of a search, hints, a badge, the
-    /// history scrolled back. Gives what it did, as `RkImageItem::paintLines` reads it.
+    /// history scrolled back. Gives what it did, as `RkImageItem::paintLines` reads it: the
+    /// texture of the frame takes only the bands of the lines, or all of it after a whole frame.
     ///
     /// # Safety
     ///
@@ -1105,6 +1106,7 @@ impl qobject::TerminalItem {
         const NOTHING: i32 = 0;
         const PAINTED: i32 = 1;
         const WHOLE: i32 = 2;
+        const ALL: i32 = 3;
         // SAFETY: Qt passes null or a painter that is valid during this call and stays in place.
         let Some(painter) = (unsafe { painter.as_mut() }) else {
             return WHOLE;
@@ -1147,7 +1149,7 @@ impl qobject::TerminalItem {
                     kde::rk_painter_unclip(painter.as_mut());
                 }
                 self.paint_frame_with(painter, &backend, term, &options, badge, clock);
-                return PAINTED;
+                return ALL;
             };
             if changed.is_empty() {
                 return NOTHING;
