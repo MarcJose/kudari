@@ -85,6 +85,11 @@ verify() {
         share/doc/kudari/MIT.txt share/doc/kudari/THIRD_PARTY_LICENSES; do
         [ -s "$file" ] || die "missing from the installation: $file"
     done
+    # A package is never a build that counts (the feature stats, which follows keys) or that
+    # takes the commands of the GUI test over D-Bus (test-hooks).
+    if grep -aq -e 'kudari-stats' -e 'io.github.marcjose.kudari.Test' bin/kudari; then
+        die "bin/kudari is a build with the feature stats or test-hooks"
+    fi
     QT_QPA_PLATFORM=offscreen bin/kudari --version
 }
 
