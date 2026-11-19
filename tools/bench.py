@@ -171,7 +171,8 @@ class Load(NamedTuple):
     cpu: dict | None = None
     # How often the threads of each group went to sleep or were put aside meanwhile.
     switches: dict | None = None
-    # Kilobytes of memory after the load: resident, proportional and private; or None.
+    # Kilobytes of memory after the load: resident, proportional, private and the peak, then on
+    # the graphics card and through its address table if the terminal draws there; or None.
     memory: tuple | None = None
     # What the counters of a build with the feature stats counted meanwhile; or None.
     counters: dict | None = None
@@ -208,9 +209,48 @@ def cpu(path, pid, load, moment):
         private = sizes.get("Private_Clean", 0) + sizes.get("Private_Dirty", 0)
         # The most it ever held, which a flood can drive up for a moment.
         peak = re.search(r"^VmHWM:\s+(\d+) kB", status, re.M) if (status := content(f"/proc/{pid}/status")) else None
-        lines.append(f"{load}\tmemory\t{sizes.get('Rss', 0)}\t{sizes.get('Pss', 0)}\t{private}\t{peak[1] if peak else 0}\n")
+        held = gpu(pid)
+        graphics = f"\t{held[0]}\t{held[1]}" if held else ""
+        lines.append(f"{load}\tmemory\t{sizes.get('Rss', 0)}\t{sizes.get('Pss', 0)}\t{private}\t{peak[1] if peak else 0}{graphics}\n")
     with open(path, "a") as file:
         file.writelines(lines)
+
+
+# The units that the kernel gives the sizes of memory in `fdinfo` in, in kilobytes.
+UNITS = {"": 1 / 1024, "KiB": 1, "MiB": 1024, "GiB": 1024 * 1024}
+
+
+def gpu(pid):
+    """Kilobytes of memory that the process PID holds on the graphics card (VRAM) and in memory
+    the card reaches through its address table (GTT), from the `fdinfo` of its DRM devices; or None
+    without one, as with drawing in software."""
+    infos = []
+    for descriptor in Path(f"/proc/{pid}/fd").glob("*"):
+        try:
+            if os.readlink(descriptor).startswith("/dev/dri/"):
+                infos.append(content(f"/proc/{pid}/fdinfo/{descriptor.name}") or "")
+        except OSError:
+            continue
+    return on_card(infos)
+
+
+def on_card(infos):
+    """VRAM and GTT in kilobytes from the `fdinfo` texts of DRM devices, or None if none of them
+    names its client. A device opened twice is one client and counts once."""
+    clients = {}
+    for info in infos:
+        fields = dict(re.findall(r"^(drm-[\w-]+):\s*(.*)$", info, re.M))
+        if "drm-client-id" not in fields:
+            continue
+        sizes = []
+        for region in ("vram", "gtt"):
+            # Older kernels give drm-memory-REGION only.
+            found = re.fullmatch(r"(\d+)\s*(\w*)", (fields.get(f"drm-total-{region}") or fields.get(f"drm-memory-{region}") or "0").strip())
+            sizes.append(round(int(found[1]) * UNITS.get(found[2], 0)) if found else 0)
+        clients[(fields.get("drm-pdev"), fields["drm-client-id"])] = sizes
+    if not clients:
+        return None
+    return sum(vram for vram, _ in clients.values()), sum(gtt for _, gtt in clients.values())
 
 
 def monotonic():
@@ -453,7 +493,7 @@ def threads(path):
     for line in path.read_text().splitlines():
         fields = line.split("\t")
         if fields[1] == "memory":
-            memory[fields[0]] = tuple(int(field) for field in fields[2:6])
+            memory[fields[0]] = tuple(int(field) for field in fields[2:])
             continue
         load, moment, tid, name, nanoseconds, voluntary, other = fields
         taken.setdefault((load, moment), {})[tid] = (name, int(nanoseconds), int(voluntary) + int(other))
@@ -1248,11 +1288,22 @@ def memory(runs, terminals):
         cells = [f"{statistics.median(found[2] for found in after[load]) / 1024:.0f}" if load in after else "-" for load in loads]
         peaks = [found[3] for found in last if len(found) > 3 and found[3]]
         peak = f"{statistics.median(peaks) / 1024:.0f}" if peaks else "-"
-        rows.append([terminal] + cells + [f"{statistics.median(found[0] for found in last) / 1024:.0f}", f"{statistics.median(found[1] for found in last) / 1024:.0f}", peak])
+        rows.append([terminal] + cells + [f"{statistics.median(found[0] for found in last) / 1024:.0f}", f"{statistics.median(found[1] for found in last) / 1024:.0f}", peak, *graphics(last)])
     print("\nMemory of each terminal in MB, median of the runs: private after each load (the history")
     print("fills from one load to the next), resident (RSS) and proportional (PSS) after the last, and")
-    print("the most it was ever resident (peak), which a flood can drive up for a moment.")
-    table(["terminal"] + [f"after {load}" for load in loads] + ["RSS", "PSS", "peak"], rows)
+    print("the most it was ever resident (peak), which a flood can drive up for a moment. VRAM is what")
+    print("it held on the graphics card after the last load, GTT what in memory that the card reaches,")
+    print("both from the fdinfo of its DRM devices; \"-\" for a terminal that draws in software or through")
+    print("another process, as xterm through Xwayland.")
+    table(["terminal"] + [f"after {load}" for load in loads] + ["RSS", "PSS", "peak", "VRAM", "GTT"], rows)
+
+
+def graphics(samples):
+    """The median VRAM and GTT of the samples of memory that have them, in MB, or dashes."""
+    held = [found[4:6] for found in samples if len(found) > 5]
+    if not held:
+        return ["-", "-"]
+    return [f"{statistics.median(found[index] for found in held) / 1024:.0f}" for index in (0, 1)]
 
 
 def drawing(terminal, measured, detail):
@@ -1478,7 +1529,15 @@ WAITING = (
     ("output-hidden", "the same, with the window hidden"),
     ("flood-behind", "endless output in a tab in the background"),
 )
-MEMORY = (("memory-1", "1 tab"), ("memory-5", "5 tabs"), ("memory-10", "10 tabs"), ("memory-closed", "closed to 1"))
+MEMORY = (
+    ("memory-1", "1 tab"),
+    ("memory-5", "5 tabs"),
+    ("memory-10", "10 tabs"),
+    ("memory-hidden", "10 tabs, window hidden"),
+    ("memory-closed", "closed to 1"),
+)
+# The lines of history that the scenario history fills, by writing a screen more than that.
+HISTORY = 20_000
 # The phases that Kudari marks through KUDARI_TIMING while it starts, in their order: the
 # controller starts its first session while QML loads.
 PHASES = ("main", "application", "bus", "started", "qml", "ready")
@@ -1535,7 +1594,7 @@ def scenarios(directory):
         print("\nNo run of the scenarios finished; the logs of Kudari tell why.")
         return
     starts, phases, first_shows, shows, toggles, seconds, versions = [], {}, [], [], [], [], []
-    waiting, memory = {}, {}
+    waiting, memory, grown = {}, {}, []
     for run in runs:
         events, drawn, marks, used, woken, sizes = scenario_run(directory, run)
         spawn = events.get(("spawn", "main"), [None])[0]
@@ -1567,6 +1626,9 @@ def scenarios(directory):
         for label, _ in MEMORY:
             if label in sizes:
                 memory.setdefault(label, []).append(sizes[label])
+        size = (content(directory / f"size-{run}.txt") or "").split()
+        if "history-empty" in sizes and "history-full" in sizes and len(size) == 2 and size[1].isdigit():
+            grown.append((sizes["history-full"][2] - sizes["history-empty"][2], int(size[1])))
     print(f"\n{len(runs)} runs of the scenarios.")
     print("\nStart: from the start of the process, in ms; median and the slowest run.")
     rows = [["name on the bus", *ranges([bus for bus, _ in starts])], ["first frame", *ranges([shown for _, shown in starts if shown is not None])]]
@@ -1588,12 +1650,22 @@ def scenarios(directory):
             threads = ", ".join(f"{group} {used_ms:.2f}" for used_ms, group in busiest)
             rows.append([description, f"{statistics.median(found_[0] for found_ in found):.2f}", f"{statistics.median(found_[1] for found_ in found):.0f}", f"{statistics.median(found_[2] for found_ in found):.1f}", threads])
     table(["", "CPU ms/s", "wakeups/s", "frames/s", "busiest threads"], rows)
-    print("\nMemory in MB, median of the runs: private, resident (RSS) and proportional (PSS).")
+    print("\nMemory in MB, median of the runs: private, resident (RSS) and proportional (PSS), and")
+    print("on the graphics card (VRAM) and in memory that the card reaches (GTT), from the fdinfo of")
+    print("the DRM devices of Kudari; \"-\" when it draws in software.")
     rows = []
     for label, description in MEMORY:
         if found := memory.get(label):
-            rows.append([description, *(f"{statistics.median(size[index] for size in found) / 1024:.0f}" for index in (2, 0, 1))])
-    table(["", "private", "RSS", "PSS"], rows)
+            rows.append([description, *(f"{statistics.median(size[index] for size in found) / 1024:.0f}" for index in (2, 0, 1)), *graphics(found)])
+    table(["", "private", "RSS", "PSS", "VRAM", "GTT"], rows)
+    if grown:
+        print(f"\nThe history: what filling a history of {HISTORY} lines added to the private memory of")
+        print("Kudari, per 1000 lines and per cell of a line, median of the runs; the columns are those of")
+        print("its terminal.")
+        per_thousand = [added / (HISTORY / 1000) for added, _ in grown]
+        per_cell = [added * 1024 / (HISTORY * columns) for added, columns in grown]
+        columns = sorted({columns for _, columns in grown})
+        table(["columns", "MB per 1000 lines", "bytes per cell", "runs"], [[", ".join(map(str, columns)), f"{statistics.median(per_thousand) / 1024:.2f}", f"{statistics.median(per_cell):.1f}", str(len(grown))]])
 
 
 def ranges(values):

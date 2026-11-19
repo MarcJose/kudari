@@ -14,7 +14,9 @@
 #               a blinking cursor, one that rests, a fading one, output in a tab in the
 #               background, output while the window is hidden, and endless output in a tab
 #               in the background
-#   memory      after the start, with 5 and with 10 tabs, and after closing them again
+#   memory      after the start, with 5 and with 10 tabs, with the window hidden, and after
+#               closing them again; also on the graphics card
+#   history     what a full history of 20000 lines adds to a Kudari
 #
 # Every time is the clock of the computer in seconds since 1970, in events-RUN.txt, next to
 # the logs of each Kudari; `tools/bench.py scenarios` makes the report.
@@ -144,6 +146,12 @@ while [ "$round" -le $((KUDARI_BENCH_WARMUP + KUDARI_BENCH_RUNS)) ]; do
     sleep 1
     sample memory-10 start
     sample memory-10 end
+    toggle hide main
+    sleep 1
+    sample memory-hidden start
+    sample memory-hidden end
+    toggle show main
+    sleep 1
     for session in $(sessions sessionIdList | tr ',' ' '); do
         [ "$session" = "$first" ] || sessions removeSession "$session" > /dev/null
         sleep 0.2
@@ -174,6 +182,25 @@ while [ "$round" -le $((KUDARI_BENCH_WARMUP + KUDARI_BENCH_RUNS)) ]; do
     sleep 2
     idle flood-behind
     sessions removeSession "$flood" > /dev/null
+    stop
+
+    say "$title: the history"
+    start history Behavior.OpenAfterStart=true Security.AllowRemoteCommands=true Terminal.HistoryLines=20000
+    sleep 2
+    sample history-empty start
+    sample history-empty end
+    terminal=$(sessions terminalIdsForSessionId "$(sessions activeSessionId)" | cut -d, -f1)
+    rm -f "$work/written-$run"
+    sessions runCommandInTerminal "$terminal" "stty size > '$work/size-$run.txt'; seq 21000; : > '$work/written-$run'" > /dev/null
+    tries=0
+    until [ -e "$work/written-$run" ]; do
+        tries=$((tries + 1))
+        [ "$tries" -le 600 ] || fail "the history was not written within a minute; see $log"
+        sleep 0.1
+    done
+    sleep 1
+    sample history-full start
+    sample history-full end
     stop
 
     say "$title: a blinking cursor, and one that rests"
