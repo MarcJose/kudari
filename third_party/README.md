@@ -27,6 +27,9 @@ for each, which runs against these copies.
 | Crate | Change | Test |
 |---|---|---|
 | `alacritty_terminal` | When the stack of kitty keyboard modes is full, takes the oldest from it, not from the stack of titles, which panicked when that was empty. | `many_kitty_keyboard_modes_do_not_end_the_terminal` |
+| `vte` | Hands a repeat (REP) to the handler as one call, `Handler::repeat`, which repeats as before unless the handler knows better. | `repeating_a_character_fills_no_more_than_the_screen` |
+| `alacritty_terminal` | Repeats a character no more than a screen and a line, by whole lines fewer, which ends with the same screen and cursor; a character of no width at most 16 times. | `a_repeat_ends_as_writing_the_character_that_often` |
+| `alacritty_terminal` | Parses output 512 bytes at a time, and once it has held the terminal for 8 ms, lets those waiting for it have it first. | `costly_output_lets_others_have_the_terminal` |
 
 Once releases of both carry a fix, delete it here; once they carry all of them, delete both
 directories and their lines in `[patch.crates-io]`, update the versions in `Cargo.toml`, and

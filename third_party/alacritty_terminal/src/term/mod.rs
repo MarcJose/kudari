@@ -41,6 +41,9 @@ pub const MIN_SCREEN_LINES: usize = 1;
 /// Max size of the window title stack.
 const TITLE_STACK_MAX_DEPTH: usize = 4096;
 
+/// The most times a repeat (REP) adds a character of no width to its cell.
+const MAX_REPEATED_ZERO_WIDTH: usize = 16;
+
 /// Default semantic escape characters.
 pub const SEMANTIC_ESCAPE_CHARS: &str = ",│`|:\"' ()[]{}<>\t";
 
@@ -1057,6 +1060,26 @@ impl<T> Dimensions for Term<T> {
 }
 
 impl<T: EventListener> Handler for Term<T> {
+    /// The character before, `count` more times (REP), as far as that changes what the screen
+    /// shows. Beyond a screen and a line, each line more holds the same characters again and
+    /// only pushes another line of them into the history: the screen and the cursor end the
+    /// same with whole lines fewer. A character of no width piles on one cell, of which only
+    /// a few show.
+    fn repeat(&mut self, c: char, count: usize) {
+        let count = match c.width() {
+            Some(0) => count.min(MAX_REPEATED_ZERO_WIDTH),
+            Some(width) => {
+                let per_line = (self.columns() / width).max(1);
+                let enough = per_line * (self.screen_lines() + 1);
+                if count > enough { enough + (count - enough) % per_line } else { count }
+            },
+            None => 0,
+        };
+        for _ in 0..count {
+            self.input(c);
+        }
+    }
+
     /// A character to be displayed.
     #[inline(never)]
     fn input(&mut self, c: char) {

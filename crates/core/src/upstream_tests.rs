@@ -19,6 +19,7 @@ use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
+use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vi_mode::ViMotion;
@@ -104,12 +105,111 @@ fn many_kitty_keyboard_modes_do_not_end_the_terminal() {
 }
 
 #[test]
-#[ignore = "alacritty_terminal 0.26 repeats a character as often as REP asks, which takes minutes"]
 fn repeating_a_character_fills_no_more_than_the_screen() {
+    // `alacritty_terminal` 0.26 repeated a character as often as REP asked, which took minutes;
+    // fixed in `third_party`.
     let result = within(SECONDS, || {
         term(80, 24, Config::default(), "a\x1b[65535b".repeat(2000).as_bytes()).columns()
     });
     assert_eq!(result, Ok(80));
+}
+
+/// What the screen shows, with the cursor, and how many lines the history holds.
+fn shown(term: &Term<VoidListener>) -> (Vec<Vec<(char, Flags)>>, Point, usize) {
+    let lines = (0..term.screen_lines() as i32)
+        .map(|line| {
+            let row = &term.grid()[Line(line)];
+            (0..term.columns())
+                .map(|column| (row[Column(column)].c, row[Column(column)].flags))
+                .collect()
+        })
+        .collect();
+    (lines, term.grid().cursor.point, term.grid().history_size())
+}
+
+#[test]
+fn a_repeat_ends_as_writing_the_character_that_often() {
+    let result = within(SECONDS, || {
+        let mut differ = Vec::new();
+        // Where the repeat starts, how it writes, and the character.
+        let starts = ["", "x\r\ny", "\x1b[3;5H", "\x1b[4h", "\x1b[?7l", "\x1b[2;4r\x1b[3;1H"];
+        for start in starts {
+            for c in ['a', '界', '\u{301}'] {
+                for count in [1, 7, 10, 79, 81, 2000, 2001, 2017, 5000, 65535] {
+                    let repeated = format!("{start}{c}\x1b[{count}b");
+                    let written = format!("{start}{}", c.to_string().repeat(count + 1));
+                    let (a, b) = (
+                        term(10, 4, Config::default(), repeated.as_bytes()),
+                        term(10, 4, Config::default(), written.as_bytes()),
+                    );
+                    let ((screen, cursor, _), (expected, expected_cursor, _)) = (shown(&a), shown(&b));
+                    if screen != expected || cursor != expected_cursor {
+                        differ.push(format!("{start:?} {c:?} {count}"));
+                    }
+                }
+            }
+        }
+        differ
+    });
+    // The same screen and cursor; only fewer lines of the same go into the history.
+    assert_eq!(result, Ok(Vec::<String>::new()));
+}
+
+#[cfg(unix)]
+#[test]
+fn costly_output_lets_others_have_the_terminal() {
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    use alacritty_terminal::event::WindowSize;
+    use alacritty_terminal::event_loop::{EventLoop, Msg};
+    use alacritty_terminal::sync::FairMutex;
+    use alacritty_terminal::tty::{self, Options as Pty, Shell};
+
+    // A screen filled with E (DECALN) for every four bytes: in `alacritty_terminal` 0.26 the
+    // thread of the PTY parsed up to 1 MiB of it while it held the terminal, for seconds, and
+    // nothing else could draw it or take input meanwhile; fixed in `third_party`.
+    let term = Arc::new(FairMutex::new(Term::new(
+        Config::default(),
+        &TermSize::new(80, 24),
+        VoidListener,
+    )));
+    let options = Pty {
+        shell: Some(Shell::new(
+            "sh".to_string(),
+            vec![
+                "-c".to_string(),
+                "yes \"$(printf '\\033#8')\" | head -c 4000000; sleep 30".to_string(),
+            ],
+        )),
+        ..Pty::default()
+    };
+    let size = WindowSize {
+        num_lines: 24,
+        num_cols: 80,
+        cell_width: 8,
+        cell_height: 16,
+    };
+    let pty = tty::new(&options, size, 0).expect("a PTY");
+    let event_loop = EventLoop::new(Arc::clone(&term), VoidListener, pty, false, false).expect("an event loop");
+    let channel = event_loop.channel();
+    let thread = event_loop.spawn();
+    // As the user interface does: take the terminal for each frame, for two seconds.
+    let mut longest = Duration::ZERO;
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(2) {
+        let asked = Instant::now();
+        let locked = term.lock();
+        longest = longest.max(asked.elapsed());
+        drop(locked);
+        std::thread::sleep(Duration::from_millis(16));
+    }
+    let _ = channel.send(Msg::Shutdown);
+    let _ = thread.join();
+    assert!(
+        longest < Duration::from_millis(200),
+        "waited {longest:?} for the terminal"
+    );
 }
 
 #[test]

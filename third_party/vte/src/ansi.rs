@@ -505,6 +505,14 @@ pub trait Handler {
     /// A character to be displayed.
     fn input(&mut self, _c: char) {}
 
+    /// The character before, `count` more times (REP). A handler that knows the size of its
+    /// screen can do less where more would only repeat what it shows.
+    fn repeat(&mut self, c: char, count: usize) {
+        for _ in 0..count {
+            self.input(c);
+        }
+    }
+
     /// Set cursor to position.
     fn goto(&mut self, _line: i32, _col: usize) {}
 
@@ -1561,9 +1569,7 @@ where
             ('B', []) | ('e', []) => handler.move_down(next_param_or(1) as usize),
             ('b', []) => {
                 if let Some(c) = self.state.preceding_char {
-                    for _ in 0..next_param_or(1) {
-                        handler.input(c);
-                    }
+                    handler.repeat(c, next_param_or(1) as usize);
                 } else {
                     debug!("tried to repeat with no preceding char");
                 }
