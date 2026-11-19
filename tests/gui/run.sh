@@ -1315,6 +1315,24 @@ check "with KUDARI_STATS=1 the counters come once a second" yes "$lines"
 hook Trigger file_quit
 wait_quit "$kudari"
 
+# Qt Quick through its RHI, as on a computer with graphics, here OpenGL that Mesa draws in
+# software: the texture of a terminal keeps its storage there and takes only the parts of the
+# frame that changed, which the window shows as the pixels below compare.
+mkdir "$work/rhi"
+printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nKeepOpen=true\n[Security]\nAllowRemoteCommands=true\n' \
+    > "$work/rhi/kudarirc"
+env -u QT_QUICK_BACKEND QSG_RHI_BACKEND=opengl LIBGL_ALWAYS_SOFTWARE=1 QSG_INFO=1 XDG_CONFIG_HOME="$work/rhi" \
+    "$binary" > "$work/rhi.log" 2>&1 &
+kudari=$!
+started
+window toggleWindowState; sleep 1.5
+if grep -qi 'rhi.*opengl\|opengl.*rhi' "$work/rhi.log"; then drawn=yes; else drawn=$(tail -n 5 "$work/rhi.log" | tr '\n' ' '); fi
+check "without the software backend, Qt Quick draws through the RHI" yes "$drawn"
+mkdir -p "$work/rhi/pixels"
+paint_check "$work/rhi/pixels" "through the RHI"
+hook Trigger file_quit
+wait_quit "$kudari"
+
 # Two screens, and one goes away while the window is open: KWin closes the window, and the
 # next shortcut shows it again rather than hiding a window that is gone.
 kill "$kwin" 2>/dev/null

@@ -81,11 +81,12 @@ public:
     void updateCursor();
     /// Paints the lines that changed again, into the image as it is; see `paintLines`.
     void updateLines();
-    /// What `paintLines` did.
-    enum PaintedLines { NoLines = 0, SomeLines = 1, WholeFrame = 2 };
+    /// What `paintLines` did: nothing, the lines that changed, nothing as the item has to paint
+    /// the whole frame, or the whole frame itself.
+    enum PaintedLines { NoLines = 0, SomeLines = 1, WholeFrame = 2, AllLines = 3 };
     /// Paints the lines that changed since the last frame into the image of the item, which
-    /// holds that frame; gives `WholeFrame` where it cannot tell them, and the item then paints
-    /// all of it with `paint`.
+    /// holds that frame, each within a band of `rk_painter_band`; gives `WholeFrame` where it
+    /// cannot tell them, and the item then paints all of it with `paint`.
     virtual int paintLines(QPainter *painter) = 0;
 
 protected:
