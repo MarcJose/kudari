@@ -765,6 +765,7 @@ impl Backend {
         }
         term.resize(TermSize::new(columns.into(), lines.into()));
         drop(term);
+        stats::count(stats::Count::Resizes);
         let mut notifier = Notifier(self.notifier.0.clone());
         notifier.on_resize(size);
     }

@@ -581,6 +581,15 @@ hook Toggle keep-open true; settle
 hook Trigger view-full-screen; settle
 hook Trigger view-full-screen; settle
 for action in enlarge-font enlarge-font shrink-font reset-font-size; do hook Trigger "$action"; settle; done
+# Steps of the zoom in a row wrap the terminal at the first and after the last, not at each,
+# which would hold the terminal and tell its program the size each time: five in a moment.
+hook ResetStats
+for _ in 1 2 3 4 5; do hook Trigger enlarge-font; done
+sleep 0.5; settle
+resizes=$(hook Stats | python3 -c 'import json, sys; print(json.load(sys.stdin).get("resizes", "none"))')
+hook Trigger reset-font-size; settle
+check "steps of the zoom in a row wrap the terminal at most twice" yes \
+    "$([ "$resizes" -ge 1 ] 2>/dev/null && [ "$resizes" -le 2 ] && echo yes || echo "no: $resizes")"
 hook Toggle allow-mouse-tracking false; hook Toggle allow-mouse-tracking true
 
 run "clear; seq 1 900"
