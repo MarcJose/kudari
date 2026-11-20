@@ -115,16 +115,17 @@ QString rk_fixed_fonts()
 
 // A short text in large letters in the top right corner, behind the terminal's text. Without a
 // font size of its own, it is two terminal lines high.
-void rk_draw_badge(QPainter &painter,
-                   double width,
-                   const QString &text,
-                   const QString &color,
-                   const QString &family,
-                   int size,
-                   bool textOnly,
-                   int transparency,
-                   const QFont &terminalFont,
-                   int cellHeight)
+// Draws the badge into `painter`, for `rk_draw_badge`; where it lies, in logical pixels.
+static QRectF drawBadge(QPainter &painter,
+                        double width,
+                        const QString &text,
+                        const QString &color,
+                        const QString &family,
+                        int size,
+                        bool textOnly,
+                        int transparency,
+                        const QFont &terminalFont,
+                        int cellHeight)
 {
     QColor ink(color);
     if (!ink.isValid()) {
@@ -155,7 +156,9 @@ void rk_draw_badge(QPainter &painter,
     painter.setPen(ink);
     painter.drawText(place, Qt::AlignRight | Qt::AlignTop, text);
     painter.restore();
+    return place.adjusted(-margin / 2, -margin / 4, margin / 2, margin / 4);
 }
+
 
 void rk_font_rendering(QFont &font, bool antiAlias, bool hinting)
 {
@@ -859,21 +862,42 @@ void RkGlyphShader::updateSampledImage(RenderState &state, int binding, QSGTextu
     *texture = atlas;
 }
 
-// What a frame on the graphics card collects while it paints on the render thread: the
-// corners of its fills and glyphs, straight into the geometry of the node. The geometry grows
-// and shrinks in large steps, so that it keeps its memory from frame to frame; corners beyond
-// the frame are all zero, and their triangles cover nothing.
+// The geometry of a frame on the graphics card holds the corners of its fills and glyphs. It
+// grows and shrinks in large steps, so that it keeps its memory from frame to frame; corners
+// beyond the frame are all zero, and their triangles cover nothing.
+class RkGeometryNode : public QSGGeometryNode
+{
+public:
+    // How many corners of the geometry the last frame wrote.
+    std::size_t shown = 0;
+};
+
+// What a frame writes into one geometry: what lies under the badge, or over it.
+struct RkGpuLayer {
+    RkGeometryNode *node;
+    // The corners written, and up to where those of the geometry may not be zero.
+    std::size_t used = 0;
+    std::size_t written = 0;
+    // The size of the atlas that their places in it are a part of.
+    QSize atlasSize;
+
+    QSGGeometry *geometry() const { return node->geometry(); }
+};
+
+// What a frame on the graphics card collects while it paints on the render thread: its
+// corners straight into the geometries of its nodes, the badge between them.
 struct RkGpuFrame {
     RkGlyphAtlas *atlas;
     qreal ratio;
-    QSGGeometry *geometry;
-    // The corners the frame wrote, and up to where those of the geometry may not be zero.
-    std::size_t used = 0;
-    std::size_t written = 0;
-    // The size of the atlas that the places in it are a part of.
-    QSize atlasSize;
+    RkGpuLayer layers[2];
+    RkBadge *badge;
+    // The layer written now: the second once the badge is drawn.
+    int layer = 0;
+    bool badged = false;
     // Something of the frame did not fit in the atlas: it is painted.
     bool failed = false;
+
+    RkGpuLayer &current() { return layers[layer]; }
 };
 static thread_local RkGpuFrame *t_gpu = nullptr;
 
@@ -904,26 +928,28 @@ static constexpr std::size_t GeometryStep = 6 * 64;
 static constexpr std::size_t GeometryStep = 6 * 8192;
 #endif
 
-// The geometry with room for `count` corners, those of the frame so far kept.
-static void makeRoom(RkGpuFrame &frame, std::size_t count)
+// The geometry with room for `count` corners, those of the layer so far kept.
+static void makeRoom(RkGpuLayer &layer, std::size_t count)
 {
-    const std::vector<RkVertex> kept(static_cast<const RkVertex *>(frame.geometry->vertexData()),
-                                     static_cast<const RkVertex *>(frame.geometry->vertexData()) + frame.used);
+    QSGGeometry *geometry = layer.geometry();
+    const std::vector<RkVertex> kept(static_cast<const RkVertex *>(geometry->vertexData()),
+                                     static_cast<const RkVertex *>(geometry->vertexData()) + layer.used);
     const std::size_t room = (count / GeometryStep + 1) * GeometryStep;
-    frame.geometry->allocate(int(room));
-    std::memcpy(frame.geometry->vertexData(), kept.data(), kept.size() * sizeof(RkVertex));
+    geometry->allocate(int(room));
+    std::memcpy(geometry->vertexData(), kept.data(), kept.size() * sizeof(RkVertex));
     // New memory holds anything.
-    frame.written = room;
+    layer.written = room;
 }
 
 static void addQuad(RkGpuFrame &frame, const QRectF &place, const QRectF &source, RkVertexColor color)
 {
-    if (frame.used + 6 > std::size_t(frame.geometry->vertexCount())) {
-        makeRoom(frame, frame.used + 6);
+    RkGpuLayer &layer = frame.current();
+    if (layer.used + 6 > std::size_t(layer.geometry()->vertexCount())) {
+        makeRoom(layer, layer.used + 6);
     }
     // The atlas is a power of two wide and high: these are exact.
-    const float across = 1.0f / float(frame.atlasSize.width());
-    const float down = 1.0f / float(frame.atlasSize.height());
+    const float across = 1.0f / float(layer.atlasSize.width());
+    const float down = 1.0f / float(layer.atlasSize.height());
     const float left = float(place.left());
     const float top = float(place.top());
     const float right = float(place.left() + place.width());
@@ -932,7 +958,7 @@ static void addQuad(RkGpuFrame &frame, const QRectF &place, const QRectF &source
     const float sourceTop = float(source.top()) * down;
     const float sourceRight = float(source.left() + source.width()) * across;
     const float sourceBottom = float(source.top() + source.height()) * down;
-    RkVertex *vertex = static_cast<RkVertex *>(frame.geometry->vertexData()) + frame.used;
+    RkVertex *vertex = static_cast<RkVertex *>(layer.geometry()->vertexData()) + layer.used;
     const auto set = [&color](RkVertex &corner, float x, float y, float u, float v) {
         corner = {x, y, u, v, color.red, color.green, color.blue, color.alpha, {color.ownColors, 0, 0, 0}};
     };
@@ -942,25 +968,24 @@ static void addQuad(RkGpuFrame &frame, const QRectF &place, const QRectF &source
     vertex[3] = vertex[1];
     set(vertex[4], right, bottom, sourceRight, sourceBottom);
     vertex[5] = vertex[2];
-    frame.used += 6;
+    layer.used += 6;
 }
 
-// The places of the frame so far in an atlas that grew while it was collected.
-static void followAtlas(RkGpuFrame &frame)
+// The places of a layer so far in an atlas that grew while it was collected.
+static void followAtlas(RkGpuLayer &layer, const QSize &size)
 {
-    const QSize size = frame.atlas->size();
-    if (size == frame.atlasSize) {
+    if (size == layer.atlasSize) {
         return;
     }
-    const float across = float(frame.atlasSize.width()) / float(size.width());
-    const float down = float(frame.atlasSize.height()) / float(size.height());
-    auto vertices = static_cast<RkVertex *>(frame.geometry->vertexData());
-    for (std::size_t i = 0; i < frame.used; ++i) {
+    const float across = float(layer.atlasSize.width()) / float(size.width());
+    const float down = float(layer.atlasSize.height()) / float(size.height());
+    auto vertices = static_cast<RkVertex *>(layer.geometry()->vertexData());
+    for (std::size_t i = 0; i < layer.used; ++i) {
         RkVertex &corner = vertices[i];
         corner.u *= across;
         corner.v *= down;
     }
-    frame.atlasSize = size;
+    layer.atlasSize = size;
 }
 
 // Shows the tile of a glyph or text whose point lies in `pixel`.
@@ -969,7 +994,7 @@ static void addTile(RkGpuFrame &frame, const RkGlyphAtlas::Tile &tile, const QPo
     if (tile.rect.isEmpty()) {
         return;
     }
-    followAtlas(frame);
+    followAtlas(frame.current(), frame.atlas->size());
     const QPoint corner = pixel + tile.offset;
     const QRectF shown(QPointF(corner) / frame.ratio, QSizeF(tile.rect.size()) / frame.ratio);
     color.ownColors = tile.ownColors ? 255 : 0;
@@ -1030,19 +1055,104 @@ bool rk_collect_text(std::uint64_t key, const QFont &font, const QString &text, 
     return true;
 }
 
-// Ends the geometry of the frame in `node`: no corners of the frame before beyond those of
-// this one, and less room where it holds far fewer.
-static void showGpuFrame(QSGGeometryNode *node, RkGpuFrame &frame)
+// Starts a frame on the graphics card in its layers.
+static void beginGpuFrame(RkGpuFrame &frame)
 {
-    followAtlas(frame);
-    if (frame.used + 2 * GeometryStep < std::size_t(frame.geometry->vertexCount())) {
-        makeRoom(frame, frame.used);
+    for (RkGpuLayer &layer : frame.layers) {
+        layer.written = layer.node->shown;
+        layer.atlasSize = frame.atlas->size();
+#ifdef RK_TEST_HOOKS
+        makeRoom(layer, 0);
+#endif
     }
-    if (frame.written > frame.used) {
-        auto vertices = static_cast<RkVertex *>(frame.geometry->vertexData());
-        std::memset(static_cast<void *>(vertices + frame.used), 0, (frame.written - frame.used) * sizeof(RkVertex));
+}
+
+// Ends the geometries of the frame: no corners of the frame before beyond those of this one,
+// and less room where a geometry holds far fewer.
+static void endGpuFrame(RkGpuFrame &frame)
+{
+    for (RkGpuLayer &layer : frame.layers) {
+        followAtlas(layer, frame.atlas->size());
+        if (layer.used + 2 * GeometryStep < std::size_t(layer.geometry()->vertexCount())) {
+            makeRoom(layer, layer.used);
+        }
+        if (layer.written > layer.used) {
+            auto vertices = static_cast<RkVertex *>(layer.geometry()->vertexData());
+            std::memset(static_cast<void *>(vertices + layer.used), 0, (layer.written - layer.used) * sizeof(RkVertex));
+        }
+        layer.node->shown = layer.used;
+        layer.node->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
     }
-    node->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+}
+
+// Empties the geometries of a frame that is painted.
+static void clearGpuFrame(RkGeometryNode *const (&nodes)[2])
+{
+    for (RkGeometryNode *node : nodes) {
+        if (node->geometry()->vertexCount() > 0) {
+            node->shown = 0;
+            node->geometry()->allocate(0);
+            node->markDirty(QSGNode::DirtyGeometry);
+        }
+    }
+}
+
+void rk_draw_badge(QPainter &painter,
+                   double width,
+                   const QString &text,
+                   const QString &color,
+                   const QString &family,
+                   int size,
+                   bool textOnly,
+                   int transparency,
+                   const QFont &terminalFont,
+                   int cellHeight)
+{
+    if (!t_gpu) {
+        drawBadge(painter, width, text, color, family, size, textOnly, transparency, terminalFont, cellHeight);
+        return;
+    }
+    // On the graphics card, between what the frame drew so far and what it draws from now.
+    RkGpuFrame &frame = *t_gpu;
+    RkBadge &badge = *frame.badge;
+    frame.badged = true;
+    frame.layer = 1;
+    const QString key = QStringList{QString::number(width), text, color, family, QString::number(size), QString::number(textOnly),
+                                    QString::number(transparency), terminalFont.toString(), QString::number(cellHeight), QString::number(frame.ratio)}
+                            .join(QLatin1Char('\x1f'));
+    if (key == badge.key) {
+        return;
+    }
+    // Drawn as into a painted frame, on an image as wide as the item, then cut to its pixels.
+    const qreal margin = cellHeight / 2.0;
+    QFont font = family.isEmpty() ? terminalFont : QFont(family);
+    if (size > 0) {
+        font.setPointSize(size);
+    } else {
+        font.setPixelSize(qMax(1, 2 * cellHeight));
+    }
+    const qreal height = QFontMetricsF(font).boundingRect(QRectF(), Qt::AlignRight | Qt::AlignTop, text).height() + 2 * margin;
+    QImage drawn(QSizeF(width * frame.ratio, height * frame.ratio).toSize().expandedTo(QSize(1, 1)), QImage::Format_ARGB32_Premultiplied);
+    drawn.fill(Qt::transparent);
+    drawn.setDevicePixelRatio(frame.ratio);
+    {
+        QPainter on(&drawn);
+        drawBadge(on, width, text, color, family, size, textOnly, transparency, terminalFont, cellHeight);
+    }
+    QRect used;
+    for (int y = 0; y < drawn.height(); ++y) {
+        const auto line = reinterpret_cast<const quint32 *>(drawn.constScanLine(y));
+        for (int x = 0; x < drawn.width(); ++x) {
+            if (line[x] != 0) {
+                used = used.united(QRect(x, y, 1, 1));
+            }
+        }
+    }
+    badge.key = key;
+    badge.fresh = true;
+    badge.place = used.isEmpty() ? QRect(0, 0, 1, 1) : used;
+    badge.image = drawn.copy(badge.place);
+    badge.image.setDevicePixelRatio(1);
 }
 
 QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
@@ -1063,13 +1173,16 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
     // A frame on the graphics card, or the image of a painted one; then the cursor over it,
     // which fades through an opacity of its own.
     QSGTransformNode *move = nullptr;
-    QSGGeometryNode *drawn = nullptr;
+    RkGeometryNode *drawn[2] = {nullptr, nullptr};
+    QSGImageNode *badge = nullptr;
     QSGImageNode *content = nullptr;
     QSGOpacityNode *fade = nullptr;
     QSGImageNode *cursor = nullptr;
     if (node) {
         move = static_cast<QSGTransformNode *>(node->firstChild());
-        drawn = static_cast<QSGGeometryNode *>(move->firstChild());
+        drawn[0] = static_cast<RkGeometryNode *>(move->firstChild());
+        badge = static_cast<QSGImageNode *>(drawn[0]->nextSibling());
+        drawn[1] = static_cast<RkGeometryNode *>(badge->nextSibling());
         content = static_cast<QSGImageNode *>(move->nextSibling());
         fade = static_cast<QSGOpacityNode *>(content->nextSibling());
         cursor = static_cast<QSGImageNode *>(fade->firstChild());
@@ -1077,14 +1190,26 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
         node = new QSGNode;
         move = new QSGTransformNode;
         node->appendChildNode(move);
-        drawn = new QSGGeometryNode;
-        drawn->setGeometry(new QSGGeometry(vertexAttributes(), 0));
-        drawn->geometry()->setDrawingMode(QSGGeometry::DrawTriangles);
-        drawn->geometry()->setVertexDataPattern(QSGGeometry::StreamPattern);
-        drawn->setFlag(QSGNode::OwnsGeometry);
-        drawn->setMaterial(new RkGlyphMaterial);
-        drawn->setFlag(QSGNode::OwnsMaterial);
-        move->appendChildNode(drawn);
+        // What lies under the badge and what over it, with one material and atlas.
+        auto material = new RkGlyphMaterial;
+        for (RkGeometryNode *&layer : drawn) {
+            layer = new RkGeometryNode;
+            layer->setGeometry(new QSGGeometry(vertexAttributes(), 0));
+            layer->geometry()->setDrawingMode(QSGGeometry::DrawTriangles);
+            layer->geometry()->setVertexDataPattern(QSGGeometry::StreamPattern);
+            layer->setFlag(QSGNode::OwnsGeometry);
+            layer->setMaterial(material);
+        }
+        drawn[0]->setFlag(QSGNode::OwnsMaterial);
+        badge = shown->createImageNode();
+        badge->setOwnsTexture(true);
+        QImage nothing(1, 1, QImage::Format_ARGB32_Premultiplied);
+        nothing.fill(Qt::transparent);
+        badge->setTexture(shown->createTextureFromImage(nothing));
+        move->appendChildNode(drawn[0]);
+        move->appendChildNode(badge);
+        move->appendChildNode(drawn[1]);
+        m_badge = RkBadge();
         content = shown->createImageNode();
         content->setOwnsTexture(true);
         node->appendChildNode(content);
@@ -1133,12 +1258,11 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
     if (!alone) {
         bool onGpu = false;
         if (gpu) {
-            auto material = static_cast<RkGlyphMaterial *>(drawn->material());
+            auto material = static_cast<RkGlyphMaterial *>(drawn[0]->material());
             material->atlas.begin(ratio, shown->rhi()->resourceLimit(QRhi::TextureSizeMax));
-            RkGpuFrame frame{&material->atlas, ratio, drawn->geometry(), 0, material->shown, material->atlas.size()};
-#ifdef RK_TEST_HOOKS
-            makeRoom(frame, 0);
-#endif
+            RkGpuFrame frame{&material->atlas, ratio, {{drawn[0], 0, 0, QSize()}, {drawn[1], 0, 0, QSize()}}, &m_badge};
+            m_badge.fresh = false;
+            beginGpuFrame(frame);
             // The fonts of the frame resolve against the density of pixels of what the
             // painter paints on, here an image that takes nothing.
             if (m_probe.isNull() || m_probe.devicePixelRatio() != ratio) {
@@ -1152,8 +1276,18 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
                 t_gpu = nullptr;
             }
             if (!frame.failed) {
-                showGpuFrame(drawn, frame);
-                material->shown = frame.used;
+                endGpuFrame(frame);
+                if (!frame.badged) {
+                    badge->setRect(QRectF());
+                } else if (m_badge.fresh || badge->rect().isEmpty()) {
+                    // A texture of the image cut to the badge, on whole pixels of the device.
+                    if (m_badge.fresh) {
+                        badge->setTexture(shown->createTextureFromImage(m_badge.image));
+                    }
+                    badge->setRect(QRectF(QPointF(m_badge.place.topLeft()) / ratio, QSizeF(m_badge.place.size()) / ratio));
+                    badge->setSourceRect(QRectF(QPointF(), QSizeF(m_badge.image.size())));
+                    badge->setFiltering(QSGTexture::Nearest);
+                }
                 onGpu = true;
             } else {
                 gpuFallback();
@@ -1181,11 +1315,8 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
                 paint(&painter);
             }
             showFrame(shown, content, m_image, m_opaque, place, size, smooth(), QRegion(), true);
-            if (drawn->geometry()->vertexCount() > 0) {
-                static_cast<RkGlyphMaterial *>(drawn->material())->shown = 0;
-                drawn->geometry()->allocate(0);
-                drawn->markDirty(QSGNode::DirtyGeometry);
-            }
+            clearGpuFrame(drawn);
+            badge->setRect(QRectF());
         }
         m_shownOnGpu = onGpu;
         m_shownSize = size;
@@ -1217,9 +1348,13 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
     fade->setOpacity(opacity);
     if (!where.isEmpty()) {
         const QSize covered = (where.size() * ratio).toSize().boundedTo(room);
-        const QRectF at(where.topLeft() + snap, QSizeF(covered) / ratio);
+        // On whole pixels of the device, where a painted frame draws it too: at a fractional
+        // scale, as 125 %, its corner can lie between two, and the texture would be sampled
+        // across its edge.
+        const QPointF cursorCorner(qRound(where.x() * ratio) / ratio, qRound(where.y() * ratio) / ratio);
+        const QRectF at(cursorCorner + snap, QSizeF(covered) / ratio);
         if (!kept) {
-            showImage(shown, cursor, m_cursor, false, at, covered, smooth());
+            showImage(shown, cursor, m_cursor, false, at, covered, false);
         } else if (cursor->rect() != at) {
             // The item moved by a part of a pixel, with the same cursor.
             cursor->setRect(at);

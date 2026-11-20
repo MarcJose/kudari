@@ -64,6 +64,18 @@ bool rk_collect_glyphs(std::uint64_t key,
                        rust::Slice<const std::uint32_t> glyphs,
                        rust::Slice<const QPointF> positions);
 
+/// The badge of a frame on the graphics card: drawn into an image of its own, cut to its
+/// pixels, which lies between the background and the cells, and drawn anew only when what it
+/// is drawn from changes.
+struct RkBadge {
+    /// What it was drawn from, and where it lies in pixels of the device.
+    QString key;
+    QImage image;
+    QRect place;
+    /// Drawn anew for this frame.
+    bool fresh = false;
+};
+
 /// An item that paints into an image of its own and shows it as a texture: the base of the
 /// terminal. Its image has the format that text draws fastest into and that most graphics
 /// drivers take as it is, so no frame is converted or copied on its way to the screen, as
@@ -131,6 +143,7 @@ private:
     /// What the painter of a frame on the graphics card paints on: the fonts take its density
     /// of pixels, and it holds nothing.
     QImage m_probe;
+    RkBadge m_badge;
 };
 std::unique_ptr<QRawFont> rk_raw_font(const QPainter &painter, const QFont &font);
 /// A text laid out once, for `rk_shape`.
