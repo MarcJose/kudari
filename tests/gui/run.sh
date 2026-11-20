@@ -108,7 +108,14 @@ def read(path):
                 row[x] = (row[x] + (left + up) // 2) & 255
             elif kind_of_filter == 4:
                 guess = left + up - corner
-                near = min((abs(guess - left), left), (abs(guess - up), up), (abs(guess - corner), corner))[1]
+                # On a tie, the first of left, up and corner, as PNG says.
+                apart_left, apart_up, apart_corner = abs(guess - left), abs(guess - up), abs(guess - corner)
+                if apart_left <= apart_up and apart_left <= apart_corner:
+                    near = left
+                elif apart_up <= apart_corner:
+                    near = up
+                else:
+                    near = corner
                 row[x] = (row[x] + near) & 255
         rows.append(row)
         previous = row
@@ -1484,12 +1491,51 @@ paint_check "$work/rhi/gpu" "through the RHI on the graphics card" 1
 mkdir -p "$work/rhi/gpu-full" "$work/rhi/gpu-after"
 paint_check "$work/rhi/gpu-full" "through the RHI on the graphics card, a full screen" 1 "$work/full"
 paint_check "$work/rhi/gpu-after" "through the RHI on the graphics card, after a full screen" 1
+# The badge lies between the background and the cells, an image of its own there: over the
+# cells of a full screen, it shows only where they let it through.
+hook SetSetting BadgeEnabled true; hook SetSetting BadgeText "%n"; settle
+mkdir -p "$work/rhi/gpu-badge"
+paint_check "$work/rhi/gpu-badge" "through the RHI on the graphics card, with a badge" 1 "$work/full"
+hook SetSetting BadgeEnabled false; settle
 # A character of the catalogue that no font has goes there as a text of its own, as does any
 # that the fonts of a computer lack: no frame is painted instead.
 check "on the graphics card, the fills, glyphs and texts of a frame go there and not with the setting cpu" "0 0 0 0 yes" \
     "$on_cpu $(gpu_drawn | awk '{ print ($1 > 0 && $2 > 0 && $3 > 0 && $4 == 0) ? "yes" : "no: " $0 }')"
+# Translucent, the window shows through the terminal what lies behind it: on the graphics card
+# what it shows with the frame painted, but for a step of a color value.
+hook SetSetting Translucency true; hook SetSetting BackgroundColorOpacity 60
+hook SetSetting Renderer cpu; settle
+run "clear; sh $work/catalogue"
+mkdir -p "$work/rhi/translucent-cpu" "$work/rhi/translucent-gpu"
+hook PaintTerminals "$work/rhi/translucent-cpu/paint"; settle
+hook SetSetting Renderer gpu; settle
+hook PaintTerminals "$work/rhi/translucent-gpu/paint"; settle
+for painted in "$work"/rhi/translucent-cpu/paint-[0-9]*-shown.png; do break; done
+differ=$(cd "$work" && python3 pixels.py "$painted" "$work/rhi/translucent-gpu/${painted##*/}")
+check "translucent, the window on the graphics card shows what it shows painted" yes \
+    "$([ "${differ#* }" -le 1 ] 2>/dev/null && echo yes || echo "no: $differ")"
+hook SetSetting Translucency false; settle
 hook Trigger file_quit
 wait_quit "$kudari"
+
+# At 125 % and at 200 %, on the graphics card from the start: the tiles of glyphs lie on the
+# pixels of the device that the painted frame covers, and the badge with them.
+for scale in 1.25 2; do
+    mkdir -p "$work/rhi-$scale/pixels"
+    printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nKeepOpen=true\n[Appearance]\nRenderer=gpu\n[Terminal]\nBadgeEnabled=true\nBadgeText=%%n\n[Security]\nAllowRemoteCommands=true\n' \
+        > "$work/rhi-$scale/kudarirc"
+    env -u QT_QUICK_BACKEND QSG_RHI_BACKEND=opengl LIBGL_ALWAYS_SOFTWARE=1 QT_SCALE_FACTOR=$scale XDG_CONFIG_HOME="$work/rhi-$scale" \
+        "$binary" > "$work/rhi-$scale.log" 2>&1 &
+    kudari=$!
+    started
+    window toggleWindowState; sleep 1.5
+    hook ResetStats
+    paint_check "$work/rhi-$scale/pixels" "through the RHI on the graphics card at $scale" 1
+    check "through the RHI at $scale, the frames go to the graphics card" yes \
+        "$(gpu_drawn | awk '{ print ($2 > 0 && $4 == 0) ? "yes" : "no: " $0 }')"
+    hook Trigger file_quit
+    wait_quit "$kudari"
+done
 
 # Two screens, and one goes away while the window is open: KWin closes the window, and the
 # next shortcut shows it again rather than hiding a window that is gone.

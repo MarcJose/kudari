@@ -1439,9 +1439,7 @@ impl qobject::TerminalItem {
 
     #[allow(clippy::unused_self, reason = "the C++ item calls it on itself")]
     fn draws_on_gpu(&self) -> bool {
-        // The badge lies between the background and the text, painted; for now its frames are
-        // painted whole.
-        terminal::options().is_some_and(|options| options.gpu && options.badge.is_none())
+        terminal::options().is_some_and(|options| options.gpu)
     }
 
     /// Two cells, which the cursor on a wide character covers.
