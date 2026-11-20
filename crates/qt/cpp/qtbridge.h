@@ -4,6 +4,7 @@
 // What the front ends need of Qt itself, for `src/qt.rs`.
 #pragma once
 
+#include <QColor>
 #include <QGlyphRun>
 #include <QImage>
 #include <QPainter>
@@ -17,7 +18,6 @@
 
 #include "rust/cxx.h"
 
-class QColor;
 class QFont;
 class QInputMethodEvent;
 class QPainter;
@@ -49,6 +49,15 @@ void rk_draw_badge(QPainter &painter,
                    const QFont &terminalFont,
                    int cellHeight);
 void rk_font_rendering(QFont &font, bool antiAlias, bool hinting);
+/// A fill of a frame drawn on the graphics card.
+struct RkFill {
+    QRectF rect;
+    QColor color;
+};
+/// Takes a fill while a frame is drawn on the graphics card; false otherwise, and the painter
+/// has to fill it.
+bool rk_collect_fill(const QRectF &rect, const QColor &color);
+
 /// An item that paints into an image of its own and shows it as a texture: the base of the
 /// terminal. Its image has the format that text draws fastest into and that most graphics
 /// drivers take as it is, so no frame is converted or copied on its way to the screen, as
@@ -73,6 +82,9 @@ public:
     virtual QSizeF cursorRoom() const = 0;
     /// How much of the cursor shows, from 0 to 1.
     virtual double cursorOpacity() const = 0;
+    /// Whether the frame is drawn on the graphics card where Qt Quick draws through its RHI:
+    /// the fills under the text as geometry, the text in the image over them.
+    virtual bool drawsOnGpu() const = 0;
     /// Whether every frame covers all of the item: it is then neither cleared before nor
     /// blended with what lies behind it.
     void setOpaquePainting(bool opaque);
@@ -101,6 +113,10 @@ private:
     bool m_opaque = false;
     bool m_contentDirty = true;
     bool m_linesDirty = false;
+    /// Whether the frame was drawn on the graphics card, and its fills there, in the logical
+    /// pixels of the item.
+    bool m_gpu = false;
+    QList<RkFill> m_fills;
 };
 std::unique_ptr<QRawFont> rk_raw_font(const QPainter &painter, const QFont &font);
 /// A text laid out once, for `rk_shape`.

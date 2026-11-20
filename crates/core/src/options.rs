@@ -38,6 +38,9 @@ pub struct Options {
     pub cursor_text_color: Option<Rgb>,
     pub anti_alias: bool,
     pub hinting: bool,
+    /// Whether terminals are drawn on the graphics card where Qt Quick can; see the setting
+    /// `Appearance/Renderer`.
+    pub gpu: bool,
     pub triple_click_forward: bool,
     pub trim_leading: bool,
     pub trim_trailing: bool,
@@ -112,6 +115,7 @@ impl Options {
             cursor_text_color: parse_color(&settings.cursor_text_color),
             anti_alias: settings.anti_alias_fonts,
             hinting: settings.font_hinting,
+            gpu: matches!(settings.renderer.as_str(), "gpu" | "auto"),
             triple_click_forward: settings.triple_click == "forward",
             trim_leading: settings.trim_leading_spaces,
             trim_trailing: settings.trim_trailing_spaces,
@@ -165,6 +169,7 @@ impl Default for Options {
             cursor_text_color: None,
             anti_alias: false,
             hinting: false,
+            gpu: false,
             triple_click_forward: false,
             trim_leading: false,
             trim_trailing: false,

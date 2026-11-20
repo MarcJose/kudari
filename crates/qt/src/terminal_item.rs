@@ -153,6 +153,12 @@ pub mod qobject {
         #[cxx_name = "cursorOpacity"]
         fn cursor_opacity(self: &Self) -> f64;
 
+        /// Whether the frame is drawn on the graphics card where Qt Quick draws through its
+        /// RHI, as the setting `Appearance/Renderer` says.
+        #[cxx_override]
+        #[cxx_name = "drawsOnGpu"]
+        fn draws_on_gpu(self: &Self) -> bool;
+
         #[cxx_override]
         unsafe fn input_method_event(self: Pin<&mut Self>, event: *mut QInputMethodEvent);
 
@@ -1421,6 +1427,11 @@ impl qobject::TerminalItem {
         rect
     }
 
+    #[allow(clippy::unused_self, reason = "the C++ item calls it on itself")]
+    fn draws_on_gpu(&self) -> bool {
+        terminal::options().is_some_and(|options| options.gpu)
+    }
+
     /// Two cells, which the cursor on a wide character covers.
     pub fn cursor_room(&self) -> QSizeF {
         QSizeF::new(2.0 * *self.cell_width(), *self.cell_height())
@@ -1479,7 +1490,8 @@ impl qobject::TerminalItem {
             // A translucent background comes from the pane behind this item.
             if *self.opaque() {
                 let size = self.size();
-                painter.as_mut().fill_rect(
+                fill(
+                    painter.as_mut(),
                     &QRectF::new(0.0, 0.0, size.width(), size.height()),
                     &qcolor(scheme.background),
                 );
@@ -1512,7 +1524,8 @@ impl qobject::TerminalItem {
         // A translucent background comes from the pane behind this item.
         if *self.opaque() {
             let size = self.size();
-            painter.as_mut().fill_rect(
+            fill(
+                painter.as_mut(),
                 &QRectF::new(0.0, 0.0, size.width(), size.height()),
                 &qcolor(scheme.background),
             );
@@ -2050,24 +2063,46 @@ fn reference_drawing() -> bool {
     false
 }
 
+/// Fills a rectangle of the frame: on the graphics card where the frame is drawn there, else
+/// into the image.
+fn fill(mut painter: Pin<&mut qobject::QPainter>, rect: &QRectF, color: &QColor) {
+    if !collect(rect, color) {
+        painter.as_mut().fill_rect(rect, color);
+    }
+}
+
+/// Gives a fill to the graphics card where the frame is drawn there; false otherwise.
+fn collect(rect: &QRectF, color: &QColor) -> bool {
+    let taken = kde::rk_collect_fill(rect, color);
+    if taken {
+        stats::count(stats::Count::GpuFills);
+    }
+    taken
+}
+
 /// Draws the paints of a frame or of the cursor with the fonts of the terminal.
 fn draw(mut painter: Pin<&mut qobject::QPainter>, glyphs: &mut Glyphs, paints: &[Paint]) {
+    // The fills before the first text, as the backgrounds, can go to the graphics card under
+    // the image; those after it, as the line at a column, lie over text and stay in it.
+    let mut under_text = true;
     for paint in paints {
         match paint {
             Paint::Fill(rect, color) => {
                 // What comes before a fill stays under it.
                 glyphs.draw(painter.as_mut());
-                painter
-                    .as_mut()
-                    .fill_rect(&QRectF::new(rect.x, rect.y, rect.width, rect.height), &qcolor(*color));
+                let rect = QRectF::new(rect.x, rect.y, rect.width, rect.height);
+                if !(under_text && collect(&rect, &qcolor(*color))) {
+                    painter.as_mut().fill_rect(&rect, &qcolor(*color));
+                }
             }
             Paint::Shade(rect, color, alpha) => {
                 glyphs.draw(painter.as_mut());
                 let mut color = qcolor(*color);
                 color.set_alpha_f(f32::from(*alpha) / 255.0);
-                painter
-                    .as_mut()
-                    .fill_rect(&QRectF::new(rect.x, rect.y, rect.width, rect.height), &color);
+                let rect = QRectF::new(rect.x, rect.y, rect.width, rect.height);
+                if !(under_text && collect(&rect, &color)) {
+                    painter.as_mut().fill_rect(&rect, &color);
+                }
             }
             Paint::Text {
                 x,
@@ -2076,6 +2111,7 @@ fn draw(mut painter: Pin<&mut qobject::QPainter>, glyphs: &mut Glyphs, paints: &
                 color,
                 font,
             } => {
+                under_text = false;
                 let slot = glyphs.fonts.slot(*font);
                 if reference_drawing() || !glyphs.add(&painter, slot, text.as_str(), (*x, *y), *color) {
                     painter.as_mut().set_font(glyphs.fonts.get(slot));

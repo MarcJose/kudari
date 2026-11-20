@@ -27,6 +27,8 @@ pub enum Count {
     /// A terminal took a new number of columns or lines, which wraps its history and tells
     /// its program.
     Resizes,
+    /// A fill of a frame went to the graphics card as geometry instead of into the image.
+    GpuFills,
 }
 
 /// What is timed.
@@ -153,7 +155,7 @@ mod counting {
         }
     }
 
-    pub static COUNTS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+    pub static COUNTS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
     pub static TIMES: [Histogram; 10] = [const { Histogram::new() }; 10];
     /// Paints for each terminal, by its id.
     pub static PAINTS: Mutex<BTreeMap<i32, u64>> = Mutex::new(BTreeMap::new());
@@ -171,6 +173,7 @@ mod counting {
             Count::Refreshes => 2,
             Count::LinePaints => 3,
             Count::Resizes => 4,
+            Count::GpuFills => 5,
         }
     }
 
@@ -448,6 +451,7 @@ pub fn json() -> String {
             "refreshes": count(Count::Refreshes),
             "line_paints": count(Count::LinePaints),
             "resizes": count(Count::Resizes),
+            "gpu_fills": count(Count::GpuFills),
             "paints": paints,
             "queued": counting::QUEUED.load(Ordering::Relaxed),
             "queued_max": counting::QUEUED_MOST.load(Ordering::Relaxed),

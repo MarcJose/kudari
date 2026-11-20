@@ -841,7 +841,7 @@ check "a typed key paints only the lines that changed" 1 "$typed_lines"
 # The pixels of a terminal: drawn in runs of glyphs as they always are, against each text drawn
 # on its own; and what the window shows, from the image and the cursor in its scene graph,
 # against the same frame painted anew.
-paint_check() { # directory, what for
+paint_check() { # directory, what for, how far a color value of the window may differ (0)
     # The line at a column goes over the text: a fill after glyphs.
     hook SetSetting VerticalLine 3; settle
     # Text that other text replaces in a frame of its own: a frame that paints only the lines
@@ -860,7 +860,7 @@ paint_check() { # directory, what for
         differ=$(cd "$work" && python3 pixels.py "$painted" "$1/paint-reference-$terminal.png")
         [ "$differ" = "0 0" ] || runs="$runs $terminal: $differ"
         differ=$(cd "$work" && python3 pixels.py "$painted" "${painted%.png}-shown.png")
-        [ "$differ" = "0 0" ] || shown="$shown $terminal: $differ"
+        [ "$differ" = "0 0" ] || [ "${differ#* }" -le "${3:-0}" ] || shown="$shown $terminal: $differ"
     done
     check "$2, runs of glyphs draw what each text drawn on its own draws" "" "$runs"
     check "$2, the window shows what a frame painted anew shows" "" "$shown"
@@ -1453,6 +1453,18 @@ window toggleWindowState; sleep 3
 window toggleWindowState; sleep 1.5; settle
 check "with the setting at never, a hidden window keeps its graphics" 2 \
     "$(grep -c 'Creating QRhi' "$work/rhi.log")"
+# On the graphics card, the fills of a frame are geometry under an image of its text: the
+# window shows what the same frame painted whole shows, but for blending the text onto them,
+# which can differ by a step of a color value, and its fills went there.
+gpu_fills() { hook Stats | python3 -c 'import json, sys; print(json.load(sys.stdin).get("gpu_fills", "none"))'; }
+hook ResetStats; run "clear; sh $work/catalogue"
+on_cpu=$(gpu_fills)
+hook SetSetting Renderer gpu; settle
+hook ResetStats
+mkdir -p "$work/rhi/gpu"
+paint_check "$work/rhi/gpu" "through the RHI on the graphics card" 1
+check "on the graphics card, the fills of a frame go there and not with the setting cpu" "0 yes" \
+    "$on_cpu $(fills=$(gpu_fills); [ "$fills" -gt 0 ] 2>/dev/null && echo yes || echo "no: $fills")"
 hook Trigger file_quit
 wait_quit "$kudari"
 
