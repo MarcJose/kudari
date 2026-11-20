@@ -16,7 +16,8 @@
 #               in the background
 #   memory      after the start, with 5 and with 10 tabs, with the window hidden, and after
 #               closing them again; also on the graphics card
-#   history     what a full history of 20000 lines adds to a Kudari
+#   history     what a full history of 20000 lines adds to a Kudari, and what comes back when
+#               its tab closes
 #   released    the memory of a window hidden long enough to give up its graphics, here after
 #               2 s, and the time to its first frame when it shows again
 #
@@ -192,7 +193,8 @@ while [ "$round" -le $((KUDARI_BENCH_WARMUP + KUDARI_BENCH_RUNS)) ]; do
     sleep 2
     sample history-empty start
     sample history-empty end
-    terminal=$(sessions terminalIdsForSessionId "$(sessions activeSessionId)" | cut -d, -f1)
+    history_session=$(sessions activeSessionId)
+    terminal=$(sessions terminalIdsForSessionId "$history_session" | cut -d, -f1)
     rm -f "$work/written-$run"
     sessions runCommandInTerminal "$terminal" "stty size > '$work/size-$run.txt'; seq 21000; : > '$work/written-$run'" > /dev/null
     tries=0
@@ -204,6 +206,13 @@ while [ "$round" -le $((KUDARI_BENCH_WARMUP + KUDARI_BENCH_RUNS)) ]; do
     sleep 1
     sample history-full start
     sample history-full end
+    # Its tab closed, with another open: what of the history comes back.
+    sessions addSession > /dev/null
+    sleep 0.5
+    sessions removeSession "$history_session" > /dev/null
+    sleep 3
+    sample history-closed start
+    sample history-closed end
     stop
 
     say "$title: a blinking cursor, and one that rests"

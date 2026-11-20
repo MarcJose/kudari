@@ -24,6 +24,7 @@ pub mod linedraw;
 pub mod links;
 pub mod marks;
 pub mod mcp;
+pub mod memory;
 pub mod menus;
 pub mod options;
 pub mod pipe;

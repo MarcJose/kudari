@@ -690,6 +690,7 @@ impl Backend {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lines);
         self.apply_config();
+        crate::memory::release_later();
     }
 
     pub fn tracks_mouse(&self) -> bool {
@@ -907,6 +908,7 @@ impl Backend {
         let full_screen = term.mode().contains(TermMode::ALT_SCREEN);
         term.reset_state();
         drop(term);
+        crate::memory::release_later();
         if redraws_after_reset(self.is_busy(), full_screen) {
             self.write(vec![0x0c]);
         }
@@ -1075,6 +1077,7 @@ pub fn stop(id: TerminalId) {
     if let Some(backend) = removed {
         backend.programs.hang_up();
         let _ = backend.notifier.0.send(alacritty_terminal::event_loop::Msg::Shutdown);
+        crate::memory::release_later();
     }
 }
 
