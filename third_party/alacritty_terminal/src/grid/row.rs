@@ -62,6 +62,9 @@ impl<T: Default> Row<T> {
             return;
         }
 
+        // Room for the new columns only: `resize_with` alone at least doubles it, for every row
+        // of the history, and the rows keep it.
+        self.inner.reserve_exact(columns - self.inner.len());
         self.inner.resize_with(columns, T::default);
     }
 
@@ -76,14 +79,26 @@ impl<T: Default> Row<T> {
             return None;
         }
 
-        // Split off cells for a new row.
-        let mut new_row = self.inner.split_off(columns);
-        let index = new_row.iter().rposition(|c| !c.is_empty()).map_or(0, |i| i + 1);
-        new_row.truncate(index);
-
         self.occ = min(self.occ, columns);
 
-        if new_row.is_empty() { None } else { Some(new_row) }
+        // Where only empty cells follow, they go without a new row for them.
+        let new_row = if self.inner[columns..].iter().all(|c| c.is_empty()) {
+            self.inner.truncate(columns);
+            None
+        } else {
+            // Split off cells for a new row.
+            let mut new_row = self.inner.split_off(columns);
+            let index = new_row.iter().rposition(|c| !c.is_empty()).map_or(0, |i| i + 1);
+            new_row.truncate(index);
+            Some(new_row).filter(|new_row| !new_row.is_empty())
+        };
+
+        // Give back the room of a wider grid, which the rows of the history would keep.
+        if self.inner.capacity() > columns + columns / 4 {
+            self.inner.shrink_to(columns);
+        }
+
+        new_row
     }
 
     /// Reset all cells in the row to the `template` cell.
