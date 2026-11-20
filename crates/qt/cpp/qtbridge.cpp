@@ -607,6 +607,12 @@ public:
         if (found != m_texts.constEnd()) {
             return *found;
         }
+        // A program can show texts without end, also such that draw nothing and so take no
+        // room: their tiles are forgotten from some number on. Those in the atlas fill it, and
+        // it starts empty when full.
+        if (m_texts.size() >= MostTexts) {
+            m_texts.clear();
+        }
         // The metrics on an image, as the painter of a frame resolves its font.
         static const QImage device(1, 1, QImage::Format_ARGB32_Premultiplied);
         const QFont resolved(font, &device);
@@ -639,6 +645,7 @@ public:
 private:
     static constexpr int Start = 512;
     static constexpr int Most = 4096;
+    static constexpr qsizetype MostTexts = 16384;
 
     void reset(qreal ratio)
     {
