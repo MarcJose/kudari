@@ -60,6 +60,9 @@ echo "== Unit tests"
 cargo test --locked --workspace
 # The counters exist only with their feature, and so do their tests.
 cargo test --locked -p kudari-core --features stats --lib stats::
+# The parser in third_party/vte is not part of the workspace; its tests compare the ways
+# through the ground state that Kudari changed with the original.
+cargo test --locked -p vte
 
 echo "== C++ warnings"
 # The headers of Qt and KDE are system headers here: only our own code counts.

@@ -22,7 +22,8 @@ The crates are under `MIT OR Apache-2.0`, © Klarälvdalens Datakonsult AB, a KD
 without the recorded sessions in `tests/` of `alacritty_terminal` and the example of `vte`,
 which their manifests no longer name. They carry fixes of faults that freeze or end the
 terminals of Kudari, or show the wrong text; `crates/core/src/upstream_tests.rs` has a test
-for each, which runs against these copies.
+for each, which runs against these copies. A change for speed is tested in the copy itself,
+against the way it replaces.
 
 | Crate | Change | Test |
 |---|---|---|
@@ -38,6 +39,7 @@ for each, which runs against these copies.
 | `alacritty_terminal` | A copy to the end of a line takes the wide character that wrapped from the line after, not the first cell of the line before. | `copying_to_the_end_of_a_line_takes_the_wide_character_that_wrapped` |
 | `alacritty_terminal` | A narrower grid keeps as many lines of output as before, counting a line that wraps into more rows once, so that a wider one gets the history back. | `a_narrower_and_wider_grid_keeps_a_full_history` |
 | `alacritty_terminal` | Waits for the terminal where the PTY has nothing new to read, instead of reading again at once while others hold it. | `the_thread_of_the_pty_waits_for_the_terminal_without_spinning` |
+| `vte` | In the ground state, prints and executes the ASCII at the start of a run byte by byte, without checking and decoding it as UTF-8 first; the rest of the run goes the way it went. | `ascii_way_performs_what_decoding_performs` in `vte`, against that way |
 
 Once releases of both carry a fix, delete it here; once they carry all of them, delete both
 directories and their lines in `[patch.crates-io]`, update the versions in `Cargo.toml`, and

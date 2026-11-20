@@ -67,6 +67,9 @@ pub struct Parser<const OSC_RAW_BUF_SIZE: usize = MAX_OSC_RAW> {
     ignoring: bool,
     partial_utf8: [u8; 4],
     partial_utf8_len: usize,
+    /// In tests, the ground state without the way for ASCII, to compare with.
+    #[cfg(test)]
+    reference: bool,
 }
 
 impl Parser {
@@ -604,6 +607,41 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
             self.state = State::Escape;
             self.reset_params();
             return 1;
+        }
+
+        // ASCII needs no decoding: each byte is a character of its own, the C0 controls
+        // executed and the rest printed, as `ground_dispatch` does. Most output is ASCII,
+        // often a few bytes between two escapes, where checking and decoding a run as UTF-8
+        // costs more than the bytes themselves.
+        #[cfg(test)]
+        let ascii_way = !self.reference;
+        #[cfg(not(test))]
+        let ascii_way = true;
+        if ascii_way {
+            let ascii = bytes[..plain_chars].iter().position(|byte| !byte.is_ascii()).unwrap_or(plain_chars);
+            if ascii > 0 {
+                for &byte in &bytes[..ascii] {
+                    if byte <= 0x1F {
+                        performer.execute(byte);
+                    } else {
+                        performer.print(char::from(byte));
+                    }
+                }
+
+                // The rest of the run, from its first byte that is not ASCII on, goes the
+                // way below with the next call.
+                if ascii < plain_chars {
+                    return ascii;
+                }
+
+                // If there's another character, it must be escape so process it directly.
+                if ascii < num_bytes {
+                    self.state = State::Escape;
+                    self.reset_params();
+                    return ascii + 1;
+                }
+                return ascii;
+            }
         }
 
         match str::from_utf8(&bytes[..plain_chars]) {
@@ -1538,5 +1576,67 @@ mod tests {
         assert_eq!(dispatcher.dispatched.len(), 2);
         assert_eq!(dispatcher.dispatched[0], Sequence::Execute(0x18));
         assert_eq!(dispatcher.dispatched[1], Sequence::Execute(0x1A));
+    }
+
+    /// Random bytes of every kind the ground state meets: runs of ASCII text, controls, escape
+    /// sequences whole and cut off, characters of two, three and four bytes, those cut off,
+    /// raw C1 controls and bytes that are no UTF-8.
+    fn mixed_output(seed: &mut u64) -> Vec<u8> {
+        let mut next = |bound: u64| {
+            *seed ^= *seed << 13;
+            *seed ^= *seed >> 7;
+            *seed ^= *seed << 17;
+            *seed % bound
+        };
+        let mut bytes = Vec::new();
+        for _ in 0..next(60) {
+            match next(9) {
+                0 => (0..next(24)).for_each(|_| bytes.push(b' ' + next(95) as u8)),
+                1 => bytes.push(next(32) as u8),
+                2 => bytes.push(0x7F),
+                3 => bytes.extend_from_slice(
+                    [&b"\x1b[1;31m"[..], b"\x1b[0m", b"\x1b]0;title\x07", b"\x1b[", b"\x1b", b"\x1b(B"]
+                        [next(6) as usize],
+                ),
+                4 => bytes.extend_from_slice(["é", "日", "🙂", "e\u{301}"][next(4) as usize].as_bytes()),
+                5 => bytes.extend_from_slice(&"日🙂".as_bytes()[..1 + next(6) as usize]),
+                6 => bytes.push(0x80 + next(32) as u8),
+                7 => bytes.push(0x80 + next(128) as u8),
+                _ => bytes.extend_from_slice(b"plain words of text "),
+            }
+        }
+        bytes
+    }
+
+    /// The way for ASCII gives every call of `Perform` the decoding does, byte for byte, also
+    /// where the PTY cuts the output anywhere.
+    #[test]
+    fn ascii_way_performs_what_decoding_performs() {
+        let mut seed = 0x9E37_79B9_7F4A_7C15;
+        for _ in 0..2000 {
+            let bytes = mixed_output(&mut seed);
+            let mut cuts = Vec::new();
+            let mut at = 0;
+            while at < bytes.len() {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                let step = 1 + (seed % 23) as usize;
+                cuts.push(at..(at + step).min(bytes.len()));
+                at += step;
+            }
+            let run = |reference: bool, cuts: &[core::ops::Range<usize>]| {
+                let mut parser = Parser::new();
+                parser.reference = reference;
+                let mut dispatcher = Dispatcher::default();
+                for cut in cuts {
+                    parser.advance(&mut dispatcher, &bytes[cut.clone()]);
+                }
+                dispatcher.dispatched
+            };
+            let whole = [0..bytes.len()];
+            assert_eq!(run(false, &cuts), run(true, &cuts), "{bytes:?} in {cuts:?}");
+            assert_eq!(run(false, &whole), run(true, &whole), "{bytes:?}");
+        }
     }
 }
