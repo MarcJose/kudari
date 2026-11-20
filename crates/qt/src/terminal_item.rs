@@ -159,6 +159,11 @@ pub mod qobject {
         #[cxx_name = "drawsOnGpu"]
         fn draws_on_gpu(self: &Self) -> bool;
 
+        /// A frame for the graphics card was painted instead.
+        #[cxx_override]
+        #[cxx_name = "gpuFallback"]
+        fn gpu_fallback(self: &Self);
+
         #[cxx_override]
         unsafe fn input_method_event(self: Pin<&mut Self>, event: *mut QInputMethodEvent);
 
@@ -1428,6 +1433,11 @@ impl qobject::TerminalItem {
     }
 
     #[allow(clippy::unused_self, reason = "the C++ item calls it on itself")]
+    fn gpu_fallback(&self) {
+        stats::count(stats::Count::GpuFallbacks);
+    }
+
+    #[allow(clippy::unused_self, reason = "the C++ item calls it on itself")]
     fn draws_on_gpu(&self) -> bool {
         // The badge lies between the background and the text, painted; for now its frames are
         // painted whole.
@@ -1853,6 +1863,15 @@ impl Glyphs {
         Some(Fonts::SLOTS + self.fallback.len() - 1)
     }
 
+    /// Tells a font of these, by its number in a group, apart from all fonts of the item.
+    fn font_key(&self, font: usize) -> u64 {
+        Self::key_of(self.id, font)
+    }
+
+    fn key_of(id: u64, font: usize) -> u64 {
+        (id << 16) | (u64::try_from(font).unwrap_or(u64::MAX) & 0xffff)
+    }
+
     /// Adds a glyph to the group of its font and color.
     fn push(&mut self, font: usize, color: Rgb, glyph: u32, (x, y): (f64, f64)) {
         let key = (font, u32::from_be_bytes([0, color.r, color.g, color.b]));
@@ -1890,9 +1909,13 @@ impl Glyphs {
                 None => self.raw.get(run.font).and_then(Option::as_ref),
             };
             if let Some(font) = font.and_then(|font| font.as_ref()) {
-                // The font among those of the item: these fonts, and which of them.
-                let key = (self.id << 16) | u64::try_from(run.font).unwrap_or(u64::MAX) & 0xffff;
-                if kde::rk_collect_glyphs(key, font, &qcolor(run.color), &run.glyphs, &run.positions) {
+                if kde::rk_collect_glyphs(
+                    Self::key_of(self.id, run.font),
+                    font,
+                    &qcolor(run.color),
+                    &run.glyphs,
+                    &run.positions,
+                ) {
                     stats::count(stats::Count::GpuRuns);
                 } else {
                     kde::rk_draw_glyphs(painter.as_mut(), font, &qcolor(run.color), &run.glyphs, &run.positions);
@@ -2112,12 +2135,21 @@ fn draw(mut painter: Pin<&mut qobject::QPainter>, glyphs: &mut Glyphs, paints: &
             } => {
                 let slot = glyphs.fonts.slot(*font);
                 if reference_drawing() || !glyphs.add(&painter, slot, text.as_str(), (*x, *y), *color) {
-                    if kde::rk_collecting() {
-                        stats::count(stats::Count::GpuFallbacks);
+                    // On the graphics card, as a tile of its own.
+                    let (position, text) = (QPointF::new(*x, *y), QString::from(text.as_str()));
+                    if kde::rk_collect_text(
+                        glyphs.font_key(slot),
+                        glyphs.fonts.get(slot),
+                        &text,
+                        &position,
+                        &qcolor(*color),
+                    ) {
+                        stats::count(stats::Count::GpuTexts);
+                        continue;
                     }
                     painter.as_mut().set_font(glyphs.fonts.get(slot));
                     painter.as_mut().set_pen(&QPen::from(&qcolor(*color)));
-                    kde::rk_draw_text(painter.as_mut(), &QPointF::new(*x, *y), &QString::from(text.as_str()));
+                    kde::rk_draw_text(painter.as_mut(), &position, &text);
                 }
             }
         }

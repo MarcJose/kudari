@@ -87,8 +87,9 @@ pub mod ffi {
         /// Takes a fill for the graphics card while a frame is drawn there; false otherwise,
         /// and the painter has to fill it.
         fn rk_collect_fill(rect: &QRectF, color: &QColor) -> bool;
-        /// Whether a frame for the graphics card is collected now.
-        fn rk_collecting() -> bool;
+        /// Takes a text for the graphics card while a frame is drawn there, as `rk_draw_text`
+        /// draws it; false otherwise. `key` tells the font apart from the others of the item.
+        fn rk_collect_text(key: u64, font: &QFont, text: &QString, position: &QPointF, color: &QColor) -> bool;
         /// Takes glyphs for the graphics card while a frame is drawn there, as `rk_draw_glyphs`
         /// draws them; false otherwise. `key` tells the font apart from the others of the item.
         fn rk_collect_glyphs(key: u64, font: &QRawFont, color: &QColor, glyphs: &[u32], positions: &[QPointF]) -> bool;

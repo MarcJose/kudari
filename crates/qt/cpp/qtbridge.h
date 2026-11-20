@@ -52,11 +52,12 @@ void rk_font_rendering(QFont &font, bool antiAlias, bool hinting);
 /// Takes a fill while a frame is drawn on the graphics card; false otherwise, and the painter
 /// has to fill it.
 bool rk_collect_fill(const QRectF &rect, const QColor &color);
-/// Whether a frame for the graphics card is collected now.
-bool rk_collecting();
 /// Takes glyphs while a frame is drawn on the graphics card, as `rk_draw_glyphs` draws them;
 /// false otherwise, and the painter has to draw them. `key` tells the font apart from the
 /// other fonts the item draws with.
+/// Takes a text while a frame is drawn on the graphics card, as `QPainter::drawText` draws it
+/// from a point on the baseline; false otherwise.
+bool rk_collect_text(std::uint64_t key, const QFont &font, const QString &text, const QPointF &position, const QColor &color);
 bool rk_collect_glyphs(std::uint64_t key,
                        const QRawFont &font,
                        const QColor &color,
@@ -91,6 +92,9 @@ public:
     /// its fills and glyphs as geometry, the glyphs from an atlas that holds each once. A
     /// frame with something that only the painter draws is painted into the image instead.
     virtual bool drawsOnGpu() const = 0;
+    /// A frame for the graphics card had something that only the painter draws, or did not
+    /// fit in the atlas, and was painted instead.
+    virtual void gpuFallback() const = 0;
     /// Whether every frame covers all of the item: it is then neither cleared before nor
     /// blended with what lies behind it.
     void setOpaquePainting(bool opaque);

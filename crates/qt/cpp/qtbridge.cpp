@@ -577,60 +577,49 @@ public:
     // empty with the next frame.
     std::optional<Tile> tile(std::uint64_t key, const QRawFont &font, quint32 glyph, const QPointF &place, const QPoint &pixel)
     {
-        // The part of a pixel, in steps that tell apart those of `QPainter`.
-        const QPointF part = place * m_ratio - QPointF(pixel);
-        const auto step = [](qreal value) { return quint64(qBound(0, qRound(value * 4096), 4096)); };
-        const std::pair<std::uint64_t, quint64> name(key, (quint64(glyph) << 26) | (step(part.x()) << 13) | step(part.y()));
+        const std::pair<std::uint64_t, quint64> name(key, (quint64(glyph) << 26) | steps(place, pixel));
         const auto found = m_tiles.constFind(name);
         if (found != m_tiles.constEnd()) {
             return *found;
         }
         // Room for what reaches out of the box of the glyph, as antialiasing and the bitmaps of
         // emoji can.
-        const QRectF box = font.boundingRect(glyph);
-        const qreal margin = 2 + std::ceil(font.pixelSize() * m_ratio / 8);
-        const QRect room = QRectF(box.left() * m_ratio - margin,
-                                  box.top() * m_ratio - margin,
-                                  box.width() * m_ratio + 2 * margin,
-                                  box.height() * m_ratio + 2 * margin)
-                               .toAlignedRect()
-                               .intersected(QRect(-Most / 2, -Most / 2, Most, Most));
-        Tile tile;
         const QFontEngine *engine = QRawFontPrivate::get(font)->fontEngine;
-        tile.ownColors = engine && engine->isColorFont();
-        if (!room.isEmpty()) {
-            QImage drawn(room.size(), QImage::Format_ARGB32_Premultiplied);
-            drawn.fill(Qt::transparent);
-            {
-                // The same scale as the painter of a frame and the same logical place, moved by
-                // whole pixels: the glyph lands on the same part of a pixel.
-                QPainter painter(&drawn);
-                painter.setTransform(QTransform(m_ratio, 0, 0, m_ratio, -qreal(pixel.x() + room.left()), -qreal(pixel.y() + room.top())));
-                painter.setPen(Qt::white);
-                QGlyphRun run;
-                run.setRawFont(font);
-                run.setRawData(&glyph, &place, 1);
-                painter.drawGlyphRun(QPointF(), run);
-            }
-            const QRect used = usedPart(drawn);
-            if (!used.isEmpty()) {
-                QPoint where;
-                if (!placeTile(used.size(), where)) {
-                    m_full = true;
-                    return std::nullopt;
-                }
-                for (int y = 0; y < used.height(); ++y) {
-                    std::memcpy(m_image.scanLine(where.y() + y) + where.x() * 4,
-                                drawn.constScanLine(used.top() + y) + used.left() * 4,
-                                std::size_t(used.width()) * 4);
-                }
-                tile.rect = QRect(where, used.size());
-                tile.offset = room.topLeft() + used.topLeft();
-                m_fresh = m_fresh.united(tile.rect);
-            }
+        const std::optional<Tile> made = make(font.boundingRect(glyph), font.pixelSize(), pixel, engine && engine->isColorFont(), [&](QPainter &painter) {
+            QGlyphRun run;
+            run.setRawFont(font);
+            run.setRawData(&glyph, &place, 1);
+            painter.drawGlyphRun(QPointF(), run);
+        });
+        if (made) {
+            m_tiles.insert(name, *made);
         }
-        m_tiles.insert(name, tile);
-        return tile;
+        return made;
+    }
+
+    // The tile of `text` in `font`, as `QPainter::drawText` draws it from `place` on: a text
+    // whose glyphs no font has, or that `rk_shape` cannot tell. A tile with pixels of other
+    // colors than white keeps them, as an emoji does.
+    std::optional<Tile> textTile(std::uint64_t key, const QFont &font, const QString &text, const QPointF &place, const QPoint &pixel)
+    {
+        const QString name = QString::number(key) + QLatin1Char('/') + QString::number(steps(place, pixel)) + QLatin1Char('/') + text;
+        const auto found = m_texts.constFind(name);
+        if (found != m_texts.constEnd()) {
+            return *found;
+        }
+        // The metrics on an image, as the painter of a frame resolves its font.
+        static const QImage device(1, 1, QImage::Format_ARGB32_Premultiplied);
+        const QFont resolved(font, &device);
+        const QFontMetricsF metrics(resolved, &device);
+        const QRectF box = metrics.boundingRect(text).united(QRectF(0, -metrics.ascent(), metrics.horizontalAdvance(text), metrics.height()));
+        const std::optional<Tile> made = make(box, metrics.height(), pixel, false, [&](QPainter &painter) {
+            painter.setFont(font);
+            painter.drawText(place, text);
+        });
+        if (made) {
+            m_texts.insert(name, *made);
+        }
+        return made;
     }
 
     // The middle of a white block, for fills.
@@ -665,22 +654,82 @@ private:
         m_rows = {{0, 2, 3}};
         m_bottom = 3;
         m_tiles.clear();
+        m_texts.clear();
         m_fresh = QRect();
         m_whole = true;
     }
 
-    // The smallest rectangle that holds every pixel the painter drew.
-    static QRect usedPart(const QImage &image)
+    // The part of a pixel that `place` lies at, in steps that tell apart those of `QPainter`.
+    quint64 steps(const QPointF &place, const QPoint &pixel) const
+    {
+        const QPointF part = place * m_ratio - QPointF(pixel);
+        const auto step = [](qreal value) { return quint64(qBound(0, qRound(value * 4096), 4096)); };
+        return (step(part.x()) << 13) | step(part.y());
+    }
+
+    // A tile of what `draw` draws in white, at the same scale as the painter of a frame and
+    // moved by whole pixels, so that it lands on the same part of a pixel as there. `box` is
+    // where it draws around its point, in logical pixels, `size` the size of its font.
+    template<typename Draw>
+    std::optional<Tile> make(const QRectF &box, qreal size, const QPoint &pixel, bool ownColors, Draw draw)
+    {
+        const qreal margin = 2 + std::ceil(size * m_ratio / 8);
+        const QRect room = QRectF(box.left() * m_ratio - margin,
+                                  box.top() * m_ratio - margin,
+                                  box.width() * m_ratio + 2 * margin,
+                                  box.height() * m_ratio + 2 * margin)
+                               .toAlignedRect()
+                               .intersected(QRect(-Most / 2, -Most / 2, Most, Most));
+        Tile tile;
+        tile.ownColors = ownColors;
+        if (room.isEmpty()) {
+            return tile;
+        }
+        QImage drawn(room.size(), QImage::Format_ARGB32_Premultiplied);
+        drawn.fill(Qt::transparent);
+        {
+            QPainter painter(&drawn);
+            painter.setTransform(QTransform(m_ratio, 0, 0, m_ratio, -qreal(pixel.x() + room.left()), -qreal(pixel.y() + room.top())));
+            painter.setPen(Qt::white);
+            draw(painter);
+        }
+        bool colored = false;
+        const QRect used = usedPart(drawn, colored);
+        if (used.isEmpty()) {
+            return tile;
+        }
+        tile.ownColors = ownColors || colored;
+        QPoint where;
+        if (!placeTile(used.size(), where)) {
+            m_full = true;
+            return std::nullopt;
+        }
+        for (int y = 0; y < used.height(); ++y) {
+            std::memcpy(m_image.scanLine(where.y() + y) + where.x() * 4,
+                        drawn.constScanLine(used.top() + y) + used.left() * 4,
+                        std::size_t(used.width()) * 4);
+        }
+        tile.rect = QRect(where, used.size());
+        tile.offset = room.topLeft() + used.topLeft();
+        m_fresh = m_fresh.united(tile.rect);
+        return tile;
+    }
+
+    // The smallest rectangle that holds every pixel the painter drew, and whether any of them
+    // has a color of its own rather than white.
+    static QRect usedPart(const QImage &image, bool &colored)
     {
         int left = image.width(), right = -1, top = image.height(), bottom = -1;
         for (int y = 0; y < image.height(); ++y) {
             const auto line = reinterpret_cast<const quint32 *>(image.constScanLine(y));
             for (int x = 0; x < image.width(); ++x) {
-                if (line[x] != 0) {
+                const quint32 pixel = line[x];
+                if (pixel != 0) {
                     left = qMin(left, x);
                     right = qMax(right, x);
                     top = qMin(top, y);
                     bottom = y;
+                    colored = colored || qRed(pixel) != qGreen(pixel) || qGreen(pixel) != qBlue(pixel);
                 }
             }
         }
@@ -731,6 +780,8 @@ private:
     int m_bottom = 0;
     // By the key of the font, the glyph and its part of a pixel.
     QHash<std::pair<std::uint64_t, quint64>, Tile> m_tiles;
+    // By the key of the font, the part of a pixel and the text.
+    QHash<QString, Tile> m_texts;
     QRect m_fresh;
     bool m_whole = true;
     bool m_full = false;
@@ -836,11 +887,6 @@ static void addQuad(RkGpuFrame &frame, const QRectF &place, const QRectF &source
     }
 }
 
-bool rk_collecting()
-{
-    return t_gpu != nullptr;
-}
-
 bool rk_collect_fill(const QRectF &rect, const QColor &color)
 {
     if (!t_gpu) {
@@ -873,6 +919,27 @@ bool rk_collect_glyphs(std::uint64_t key,
             const QRectF shown(QPointF(corner) / frame.ratio, QSizeF(tile->rect.size()) / frame.ratio);
             addQuad(frame, shown, QRectF(tile->rect), color, tile->ownColors);
         }
+    }
+    return true;
+}
+
+bool rk_collect_text(std::uint64_t key, const QFont &font, const QString &text, const QPointF &position, const QColor &color)
+{
+    if (!t_gpu) {
+        return false;
+    }
+    RkGpuFrame &frame = *t_gpu;
+    if (frame.failed) {
+        return true;
+    }
+    const QPoint pixel(int(std::floor(position.x() * frame.ratio)), int(std::floor(position.y() * frame.ratio)));
+    const std::optional<RkGlyphAtlas::Tile> tile = frame.atlas->textTile(key, font, text, position, pixel);
+    if (!tile) {
+        frame.failed = true;
+    } else if (!tile->rect.isEmpty()) {
+        const QPoint corner = pixel + tile->offset;
+        const QRectF shown(QPointF(corner) / frame.ratio, QSizeF(tile->rect.size()) / frame.ratio);
+        addQuad(frame, shown, QRectF(tile->rect), color, tile->ownColors);
     }
     return true;
 }
@@ -999,6 +1066,8 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
             if (!frame.failed) {
                 showGpuFrame(drawn, frame);
                 onGpu = true;
+            } else {
+                gpuFallback();
             }
         }
         if (onGpu) {

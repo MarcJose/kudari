@@ -142,7 +142,7 @@ printf '__________ WWWWWWWWWW\n'
 printf '\033[31mred\033[42mgreen\033[0m \033[38;5;208m208\033[48;5;19mon19\033[0m \033[38;2;200;120;40mtrue\033[0m\n'
 printf '\033[1mbold\033[0m \033[3mitalic\033[0m \033[2mdim\033[0m \033[7minverse\033[0m \033[9mstrike\033[0m\n'
 printf '\033[4msingle\033[0m \033[4:2mdouble\033[0m \033[4:3mcurly\033[0m \033[4:4mdotted\033[0m \033[4:5mdashed\033[0m\n'
-printf '─│┼╭╮╯╰ ═║╬ ░▒▓█ ▀▄ 日本語 🙂 e\314\201 ñ\n'
+printf '─│┼╭╮╯╰ ═║╬ ░▒▓█ ▀▄ 日本語 🙂 e\314\201 ñ \364\217\277\275\n'
 EOF
 
 cat > "$work/data/applications/kudari-gui-test.desktop" <<DESKTOP
@@ -1456,16 +1456,19 @@ check "with the setting at never, a hidden window keeps its graphics" 2 \
 # On the graphics card, the fills and glyphs of a frame are geometry, the glyphs from an atlas:
 # the window shows what the same frame painted whole shows, but for blending, which can differ
 # by a step of a color value, and its fills and glyphs went there.
-gpu_drawn() { hook Stats | python3 -c 'import json, sys; s = json.load(sys.stdin); print(s.get("gpu_fills", "none"), s.get("gpu_runs", "none"), s.get("gpu_fallbacks", "none"))'; }
+gpu_drawn() {
+    hook Stats | python3 -c 'import json, sys; s = json.load(sys.stdin); print(*(s.get("gpu_" + n, "none") for n in ("fills", "runs", "texts", "fallbacks")))'
+}
 hook ResetStats; run "clear; sh $work/catalogue"
 on_cpu=$(gpu_drawn)
 hook SetSetting Renderer gpu; settle
 hook ResetStats
 mkdir -p "$work/rhi/gpu"
 paint_check "$work/rhi/gpu" "through the RHI on the graphics card" 1
-# The catalogue has nothing that only the painter draws: its frames are not painted instead.
-check "on the graphics card, the fills and glyphs of a frame go there and not with the setting cpu" "0 0 0 yes" \
-    "$on_cpu $(gpu_drawn | awk '{ print ($1 > 0 && $2 > 0 && $3 == 0) ? "yes" : "no: " $0 }')"
+# A character of the catalogue that no font has goes there as a text of its own, as does any
+# that the fonts of a computer lack: no frame is painted instead.
+check "on the graphics card, the fills, glyphs and texts of a frame go there and not with the setting cpu" "0 0 0 0 yes" \
+    "$on_cpu $(gpu_drawn | awk '{ print ($1 > 0 && $2 > 0 && $3 > 0 && $4 == 0) ? "yes" : "no: " $0 }')"
 hook Trigger file_quit
 wait_quit "$kudari"
 

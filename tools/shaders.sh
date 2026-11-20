@@ -21,7 +21,7 @@ status=0
 for source in crates/qt/shaders/*.vert crates/qt/shaders/*.frag; do
     "$qsb" --qt6 -b --qsbversion 65 -o "$work/out.qsb" "$source"
     if $check; then
-        cmp -s "$work/out.qsb" "$source.qsb" || { echo "$source.qsb does not match $source: run tools/shaders.sh" >&2; status=1; }
+        [ "$(sha256sum < "$work/out.qsb")" = "$(sha256sum < "$source.qsb")" ] || { echo "$source.qsb does not match $source: run tools/shaders.sh" >&2; status=1; }
     else
         cp "$work/out.qsb" "$source.qsb"
     fi
