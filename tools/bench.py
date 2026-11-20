@@ -1581,6 +1581,9 @@ MEMORY = (
     ("memory-released-shown", "another, 1 tab, shown"),
     ("memory-released-hidden", "the same, hidden 1 s"),
     ("memory-released", "the same, hidden past the release"),
+    ("history-empty", "another, history empty"),
+    ("history-full", "the same, 20000 lines of history"),
+    ("history-closed", "the same, that tab closed for another"),
 )
 # The lines of history that the scenario history fills, by writing a screen more than that.
 HISTORY = 20_000

@@ -1041,6 +1041,7 @@ impl qobject::TerminalItem {
     fn clear_scrollback(mut self: Pin<&mut Self>) {
         if let Some(backend) = self.as_ref().backend() {
             backend.lock().clear_screen(ClearMode::Saved);
+            kudari_core::memory::release_later();
         }
         self.as_mut().refresh();
     }
