@@ -845,32 +845,27 @@ run_open "sleep 0.5; timeout 4 cat"
 sleep 2.5
 settle
 hook PaintTerminals "$work/badge/program"; settle
-# The corner of the badge, at the top right of what the window shows.
+# The corner of the badge, at the top right: what the window shows there has to differ from
+# the corner at the prompt and to match the frame painted anew. Only the corner, as a tooltip
+# of the pointer, which stays where an earlier check left it, may show elsewhere meanwhile.
 cat > "$work/corner" <<'EOF2'
 import sys
 from pngread import read
 def corner(path):
     width, height, channels, rows = read(path)
     return [bytes(row[width * channels * 2 // 3:]) for row in rows[: height // 4]]
-print("yes" if corner(sys.argv[1]) != corner(sys.argv[2]) else "no: the same badge")
+before, shown, painted = (corner(path) for path in sys.argv[1:])
+if shown == before:
+    print("no: the badge of the prompt")
+elif shown != painted:
+    print("no: not the badge of the program")
+else:
+    print("yes")
 EOF2
 for before in "$work"/badge/prompt-[0-9]*-shown.png; do break; done
 for shown in "$work"/badge/program-[0-9]*-shown.png; do break; done
-followed=$(cd "$work" && python3 corner "$before" "$shown")
-stale=$(cd "$work" && python3 pixels.py "${shown%-shown.png}.png" "$shown")
-if [ "$stale" != "0 0" ]; then
-    # Where the window differs from the frame painted anew, to tell the badge from the rest.
-    cat > "$work/where" <<'EOF2'
-import sys
-from pngread import read
-_, height, channels, a = read(sys.argv[1])
-b = read(sys.argv[2])[3]
-spots = [(x // channels, y) for y in range(height) for x in range(len(a[y])) if a[y][x] != b[y][x]]
-print(f"in x {min(x for x, _ in spots)}-{max(x for x, _ in spots)}, y {min(y for _, y in spots)}-{max(y for _, y in spots)}" if spots else "")
-EOF2
-    stale="$stale $(cd "$work" && python3 where "${shown%-shown.png}.png" "$shown"), terminals: $(cd "$work/badge" && echo program-*-shown.png)"
-fi
-check "the badge follows the program without output" "yes 0 0" "$followed $stale"
+check "the badge follows the program without output" yes \
+    "$(cd "$work" && python3 corner "$before" "$shown" "${shown%-shown.png}.png")"
 wait_prompt "$mark_before" "the end of timeout"; settle
 hook SetSetting BadgeEnabled false; settle
 check "a terminal in a tab in the background has no size until it shows" "1 1 0" "$sizeless_in_background $sizeless_shown $sizeless_closed"
