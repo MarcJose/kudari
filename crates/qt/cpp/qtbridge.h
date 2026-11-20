@@ -49,14 +49,19 @@ void rk_draw_badge(QPainter &painter,
                    const QFont &terminalFont,
                    int cellHeight);
 void rk_font_rendering(QFont &font, bool antiAlias, bool hinting);
-/// A fill of a frame drawn on the graphics card.
-struct RkFill {
-    QRectF rect;
-    QColor color;
-};
 /// Takes a fill while a frame is drawn on the graphics card; false otherwise, and the painter
 /// has to fill it.
 bool rk_collect_fill(const QRectF &rect, const QColor &color);
+/// Whether a frame for the graphics card is collected now.
+bool rk_collecting();
+/// Takes glyphs while a frame is drawn on the graphics card, as `rk_draw_glyphs` draws them;
+/// false otherwise, and the painter has to draw them. `key` tells the font apart from the
+/// other fonts the item draws with.
+bool rk_collect_glyphs(std::uint64_t key,
+                       const QRawFont &font,
+                       const QColor &color,
+                       rust::Slice<const std::uint32_t> glyphs,
+                       rust::Slice<const QPointF> positions);
 
 /// An item that paints into an image of its own and shows it as a texture: the base of the
 /// terminal. Its image has the format that text draws fastest into and that most graphics
@@ -83,7 +88,8 @@ public:
     /// How much of the cursor shows, from 0 to 1.
     virtual double cursorOpacity() const = 0;
     /// Whether the frame is drawn on the graphics card where Qt Quick draws through its RHI:
-    /// the fills under the text as geometry, the text in the image over them.
+    /// its fills and glyphs as geometry, the glyphs from an atlas that holds each once. A
+    /// frame with something that only the painter draws is painted into the image instead.
     virtual bool drawsOnGpu() const = 0;
     /// Whether every frame covers all of the item: it is then neither cleared before nor
     /// blended with what lies behind it.
@@ -113,10 +119,14 @@ private:
     bool m_opaque = false;
     bool m_contentDirty = true;
     bool m_linesDirty = false;
-    /// Whether the frame was drawn on the graphics card, and its fills there, in the logical
-    /// pixels of the item.
+    /// Whether frames are drawn on the graphics card, and whether the last one was.
     bool m_gpu = false;
-    QList<RkFill> m_fills;
+    bool m_shownOnGpu = false;
+    /// The size in pixels of the device of the frame shown.
+    QSize m_shownSize;
+    /// What the painter of a frame on the graphics card paints on: the fonts take its density
+    /// of pixels, and it holds nothing.
+    QImage m_probe;
 };
 std::unique_ptr<QRawFont> rk_raw_font(const QPainter &painter, const QFont &font);
 /// A text laid out once, for `rk_shape`.

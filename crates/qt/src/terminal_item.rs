@@ -1429,7 +1429,9 @@ impl qobject::TerminalItem {
 
     #[allow(clippy::unused_self, reason = "the C++ item calls it on itself")]
     fn draws_on_gpu(&self) -> bool {
-        terminal::options().is_some_and(|options| options.gpu)
+        // The badge lies between the background and the text, painted; for now its frames are
+        // painted whole.
+        terminal::options().is_some_and(|options| options.gpu && options.badge.is_none())
     }
 
     /// Two cells, which the cursor on a wide character covers.
@@ -1635,6 +1637,8 @@ thread_local! {
 struct Glyphs {
     /// What the fonts were made from; other fonts, or another density of pixels, need others.
     key: GlyphKey,
+    /// Tells these fonts apart from all others, for the atlas of glyphs on the graphics card.
+    id: u64,
     fonts: Fonts,
     /// The fonts of `Fonts::get`, made on first use.
     raw: [Option<cxx::UniquePtr<kde::QRawFont>>; Fonts::SLOTS],
@@ -1726,9 +1730,12 @@ impl Glyphs {
     }
 
     fn new(key: GlyphKey, view: &terminal::Options) -> Self {
+        /// The fonts made so far.
+        static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         Self {
             fonts: Fonts::new(&key.font, view),
             key,
+            id: MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             raw: Default::default(),
             ascii: [[Self::UNKNOWN; 128]; Fonts::SLOTS],
             other: std::collections::HashMap::new(),
@@ -1883,7 +1890,13 @@ impl Glyphs {
                 None => self.raw.get(run.font).and_then(Option::as_ref),
             };
             if let Some(font) = font.and_then(|font| font.as_ref()) {
-                kde::rk_draw_glyphs(painter.as_mut(), font, &qcolor(run.color), &run.glyphs, &run.positions);
+                // The font among those of the item: these fonts, and which of them.
+                let key = (self.id << 16) | u64::try_from(run.font).unwrap_or(u64::MAX) & 0xffff;
+                if kde::rk_collect_glyphs(key, font, &qcolor(run.color), &run.glyphs, &run.positions) {
+                    stats::count(stats::Count::GpuRuns);
+                } else {
+                    kde::rk_draw_glyphs(painter.as_mut(), font, &qcolor(run.color), &run.glyphs, &run.positions);
+                }
             }
             run.glyphs.clear();
             run.positions.clear();
@@ -2066,43 +2079,29 @@ fn reference_drawing() -> bool {
 /// Fills a rectangle of the frame: on the graphics card where the frame is drawn there, else
 /// into the image.
 fn fill(mut painter: Pin<&mut qobject::QPainter>, rect: &QRectF, color: &QColor) {
-    if !collect(rect, color) {
+    if kde::rk_collect_fill(rect, color) {
+        stats::count(stats::Count::GpuFills);
+    } else {
         painter.as_mut().fill_rect(rect, color);
     }
 }
 
-/// Gives a fill to the graphics card where the frame is drawn there; false otherwise.
-fn collect(rect: &QRectF, color: &QColor) -> bool {
-    let taken = kde::rk_collect_fill(rect, color);
-    if taken {
-        stats::count(stats::Count::GpuFills);
-    }
-    taken
-}
-
 /// Draws the paints of a frame or of the cursor with the fonts of the terminal.
 fn draw(mut painter: Pin<&mut qobject::QPainter>, glyphs: &mut Glyphs, paints: &[Paint]) {
-    // The fills before the first text, as the backgrounds, can go to the graphics card under
-    // the image; those after it, as the line at a column, lie over text and stay in it.
-    let mut under_text = true;
     for paint in paints {
         match paint {
             Paint::Fill(rect, color) => {
                 // What comes before a fill stays under it.
                 glyphs.draw(painter.as_mut());
                 let rect = QRectF::new(rect.x, rect.y, rect.width, rect.height);
-                if !(under_text && collect(&rect, &qcolor(*color))) {
-                    painter.as_mut().fill_rect(&rect, &qcolor(*color));
-                }
+                fill(painter.as_mut(), &rect, &qcolor(*color));
             }
             Paint::Shade(rect, color, alpha) => {
                 glyphs.draw(painter.as_mut());
                 let mut color = qcolor(*color);
                 color.set_alpha_f(f32::from(*alpha) / 255.0);
                 let rect = QRectF::new(rect.x, rect.y, rect.width, rect.height);
-                if !(under_text && collect(&rect, &color)) {
-                    painter.as_mut().fill_rect(&rect, &color);
-                }
+                fill(painter.as_mut(), &rect, &color);
             }
             Paint::Text {
                 x,
@@ -2111,9 +2110,11 @@ fn draw(mut painter: Pin<&mut qobject::QPainter>, glyphs: &mut Glyphs, paints: &
                 color,
                 font,
             } => {
-                under_text = false;
                 let slot = glyphs.fonts.slot(*font);
                 if reference_drawing() || !glyphs.add(&painter, slot, text.as_str(), (*x, *y), *color) {
+                    if kde::rk_collecting() {
+                        stats::count(stats::Count::GpuFallbacks);
+                    }
                     painter.as_mut().set_font(glyphs.fonts.get(slot));
                     painter.as_mut().set_pen(&QPen::from(&qcolor(*color)));
                     kde::rk_draw_text(painter.as_mut(), &QPointF::new(*x, *y), &QString::from(text.as_str()));

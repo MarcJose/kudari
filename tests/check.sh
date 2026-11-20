@@ -29,6 +29,10 @@ python3 tools/third_party_licenses.py --check
 
 echo "== Generated tables"
 python3 tools/box_drawing.py --check
+# The shaders of frames on the graphics card, where Qt Shader Tools are there to bake them.
+if command -v qsb6 >/dev/null || command -v qsb >/dev/null || [ -x /usr/lib/qt6/bin/qsb ]; then
+    tools/shaders.sh --check
+fi
 
 echo "== Translations"
 python3 tools/translations.py --check --strict --quiet

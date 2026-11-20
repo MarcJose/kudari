@@ -42,7 +42,8 @@ jobs:
           persist-credentials: false
       - run: |
           # shellcheck disable=SC2046 # the package list is meant to split
-          pacman -S --noconfirm --needed rust vale namcap $(grep -v '^#' .github/arch-packages.txt)
+          # qt6-shadertools checks that the baked shaders match their sources.
+          pacman -S --noconfirm --needed rust vale namcap qt6-shadertools $(grep -v '^#' .github/arch-packages.txt)
       # The checkout belongs to another user than the container's root, and Vale gets its
       # files from git.
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"

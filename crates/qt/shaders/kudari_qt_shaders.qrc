@@ -1,0 +1,14 @@
+<!--
+SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de>
+SPDX-License-Identifier: MIT
+
+The shaders of frames on the graphics card, baked by tools/shaders.sh. A name of its own: rcc
+names the function that registers them after the file, and the resources that cxx-qt-build
+lists for each crate all get the same names.
+-->
+<RCC>
+  <qresource prefix="/kudari/shaders">
+    <file>glyph.vert.qsb</file>
+    <file>glyph.frag.qsb</file>
+  </qresource>
+</RCC>
