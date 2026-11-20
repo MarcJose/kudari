@@ -114,4 +114,26 @@ FormCard.FormCardPage {
             onToggled: root.set("DynamicTabTitles", checked)
         }
     }
+
+    FormCard.FormHeader {
+        title: root.t("@title:group", "Memory")
+    }
+
+    FormCard.FormCard {
+        // A hidden window gives back its memory on the graphics card; showing it after that
+        // builds it again, which takes a moment more for the first frame.
+        NumberField {
+            label: root.t("@label:spinbox", "Free graphics memory when hidden for:")
+            from: 0
+            to: 3600
+            value: root.config.ReleaseGraphicsAfter
+            unit: "s"
+            zeroText: root.t("@item:inrange free graphics memory", "Never")
+            onValueChanged: {
+                if (value !== root.config.ReleaseGraphicsAfter) {
+                    root.set("ReleaseGraphicsAfter", value);
+                }
+            }
+        }
+    }
 }

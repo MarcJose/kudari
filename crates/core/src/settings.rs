@@ -56,7 +56,7 @@ impl Source<'_> {
 }
 
 /// Settings that can be changed at runtime, with their configuration group.
-const KEYS: [(&str, &str); 107] = [
+const KEYS: [(&str, &str); 108] = [
     ("Screen", "Window"),
     ("Width", "Window"),
     ("Height", "Window"),
@@ -67,6 +67,7 @@ const KEYS: [(&str, &str); 107] = [
     ("ShowTabBar", "Window"),
     ("DynamicTabTitles", "Window"),
     ("ShowSystrayIcon", "Window"),
+    ("ReleaseGraphicsAfter", "Window"),
     ("FocusFollowsMouse", "Behavior"),
     ("OpenAfterStart", "Behavior"),
     ("RememberFullscreen", "Behavior"),
@@ -188,6 +189,9 @@ pub struct Settings {
     pub toggle_to_focus: bool,
     pub show_tab_bar: bool,
     pub dynamic_tab_titles: bool,
+    /// Seconds after which a hidden window gives up its graphics and the images of its
+    /// terminals; 0 keeps them.
+    pub release_graphics_after: i32,
     pub show_systray_icon: bool,
     pub focus_follows_mouse: bool,
     pub open_after_start: bool,
@@ -347,6 +351,7 @@ impl Settings {
             toggle_to_focus: source.boolean("Window", "ToggleToFocus", false),
             show_tab_bar: source.boolean("Window", "ShowTabBar", true),
             dynamic_tab_titles: source.boolean("Window", "DynamicTabTitles", true),
+            release_graphics_after: source.int("Window", "ReleaseGraphicsAfter", 60, 0, 3600),
             show_systray_icon: source.boolean("Window", "ShowSystrayIcon", true),
             focus_follows_mouse: source.boolean("Behavior", "FocusFollowsMouse", false),
             open_after_start: source.boolean("Behavior", "OpenAfterStart", false),
@@ -478,6 +483,7 @@ impl Settings {
             "KeepOpenAfterLastSessionCloses": self.keep_open_after_last_session_closes,
             "ToggleToFocus": self.toggle_to_focus,
             "ShowTabBar": self.show_tab_bar,
+            "ReleaseGraphicsAfter": self.release_graphics_after,
             "DynamicTabTitles": self.dynamic_tab_titles,
             "ShowSystrayIcon": self.show_systray_icon,
             "FocusFollowsMouse": self.focus_follows_mouse,

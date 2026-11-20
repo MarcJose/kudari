@@ -1495,3 +1495,15 @@ msgstr "Eike Hein und das Yakuake-Team"
 msgctxt "@info:credit"
 msgid "The Konsole developers"
 msgstr "Das Konsole-Team"
+
+msgctxt "@title:group"
+msgid "Memory"
+msgstr "Speicher"
+
+msgctxt "@label:spinbox"
+msgid "Free graphics memory when hidden for:"
+msgstr "Grafikspeicher freigeben, wenn verborgen seit:"
+
+msgctxt "@item:inrange free graphics memory"
+msgid "Never"
+msgstr "Nie"

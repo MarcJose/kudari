@@ -550,6 +550,7 @@ class Scenarios(unittest.TestCase):
         self.write("events-1.txt", [
             f"spawn main {self.at(1.0)}", f"bus main {self.at(1.05)}",
             f"show hidden {self.at(5.0)}", f"show main {self.at(10.0)}", f"show main {self.at(12.0)}",
+            f"show released {self.at(50.0)}",
             f"second-start main {self.at(20.0)}", f"second-end main {self.at(20.04)}",
             f"idle shown {self.at(30.0)}", f"idle-end shown {self.at(40.0)}",
         ])
@@ -561,6 +562,8 @@ class Scenarios(unittest.TestCase):
             *(threaded(31.0 + index, 1) for index in range(5)),
         ])
         self.write("hidden-1.log", [threaded(5.01, 1)])
+        # 25 ms to the first frame after the window gave up its graphics.
+        self.write("released-1.log", [threaded(50.025, 1)])
         # 2 ms of CPU and 30 switches in 10 s; 100 MB private after the first tab.
         self.write("main-1.cpu", self.cpu("shown", 0, 2_000_000, (20, 10)) + self.cpu("memory-1", 0, 0, memory=(300 * 1024, 110 * 1024, 100 * 1024)))
         # A warm-up run does not count.
@@ -572,6 +575,7 @@ class Scenarios(unittest.TestCase):
         self.assertEqual(self.row(text, "phase qml")[2], "120.0")
         self.assertEqual(self.row(text, "first time")[2], "10.0")
         self.assertEqual(self.row(text, "the times after")[3:7], ["7.0", "8.0", "8.0", "2"])
+        self.assertEqual(self.row(text, "after giving up its graphics")[5:9], ["25.0", "25.0", "25.0", "1"])
         self.assertEqual(self.row(text, "call received")[2], "3.0")
         self.assertEqual(self.row(text, "second start")[2], "40.0")
         self.assertEqual(self.row(text, "shown, nothing happens")[3:6], ["0.20", "3", "0.5"])

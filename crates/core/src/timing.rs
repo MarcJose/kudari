@@ -9,9 +9,15 @@
 
 use std::sync::OnceLock;
 
-/// The variables of this module and of [`crate::stats`], which a shell in Kudari should not
-/// inherit: a Kudari started in it would mark and count as well.
-pub const VARIABLES: [&str; 3] = ["KUDARI_TIMING", "KUDARI_STATS", "KUDARI_STATS_MS"];
+/// The variables of this module, of [`crate::stats`] and of how long a hidden window keeps
+/// its graphics, which a shell in Kudari should not inherit: a Kudari started in it would
+/// mark, count and keep as well.
+pub const VARIABLES: [&str; 4] = [
+    "KUDARI_TIMING",
+    "KUDARI_STATS",
+    "KUDARI_STATS_MS",
+    "KUDARI_RELEASE_HIDDEN_MS",
+];
 
 fn wanted() -> bool {
     static WANTED: OnceLock<bool> = OnceLock::new();

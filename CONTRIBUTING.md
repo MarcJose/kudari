@@ -124,7 +124,10 @@ taking in output:
   blinking or fading cursor, and with output in a tab in the background;
 - its memory with 1, 5 and 10 tabs, with the window hidden and after closing the tabs, also
   on the graphics card as the DRM devices tell it (not when it draws in software);
-- what a full history of 20000 lines adds, per 1000 lines and per cell.
+- what a full history of 20000 lines adds, per 1000 lines and per cell;
+- what a window gives back when it has been hidden long enough to give up its graphics
+  (`KUDARI_RELEASE_HIDDEN_MS`, here 2 s, stands in for the setting), and how long its first
+  frame takes after that.
 
 Run it with `--scale 2` as well to see what a HiDPI screen adds.
 

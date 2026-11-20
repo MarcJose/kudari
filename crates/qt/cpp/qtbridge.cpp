@@ -37,6 +37,10 @@
 #include <QSGNode>
 #include <QSGTexture>
 #include <QTextDocument>
+#include <QTimer>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 #include <QVarLengthArray>
 // Private, as nothing public names the key of a key event on its first level.
 #include <QtGui/private/qkeymapper_p.h>
@@ -224,6 +228,16 @@ void rk_painter_band(QPainter &painter, const QRectF &band, bool clear)
 void rk_painter_unclip(QPainter &painter)
 {
     painter.setClipping(false);
+}
+
+// The scene graph went, as for a window hidden for long: the images go with it, and the next
+// frame paints all of it anew.
+void RkImageItem::releaseResources()
+{
+    m_image = QImage();
+    m_cursor = QImage();
+    m_contentDirty = true;
+    QQuickItem::releaseResources();
 }
 
 void RkImageItem::geometryChange(const QRectF &newGeometry, const QRectF &oldGeometry)
@@ -734,4 +748,51 @@ QString rk_key_sequence_text(int key, int modifiers)
 QString rk_native_key_sequence(const QString &portable)
 {
     return QKeySequence::fromString(portable, QKeySequence::PortableText).toString(QKeySequence::NativeText);
+}
+
+// How long a hidden window keeps its scene graph, in milliseconds; 0 for ever.
+static int s_releaseAfter = 0;
+
+void rk_release_after(int milliseconds)
+{
+    s_releaseAfter = qMax(0, milliseconds);
+}
+
+// A window hidden for `s_releaseAfter` gives up its scene graph and, with it, its graphics,
+// its render thread and the images of its items; showing it again keeps them until the next
+// time. Each window once, as the front end calls this after it loaded them.
+void rk_release_when_hidden()
+{
+    const auto windows = QGuiApplication::topLevelWindows();
+    for (QWindow *window : windows) {
+        auto quick = qobject_cast<QQuickWindow *>(window);
+        if (!quick || quick->property("rkReleaseWhenHidden").toBool()) {
+            continue;
+        }
+        quick->setProperty("rkReleaseWhenHidden", true);
+        auto timer = new QTimer(quick);
+        timer->setSingleShot(true);
+        QObject::connect(timer, &QTimer::timeout, quick, [quick] {
+            if (quick->isVisible()) {
+                return;
+            }
+            quick->setPersistentSceneGraph(false);
+            quick->setPersistentGraphics(false);
+            quick->releaseResources();
+#ifdef __GLIBC__
+            // The render thread frees the images when it ends, a moment later; the allocator
+            // of glibc keeps what was freed for the process unless asked to give it back.
+            QTimer::singleShot(1000, quick, [] { malloc_trim(0); });
+#endif
+        });
+        QObject::connect(quick, &QWindow::visibleChanged, timer, [quick, timer](bool visible) {
+            if (visible) {
+                timer->stop();
+                quick->setPersistentGraphics(true);
+                quick->setPersistentSceneGraph(true);
+            } else if (s_releaseAfter > 0) {
+                timer->start(s_releaseAfter);
+            }
+        });
+    }
 }

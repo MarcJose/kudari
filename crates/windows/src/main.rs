@@ -87,6 +87,7 @@ fn main() {
             "qrc:/qt/qml/io/github/marcjose/kudari/windows/qml/Main.qml",
         ));
     }
+    kudari_qt::qt::rk_release_when_hidden();
     kudari_core::timing::mark("qml");
     kudari_core::timing::mark("ready");
     let code = app.as_mut().map_or(1, |app| app.exec());
