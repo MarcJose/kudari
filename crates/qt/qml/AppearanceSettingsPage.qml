@@ -21,6 +21,13 @@ FormCard.FormCardPage {
         {text: t("@item:inlistbox", "Light"), value: "light"},
         {text: t("@item:inlistbox", "Dark"), value: "dark"}
     ]
+    // Where the terminals are drawn; the processor is the way out for a driver that draws
+    // wrongly.
+    readonly property var renderers: [
+        {text: t("@item:inlistbox", "On the graphics card where possible"), value: "auto"},
+        {text: t("@item:inlistbox", "On the graphics card"), value: "gpu"},
+        {text: t("@item:inlistbox", "With the processor"), value: "cpu"}
+    ]
 
     function t(context, text) {
         return controller.translate(context, text);
@@ -77,6 +84,17 @@ FormCard.FormCardPage {
         FormCard.FormDelegateSeparator {
             visible: root.hasColorScheme
         }
+
+        FormCard.FormComboBoxDelegate {
+            text: root.t("@label:listbox", "Draw terminals:")
+            model: root.renderers
+            textRole: "text"
+            valueRole: "value"
+            currentIndex: Math.max(0, root.renderers.findIndex(entry => entry.value === root.config.Renderer))
+            onActivated: root.controller.setSetting("Renderer", currentValue)
+        }
+
+        FormCard.FormDelegateSeparator {}
 
         FormCard.FormSwitchDelegate {
             text: root.t("@option:check", "Flash a terminal briefly when it gets the focus")

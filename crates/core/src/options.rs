@@ -247,4 +247,18 @@ mod tests {
         assert_eq!(cursor_shape("underline"), CursorShape::Underline);
         assert_eq!(cursor_shape("unknown"), CursorShape::Block);
     }
+
+    #[test]
+    fn terminals_are_drawn_on_the_graphics_card_unless_the_setting_says_cpu() {
+        let drawn = |value: Option<&str>| {
+            let table = Table::default();
+            if let Some(value) = value {
+                table.write("Appearance", "Renderer", value);
+            }
+            Options::from_settings(&Settings::load(&table)).gpu
+        };
+        assert!(drawn(None));
+        assert!(drawn(Some("auto")) && drawn(Some("gpu")));
+        assert!(!drawn(Some("cpu")));
+    }
 }

@@ -1448,7 +1448,8 @@ wait_quit "$kudari"
 # software: the texture of a terminal keeps its storage there and takes only the parts of the
 # frame that changed, which the window shows as the pixels below compare.
 mkdir "$work/rhi"
-printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nKeepOpen=true\nReleaseGraphicsAfter=1\n[Security]\nAllowRemoteCommands=true\n' \
+# The painted frame first, whichever way the default draws; the graphics card further down.
+printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nKeepOpen=true\nReleaseGraphicsAfter=1\n[Appearance]\nRenderer=cpu\n[Security]\nAllowRemoteCommands=true\n' \
     > "$work/rhi/kudarirc"
 env -u QT_QUICK_BACKEND QSG_RHI_BACKEND=opengl LIBGL_ALWAYS_SOFTWARE=1 QSG_INFO=1 XDG_CONFIG_HOME="$work/rhi" \
     "$binary" > "$work/rhi.log" 2>&1 &

@@ -198,9 +198,8 @@ pub struct Settings {
     pub open_after_start: bool,
     pub remember_fullscreen: bool,
     pub skin: String,
-    /// Where terminals are drawn: `cpu` with `QPainter` into an image, `gpu` on the
-    /// graphics card where Qt Quick draws through its RHI, `auto` for the graphics card where
-    /// there is one.
+    /// Where terminals are drawn: `auto`, the default, and `gpu` on the graphics card where
+    /// Qt Quick draws through its RHI, `cpu` with `QPainter` into an image everywhere.
     pub renderer: String,
     pub translucency: bool,
     pub background_color: String,
@@ -361,7 +360,7 @@ impl Settings {
             focus_follows_mouse: source.boolean("Behavior", "FocusFollowsMouse", false),
             open_after_start: source.boolean("Behavior", "OpenAfterStart", false),
             remember_fullscreen: source.boolean("Behavior", "RememberFullscreen", false),
-            renderer: source.text("Appearance", "Renderer", "cpu"),
+            renderer: source.text("Appearance", "Renderer", "auto"),
             skin: Some(source.text("Appearance", "Skin", SYSTEM_SKIN))
                 .filter(|skin| is_themed(skin))
                 .unwrap_or_else(|| SYSTEM_SKIN.to_string()),
