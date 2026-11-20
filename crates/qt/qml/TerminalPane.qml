@@ -232,10 +232,35 @@ Item {
             }
         }
 
+        // Steps of the zoom in a row, as from the wheel or a held key, wrap the history once
+        // more after the last: each wrap holds the terminal and tells the program its size
+        // again. The first step takes effect at once, as a single one does.
+        Timer {
+            id: zoomSettle
+            property bool pending: false
+            interval: 120
+            onTriggered: {
+                if (pending) {
+                    pending = false;
+                    terminal.applySize();
+                }
+            }
+        }
+
+        function cellChanged() {
+            if (zoomSettle.running) {
+                zoomSettle.pending = true;
+                zoomSettle.restart();
+            } else {
+                Qt.callLater(applySize);
+                zoomSettle.start();
+            }
+        }
+
         onWidthChanged: Qt.callLater(applySize)
         onHeightChanged: Qt.callLater(applySize)
-        onCellWidthChanged: Qt.callLater(applySize)
-        onCellHeightChanged: Qt.callLater(applySize)
+        onCellWidthChanged: cellChanged()
+        onCellHeightChanged: cellChanged()
         onColumnsChanged: if (sized && pane.visible && pane.width > 0) sizeHint.show()
         onLinesChanged: if (sized && pane.visible && pane.width > 0) sizeHint.show()
         // The cursor changes column and line one after the other, while the terminal is being
