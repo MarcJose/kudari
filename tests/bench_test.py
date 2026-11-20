@@ -247,6 +247,58 @@ class Report(unittest.TestCase):
         # A terminal that draws through another process has none of its own.
         self.assertEqual(rows["xterm"][-2:], ["-", "-"])
 
+    def test_the_time_of_the_engines_comes_from_the_fdinfo_of_each_client(self):
+        card = "drm-pdev:\t0000:03:00.0\ndrm-client-id:\t{}\ndrm-engine-gfx:\t{} ns\ndrm-engine-compute:\t{} ns\ndrm-engine-capacity-gfx:\t4\n"
+        # The same client opened twice counts once; the capacity of an engine is no time.
+        infos = [card.format(7, 1000, 10), card.format(7, 1000, 10), card.format(8, 500, 0)]
+        self.assertEqual(bench.engine_time(infos), 1510)
+        self.assertIsNone(bench.engine_time(["drm-client-id:\t3\ndrm-total-vram:\t1 KiB\n"]))
+        self.assertIsNone(bench.engine_time([]))
+
+    def test_the_energy_of_the_card_comes_from_its_counter_or_from_its_power(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        hwmon = Path(folder.name)
+        busy = hwmon / "gpu_busy_percent"
+        busy.write_text("40\n")
+        # A counter of energy, as the kernel gives it: the joules are what it counted meanwhile.
+        (hwmon / "energy1_input").write_text("1000000\n")
+        power = bench.CardPower((hwmon, busy))
+        power.start()
+        time.sleep(0.25)
+        (hwmon / "energy1_input").write_text("4000000\n")
+        joules, seconds, mean_busy = power.stop()
+        self.assertAlmostEqual(joules, 3.0)
+        self.assertGreater(seconds, 0.2)
+        self.assertEqual(mean_busy, 40)
+        # Power, as the kernel gives it: the joules are the area under it.
+        (hwmon / "energy1_input").unlink()
+        (hwmon / "power1_average").write_text("2000000\n")
+        power = bench.CardPower((hwmon, hwmon / "none"))
+        power.start()
+        time.sleep(0.3)
+        joules, seconds, mean_busy = power.stop()
+        self.assertAlmostEqual(joules, 2 * seconds, places=6)
+        self.assertIsNone(mean_busy)
+
+    def test_the_graphics_card_during_each_load(self):
+        for run, engines, joules in (("1", 40, 6.0), ("2", 60, 8.0), ("3", 50, 7.0)):
+            self.run_of(f"kudari-{run}", [], (("idle", 0.0, 10.0),))
+            self.cpu_of(f"kudari-{run}", "idle", (1, "main", 0, 1))
+            with open(self.directory / f"kudari-{run}.cpu", "a") as file:
+                file.write(f"idle\tgpu\tstart\t1000000\nidle\tgpu\tend\t{1000000 + engines * 1000000}\n")
+                # 0.5 W idle in the second before, then joules over 10 s.
+                file.write(f"idle\tpower\t0.5\t1.0\t{joules}\t10.0\t12.0\n")
+            self.run_of(f"xterm-{run}", [], (("idle", 0.0, 10.0),))
+            self.cpu_of(f"xterm-{run}", "idle", (1, "main", 0, 1))
+        text = self.report("kudari", "xterm")
+        part = text.split("The graphics card during each load")[1]
+        rows = {line.split()[1]: line.split() for line in part.splitlines() if line.startswith("idle ")}
+        # The medians: 50 ms of the engines, 0.7 W, 7 J less 5 J of idle, 12 % busy.
+        self.assertEqual(rows["kudari"], ["idle", "kudari", "50.0", "0.7", "2.00", "12"])
+        # A terminal without a client of its own and without a sensor has no row.
+        self.assertNotIn("xterm", rows)
+
     def test_the_answers_to_the_queries_are_counted(self):
         for run, answered in (("1", bench.QUERIES), ("2", bench.QUERIES - 5)):
             self.monotonic_run(f"kudari-{run}", [], (("queries", 0.0, 1.0, 0.9, True),))

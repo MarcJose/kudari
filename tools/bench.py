@@ -37,6 +37,7 @@ import statistics
 import subprocess
 import sys
 import termios
+import threading
 import time
 from pathlib import Path
 from typing import NamedTuple
@@ -195,6 +196,10 @@ class Load(NamedTuple):
     replies: int | None = None
     # For the load query: the seconds of each round trip by query and state, None unanswered.
     asked: dict | None = None
+    # What the graphics card did: `gpu_ms` the milliseconds its engines worked for the
+    # terminal, `watts` it took, `above` the joules more than idle, `busy` its percent; or None
+    # without a sensor or client.
+    card: dict | None = None
 
 
 def cpu(path, pid, load, moment):
@@ -212,6 +217,9 @@ def cpu(path, pid, load, moment):
         switches = [re.search(rf"^{kind}_ctxt_switches:\s*(\d+)", status, re.M) for kind in ("voluntary", "nonvoluntary")]
         counts = [found[1] if found else "0" for found in switches]
         lines.append(f"{load}\t{moment}\t{task.name}\t{name}\t{schedstat.split()[0]}\t{counts[0]}\t{counts[1]}\n")
+    # The time the graphics card worked for the terminal, where it draws there itself.
+    if (engines := engine_time(drm_infos(pid))) is not None:
+        lines.append(f"{load}\tgpu\t{moment}\t{engines}\n")
     if moment == "end":
         rollup = content(f"/proc/{pid}/smaps_rollup") or ""
         sizes = {key: int(value) for key, value in re.findall(r"^(\w+):\s+(\d+) kB", rollup, re.M)}
@@ -229,10 +237,8 @@ def cpu(path, pid, load, moment):
 UNITS = {"": 1 / 1024, "KiB": 1, "MiB": 1024, "GiB": 1024 * 1024}
 
 
-def gpu(pid):
-    """Kilobytes of memory that the process PID holds on the graphics card (VRAM) and in memory
-    the card reaches through its address table (GTT), from the `fdinfo` of its DRM devices; or None
-    without one, as with drawing in software."""
+def drm_infos(pid):
+    """The `fdinfo` texts of the DRM devices that the process PID has open."""
     infos = []
     for descriptor in Path(f"/proc/{pid}/fd").glob("*"):
         try:
@@ -240,7 +246,83 @@ def gpu(pid):
                 infos.append(content(f"/proc/{pid}/fdinfo/{descriptor.name}") or "")
         except OSError:
             continue
-    return on_card(infos)
+    return infos
+
+
+def gpu(pid):
+    """Kilobytes of memory that the process PID holds on the graphics card (VRAM) and in memory
+    the card reaches through its address table (GTT), from the `fdinfo` of its DRM devices; or None
+    without one, as with drawing in software."""
+    return on_card(drm_infos(pid))
+
+
+def clients(infos):
+    """The fields of each DRM client in the `fdinfo` texts, once for a device opened twice."""
+    found = {}
+    for info in infos:
+        fields = dict(re.findall(r"^(drm-[\w-]+):\s*(.*)$", info, re.MULTILINE))
+        if "drm-client-id" in fields:
+            found[(fields.get("drm-pdev"), fields["drm-client-id"])] = fields
+    return list(found.values())
+
+
+def engine_time(infos):
+    """The nanoseconds that the engines of the graphics card worked for the clients, or None
+    without a client that counts them."""
+    times = [int(re.match(r"\d+", value)[0]) for fields in clients(infos) for key, value in fields.items()
+             if key.startswith("drm-engine-") and not key.startswith("drm-engine-capacity") and re.match(r"\d+", value)]
+    return sum(times) if times else None
+
+
+def card_sensor(infos):
+    """The sensor of the graphics card that the clients draw on: its directory in `hwmon` and how
+    busy the card is, or None without one, as in a virtual machine."""
+    for fields in clients(infos):
+        device = Path("/sys/bus/pci/devices") / (fields.get("drm-pdev") or "-")
+        for hwmon in sorted((device / "hwmon").glob("hwmon*")):
+            if any((hwmon / name).exists() for name in ("energy1_input", "power1_average", "power1_input")):
+                return hwmon, device / "gpu_busy_percent"
+    return None
+
+
+class CardPower(threading.Thread):
+    """Samples the power of a graphics card ten times a second until stopped: its energy counter
+    where it has one, else its power, from which the joules are summed up."""
+
+    def __init__(self, sensor):
+        super().__init__(daemon=True)
+        self.hwmon, self.busy_file = sensor
+        self.stopped = threading.Event()
+        self.samples = []
+
+    def read(self):
+        energy = content(self.hwmon / "energy1_input")
+        power = content(self.hwmon / "power1_average") or content(self.hwmon / "power1_input")
+        busy = content(self.busy_file)
+        return (monotonic(), int(energy) / 1e6 if energy else None, int(power) / 1e6 if power else None,
+                int(busy) if busy and busy.strip().isdigit() else None)
+
+    def run(self):
+        while True:
+            self.samples.append(self.read())
+            if self.stopped.wait(0.1):
+                break
+
+    def stop(self):
+        """The joules, seconds and the mean percent of being busy since it started."""
+        self.stopped.set()
+        self.join()
+        self.samples.append(self.read())
+        first, last = self.samples[0], self.samples[-1]
+        seconds = last[0] - first[0]
+        if first[1] is not None and last[1] is not None:
+            joules = last[1] - first[1]
+        else:
+            # The area under the power between the samples.
+            joules = sum((later[0] - earlier[0]) * (earlier[2] + later[2]) / 2
+                         for earlier, later in zip(self.samples, self.samples[1:]) if earlier[2] is not None and later[2] is not None)
+        busy = [sample[3] for sample in self.samples if sample[3] is not None]
+        return joules, seconds, statistics.mean(busy) if busy else None
 
 
 def on_card(infos):
@@ -432,10 +514,22 @@ def workload(directory, environment):
             # A screen full of text that stays, under the line that changes.
             os.write(writer, "\r\n".join(" ".join(WORDS)[:columns] for _ in range(rows - 1)).encode())
             answer(reader, writer)
+        # The power of the graphics card the terminal draws on, a second before the load and
+        # during it, where the card has a sensor.
+        sensor = card_sensor(drm_infos(terminal))
+        before = None
+        if sensor:
+            idle = CardPower(sensor)
+            idle.start()
+            time.sleep(1)
+            before = idle.stop()
         # So that the report can name the load during which a terminal ended.
         note(f"begin {load}")
         # The CPU time of the threads of the terminal, just outside the time of the load.
         cpu(usage, terminal, load, "start")
+        power = CardPower(sensor) if sensor else None
+        if power:
+            power.start()
         start = monotonic()
         if load in ("frames", "boxes"):
             write_all(writer, directory / f"{load}-{rows}x{columns}.txt")
@@ -474,6 +568,10 @@ def workload(directory, environment):
         if profiled:
             with open(out.with_suffix(".perf"), "a") as file:
                 file.write(f"{load} {start:.6f} {end:.6f}\n")
+        if power and before:
+            joules, seconds, busy = power.stop()
+            with open(usage, "a") as file:
+                file.write(f"{load}\tpower\t{before[0]:.4f}\t{before[1]:.4f}\t{joules:.4f}\t{seconds:.4f}\t{'-' if busy is None else f'{busy:.1f}'}\n")
         cpu(usage, terminal, load, "end")
         time.sleep(1)
         note(f"{load} {start:.6f} {end:.6f} {written:.6f} {'answered' if answered is not None else 'unanswered'}")
@@ -494,15 +592,26 @@ def workload(directory, environment):
 
 def threads(path):
     """Per load, the milliseconds of CPU time and the switches per group of threads between its
-    start and its end, and the memory after it. A thread that ended meanwhile is missing; one
-    that began counts from nothing."""
+    start and its end, the memory after it, and what the graphics card did meanwhile: the
+    milliseconds its engines worked for the terminal, its power and the joules above idle. A
+    thread that ended meanwhile is missing; one that began counts from nothing."""
     if not path.exists():
-        return {}, {}, {}
-    taken, memory = {}, {}
+        return {}, {}, {}, {}
+    taken, memory, engines, card = {}, {}, {}, {}
     for line in path.read_text().splitlines():
         fields = line.split("\t")
         if fields[1] == "memory":
             memory[fields[0]] = tuple(int(field) for field in fields[2:])
+            continue
+        if fields[1] == "gpu":
+            engines[(fields[0], fields[2])] = int(fields[3])
+            continue
+        if fields[1] == "power":
+            idle_joules, idle_seconds, joules, seconds = (float(field) for field in fields[2:6])
+            # The joules above what the card took idle in the second before.
+            above = joules - idle_joules / idle_seconds * seconds if idle_seconds > 0 else None
+            card.setdefault(fields[0], {}).update(
+                watts=joules / seconds if seconds > 0 else None, above=above, busy=None if fields[6] == "-" else float(fields[6]))
             continue
         load, moment, tid, name, nanoseconds, voluntary, other = fields
         taken.setdefault((load, moment), {})[tid] = (name, int(nanoseconds), int(voluntary) + int(other))
@@ -519,7 +628,10 @@ def threads(path):
             groups[group] = groups.get(group, 0) + (nanoseconds - earlier) / 1e6
             switches[group] = switches.get(group, 0) + count - earlier_count
         used[load], woken[load] = groups, switches
-    return used, woken, memory
+    for (load, moment), nanoseconds in engines.items():
+        if moment == "end" and (load, "start") in engines:
+            card.setdefault(load, {})["gpu_ms"] = (nanoseconds - engines[(load, "start")]) / 1e6
+    return used, woken, memory, card
 
 
 def data(directory):
@@ -764,7 +876,7 @@ def measure(directory, name):
         if (directory / path).exists():
             sizes[load] = (directory / path).stat().st_size
     drawn, waits, loops, snapshots = [], [], set(), []
-    used, woken, memory = threads(directory / f"{name}.cpu")
+    used, woken, memory, card = threads(directory / f"{name}.cpu")
     log = directory / f"{name}.log"
     for line in log.read_text(errors="replace").splitlines():
         if found := frame(line):
@@ -809,6 +921,7 @@ def measure(directory, name):
             counted(snapshots, start, end + TAIL),
             backlog,
             answered,
+            card=card.get(load),
         )
     for load, keys in typing.items():
         if load in result:
@@ -1287,6 +1400,32 @@ def processor(runs, terminals):
         table(["terminal", "CPU ms", "% of a core", cost, "wakeups/s", busiest], [row for _, row in sorted(rows, key=lambda row: row[0])])
 
 
+def card(runs, terminals):
+    """Per load, what the graphics card did for each terminal that draws on it: the time its
+    engines worked for the terminal, its power and the joules above idle, how busy it was."""
+    rows = []
+    for load in LOADS:
+        for terminal in terminals:
+            done = [result[load].card for _, (_, result, _) in runs[terminal] if load in result and result[load].card]
+            if not done:
+                continue
+
+            def median(key, digits, done=done):
+                found = [value[key] for value in done if value.get(key) is not None]
+                return f"{statistics.median(found):.{digits}f}" if found else "-"
+
+            rows.append([load, terminal, median("gpu_ms", 1), median("watts", 1), median("above", 2), median("busy", 0)])
+    if not rows:
+        return
+    print("\nThe graphics card during each load, median of the runs: the milliseconds its engines worked")
+    print("for the terminal, from the fdinfo of its DRM devices (\"-\" where it draws through another")
+    print("process); and from the sensor of the card, its power in watts, the joules it took above what")
+    print("it took idle in the second before, and how busy it was in percent. The card also draws")
+    print("the desktop, and its sensor averages over about a second: loads of ten seconds, as idle and")
+    print("partial, say more than short ones.")
+    table(["load", "terminal", "GPU ms", "W", "J above idle", "busy %"], rows)
+
+
 def memory(runs, terminals):
     """How much memory each terminal held after each load: private, and at the end also its
     resident and proportional share."""
@@ -1539,6 +1678,7 @@ def report(directory, order, detail=False):
     asking(runs, terminals)
     answers(runs, taken, terminals)
     processor(runs, terminals)
+    card(runs, terminals)
     memory(runs, terminals)
     # Only Qt Quick reports its frames: those of Kudari.
     for terminal in terminals:
@@ -1610,7 +1750,7 @@ def scenario_run(directory, run):
             elif found := TIMING.match(line):
                 marks.setdefault(name, []).append((found[1], float(found[2])))
     for path in directory.glob(f"*-{run}.cpu"):
-        taken, switched, after = threads(path)
+        taken, switched, after, _ = threads(path)
         used.update(taken)
         woken.update(switched)
         memory.update(after)

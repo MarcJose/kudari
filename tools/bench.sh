@@ -21,8 +21,12 @@
 # by default, after one warm-up run that does not (--warmup). The report shows for each load
 # the median of the runs, its spread, a 95 % interval of the median, the fastest and the
 # slowest run and the runs far from the others; the CPU time of each terminal during the
-# load and its busiest threads, and the memory after each load; for Kudari, how often and
-# how fast Qt Quick drew meanwhile, and with --detail the times of its frames in detail. A
+# load and its busiest threads, and the memory after each load; for a terminal that draws on
+# the graphics card itself, the time the card worked for it, and where the card has a sensor,
+# its power and the joules it took above idle during each load, against a second before it;
+# for Kudari, how often and how fast Qt Quick drew meanwhile, and with --detail the times of
+# its frames in detail. The energy of the processor (RAPL) needs root and is not read; to see
+# it, run perf stat -a -e power/energy-pkg/ yourself around a load of your own. A
 # build with the feature stats (cargo build --release --features stats) adds what Kudari
 # counted during each load: wakeups, refreshes and paints a second, the waits for the lock of
 # a terminal and in the queue of the Qt thread, and the parts of a frame.
