@@ -1505,7 +1505,8 @@ impl qobject::TerminalItem {
                 fill(
                     painter.as_mut(),
                     &QRectF::new(0.0, 0.0, size.width(), size.height()),
-                    &qcolor(scheme.background),
+                    scheme.background,
+                    u8::MAX,
                 );
             }
             return;
@@ -1539,7 +1540,8 @@ impl qobject::TerminalItem {
             fill(
                 painter.as_mut(),
                 &QRectF::new(0.0, 0.0, size.width(), size.height()),
-                &qcolor(scheme.background),
+                scheme.background,
+                u8::MAX,
             );
         }
         let options = options.clone();
@@ -1912,7 +1914,7 @@ impl Glyphs {
                 if kde::rk_collect_glyphs(
                     Self::key_of(self.id, run.font),
                     font,
-                    &qcolor(run.color),
+                    argb(run.color, u8::MAX),
                     &run.glyphs,
                     &run.positions,
                 ) {
@@ -2101,12 +2103,21 @@ fn reference_drawing() -> bool {
 
 /// Fills a rectangle of the frame: on the graphics card where the frame is drawn there, else
 /// into the image.
-fn fill(mut painter: Pin<&mut qobject::QPainter>, rect: &QRectF, color: &QColor) {
-    if kde::rk_collect_fill(rect, color) {
+fn fill(mut painter: Pin<&mut qobject::QPainter>, rect: &QRectF, color: Rgb, alpha: u8) {
+    if kde::rk_collect_fill(rect, argb(color, alpha)) {
         stats::count(stats::Count::GpuFills);
     } else {
-        painter.as_mut().fill_rect(rect, color);
+        let mut color = qcolor(color);
+        if alpha < u8::MAX {
+            color.set_alpha_f(f32::from(alpha) / 255.0);
+        }
+        painter.as_mut().fill_rect(rect, &color);
     }
+}
+
+/// A color as `0xAARRGGBB`, as the graphics card takes it.
+fn argb(color: Rgb, alpha: u8) -> u32 {
+    u32::from_be_bytes([alpha, color.r, color.g, color.b])
 }
 
 /// Draws the paints of a frame or of the cursor with the fonts of the terminal.
@@ -2117,14 +2128,12 @@ fn draw(mut painter: Pin<&mut qobject::QPainter>, glyphs: &mut Glyphs, paints: &
                 // What comes before a fill stays under it.
                 glyphs.draw(painter.as_mut());
                 let rect = QRectF::new(rect.x, rect.y, rect.width, rect.height);
-                fill(painter.as_mut(), &rect, &qcolor(*color));
+                fill(painter.as_mut(), &rect, *color, u8::MAX);
             }
             Paint::Shade(rect, color, alpha) => {
                 glyphs.draw(painter.as_mut());
-                let mut color = qcolor(*color);
-                color.set_alpha_f(f32::from(*alpha) / 255.0);
                 let rect = QRectF::new(rect.x, rect.y, rect.width, rect.height);
-                fill(painter.as_mut(), &rect, &color);
+                fill(painter.as_mut(), &rect, *color, *alpha);
             }
             Paint::Text {
                 x,
@@ -2142,7 +2151,7 @@ fn draw(mut painter: Pin<&mut qobject::QPainter>, glyphs: &mut Glyphs, paints: &
                         glyphs.fonts.get(slot),
                         &text,
                         &position,
-                        &qcolor(*color),
+                        argb(*color, u8::MAX),
                     ) {
                         stats::count(stats::Count::GpuTexts);
                         continue;

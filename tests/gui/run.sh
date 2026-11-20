@@ -145,6 +145,19 @@ printf '\033[4msingle\033[0m \033[4:2mdouble\033[0m \033[4:3mcurly\033[0m \033[4
 printf '─│┼╭╮╯╰ ═║╬ ░▒▓█ ▀▄ 日本語 🙂 e\314\201 ñ \364\217\277\275\n'
 EOF
 
+# Every cell of the screen but the last line with a background, a line under and one through
+# its character, all in colors that differ from those of the cells beside it.
+cat > "$work/full" <<'EOF'
+columns=$(tput cols) lines=$(tput lines)
+python3 -c '
+import sys
+columns, lines = int(sys.argv[1]), int(sys.argv[2])
+for y in range(lines - 1):
+    cells = (f"\033[48;5;{(x + y) % 256};38;5;{(x * 7 + y * 3) % 256};4;9m{chr(33 + (x + y) % 90)}" for x in range(columns))
+    print("".join(cells) + "\033[0m")
+' "$columns" "$lines"
+EOF
+
 cat > "$work/data/applications/kudari-gui-test.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
@@ -841,12 +854,12 @@ check "a typed key paints only the lines that changed" 1 "$typed_lines"
 # The pixels of a terminal: drawn in runs of glyphs as they always are, against each text drawn
 # on its own; and what the window shows, from the image and the cursor in its scene graph,
 # against the same frame painted anew.
-paint_check() { # directory, what for, how far a color value of the window may differ (0)
+paint_check() { # directory, what for, how far a color value of the window may differ (0), what to show (the catalogue)
     # The line at a column goes over the text: a fill after glyphs.
     hook SetSetting VerticalLine 3; settle
     # Text that other text replaces in a frame of its own: a frame that paints only the lines
     # that changed must clear them first.
-    run "clear; sh $work/catalogue; printf 'WWWWWWWW'; sleep 0.3; printf '\\riiii\\n'"
+    run "clear; sh ${4:-$work/catalogue}; printf 'WWWWWWWW'; sleep 0.3; printf '\\riiii\\n'"
     settle
     hook PaintTerminals "$1/paint"
     settle
@@ -1465,6 +1478,12 @@ hook SetSetting Renderer gpu; settle
 hook ResetStats
 mkdir -p "$work/rhi/gpu"
 paint_check "$work/rhi/gpu" "through the RHI on the graphics card" 1
+# A screen with a background, a line under and one through the text of each cell, in colors
+# that change from cell to cell: more corners than the geometry has room for at first, which
+# grows within the frame; then the catalogue again, after which none of them may show.
+mkdir -p "$work/rhi/gpu-full" "$work/rhi/gpu-after"
+paint_check "$work/rhi/gpu-full" "through the RHI on the graphics card, a full screen" 1 "$work/full"
+paint_check "$work/rhi/gpu-after" "through the RHI on the graphics card, after a full screen" 1
 # A character of the catalogue that no font has goes there as a text of its own, as does any
 # that the fonts of a computer lack: no frame is painted instead.
 check "on the graphics card, the fills, glyphs and texts of a frame go there and not with the setting cpu" "0 0 0 0 yes" \
