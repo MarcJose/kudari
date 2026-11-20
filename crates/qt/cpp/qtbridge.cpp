@@ -9,6 +9,9 @@
 #include <QClipboard>
 #include <cmath>
 #include <cstring>
+#include <functional>
+#include <optional>
+#include <vector>
 #include <QCursor>
 #include <QDesktopServices>
 #include <QDir>
@@ -22,9 +25,11 @@
 #include <QFontMetricsF>
 #include <QGlyphRun>
 #include <QGuiApplication>
+#include <QHash>
 #include <QInputDialog>
 #include <QInputMethodEvent>
 #include <QKeySequence>
+#include <QMatrix4x4>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -36,12 +41,15 @@
 #include <QRegion>
 #include <QSGGeometryNode>
 #include <QSGImageNode>
-#include <QSGVertexColorMaterial>
+#include <QSGMaterial>
+#include <QSGMaterialShader>
+#include <QSGTransformNode>
 #include <QSGNode>
 #include <QSGTexture>
 #include <QTextDocument>
 #include <QTextLayout>
 #include <QTimer>
+#include <QTransform>
 #ifdef __GLIBC__
 #include <malloc.h>
 #endif
@@ -281,46 +289,6 @@ void RkImageItem::updateLines()
 // The bands that a frame of lines paints, in pixels of the device, while
 // `RkImageItem::updatePaintNode` collects them on its thread.
 static thread_local QRegion *t_bands = nullptr;
-// The fills of a frame drawn on the graphics card, while `RkImageItem::updatePaintNode`
-// collects them on its thread.
-static thread_local QList<RkFill> *t_fills = nullptr;
-
-bool rk_collect_fill(const QRectF &rect, const QColor &color)
-{
-    if (!t_fills) {
-        return false;
-    }
-    t_fills->append({rect, color});
-    return true;
-}
-
-// The fills as two triangles each, `offset` further, in colors with their alpha multiplied
-// in, as the material of vertex colors takes them.
-static void showFills(QSGGeometryNode *node, const QList<RkFill> &fills, const QPointF &offset)
-{
-    QSGGeometry *geometry = node->geometry();
-    geometry->allocate(int(fills.size() * 6));
-    QSGGeometry::ColoredPoint2D *vertex = geometry->vertexDataAsColoredPoint2D();
-    for (const RkFill &fill : fills) {
-        const QRectF rect = fill.rect.translated(offset);
-        const int alpha = fill.color.alpha();
-        const auto channel = [alpha](int value) { return uchar(value * alpha / 255); };
-        const uchar red = channel(fill.color.red());
-        const uchar green = channel(fill.color.green());
-        const uchar blue = channel(fill.color.blue());
-        const float left = float(rect.left());
-        const float top = float(rect.top());
-        const float right = float(rect.left() + rect.width());
-        const float bottom = float(rect.top() + rect.height());
-        const float corners[6][2] = {{left, top}, {right, top}, {left, bottom}, {right, top}, {right, bottom}, {left, bottom}};
-        for (const auto &corner : corners) {
-            vertex->set(corner[0], corner[1], red, green, blue, uchar(alpha));
-            ++vertex;
-        }
-    }
-    node->markDirty(QSGNode::DirtyGeometry);
-}
-
 void rk_painter_band(QPainter &painter, const QRectF &band, bool clear)
 {
     if (t_bands) {
@@ -545,6 +513,459 @@ void rk_test_paint_terminals(const QString &)
 }
 #endif
 
+// A frame on the graphics card: its fills and glyphs, in the order the frame paints them, as
+// two triangles each in one geometry with one material. A glyph takes its pixels from an
+// atlas that holds it once; a fill takes a white pixel of it.
+
+// A corner of a fill or glyph, in the logical pixels of the item. Its place in the atlas is in
+// pixels of the atlas while the frame is collected, then from 0 to 1.
+struct RkVertex {
+    float x;
+    float y;
+    float u;
+    float v;
+    // The color, with its alpha multiplied in.
+    uchar red;
+    uchar green;
+    uchar blue;
+    uchar alpha;
+    // 255 in the first where the colors come from the atlas, as for an emoji.
+    uchar kind[4];
+};
+
+static const QSGGeometry::AttributeSet &vertexAttributes()
+{
+    static const QSGGeometry::Attribute attributes[] = {
+        QSGGeometry::Attribute::createWithAttributeType(0, 2, QSGGeometry::FloatType, QSGGeometry::PositionAttribute),
+        QSGGeometry::Attribute::createWithAttributeType(1, 2, QSGGeometry::FloatType, QSGGeometry::TexCoordAttribute),
+        QSGGeometry::Attribute::createWithAttributeType(2, 4, QSGGeometry::UnsignedByteType, QSGGeometry::ColorAttribute),
+        QSGGeometry::Attribute::createWithAttributeType(3, 4, QSGGeometry::UnsignedByteType, QSGGeometry::UnknownAttribute),
+    };
+    static const QSGGeometry::AttributeSet set = {4, int(sizeof(RkVertex)), attributes};
+    return set;
+}
+
+// The glyphs of an item, each drawn once by `QPainter`, white or in its own colors, at its place
+// within a pixel of the device: wherever a frame shows it on that place, it covers the same
+// pixels as in a painted frame. Tiles go in rows by height; the atlas grows twice as large where
+// they do not fit, up to the largest texture of the device, and starts again when that is full.
+class RkGlyphAtlas
+{
+public:
+    struct Tile {
+        // In the atlas; empty for a glyph without pixels, as a space.
+        QRect rect;
+        // From the pixel of the device that holds the point of the glyph to the corner of the tile.
+        QPoint offset;
+        bool ownColors = false;
+    };
+
+    RkGlyphAtlas() { reset(1.0); }
+
+    // For a frame at `ratio` pixels of the device for each logical one, on a device whose
+    // textures can be `most` pixels wide.
+    void begin(qreal ratio, int most)
+    {
+        m_most = qMin(most, Most);
+        if (ratio != m_ratio || m_full) {
+            reset(ratio);
+        }
+    }
+
+    // The tile of `glyph` of `font` at `place`, the logical point where `rk_draw_glyphs` puts it,
+    // which lies in the pixel `pixel` of the device; nothing where the atlas is full: it starts
+    // empty with the next frame.
+    std::optional<Tile> tile(std::uint64_t key, const QRawFont &font, quint32 glyph, const QPointF &place, const QPoint &pixel)
+    {
+        const std::pair<std::uint64_t, quint64> name(key, (quint64(glyph) << 26) | steps(place, pixel));
+        const auto found = m_tiles.constFind(name);
+        if (found != m_tiles.constEnd()) {
+            return *found;
+        }
+        // Room for what reaches out of the box of the glyph, as antialiasing and the bitmaps of
+        // emoji can.
+        const QFontEngine *engine = QRawFontPrivate::get(font)->fontEngine;
+        const std::optional<Tile> made = make(font.boundingRect(glyph), font.pixelSize(), pixel, engine && engine->isColorFont(), [&](QPainter &painter) {
+            QGlyphRun run;
+            run.setRawFont(font);
+            run.setRawData(&glyph, &place, 1);
+            painter.drawGlyphRun(QPointF(), run);
+        });
+        if (made) {
+            m_tiles.insert(name, *made);
+        }
+        return made;
+    }
+
+    // The tile of `text` in `font`, as `QPainter::drawText` draws it from `place` on: a text
+    // whose glyphs no font has, or that `rk_shape` cannot tell. A tile with pixels of other
+    // colors than white keeps them, as an emoji does.
+    std::optional<Tile> textTile(std::uint64_t key, const QFont &font, const QString &text, const QPointF &place, const QPoint &pixel)
+    {
+        const QString name = QString::number(key) + QLatin1Char('/') + QString::number(steps(place, pixel)) + QLatin1Char('/') + text;
+        const auto found = m_texts.constFind(name);
+        if (found != m_texts.constEnd()) {
+            return *found;
+        }
+        // A program can show texts without end, also such that draw nothing and so take no
+        // room: their tiles are forgotten from some number on. Those in the atlas fill it, and
+        // it starts empty when full.
+        if (m_texts.size() >= MostTexts) {
+            m_texts.clear();
+        }
+        // The metrics on an image, as the painter of a frame resolves its font.
+        static const QImage device(1, 1, QImage::Format_ARGB32_Premultiplied);
+        const QFont resolved(font, &device);
+        const QFontMetricsF metrics(resolved, &device);
+        const QRectF box = metrics.boundingRect(text).united(QRectF(0, -metrics.ascent(), metrics.horizontalAdvance(text), metrics.height()));
+        const std::optional<Tile> made = make(box, metrics.height(), pixel, false, [&](QPainter &painter) {
+            painter.setFont(font);
+            painter.drawText(place, text);
+        });
+        if (made) {
+            m_texts.insert(name, *made);
+        }
+        return made;
+    }
+
+    // The middle of a white block, for fills.
+    static QPointF white() { return {1, 1}; }
+    QSize size() const { return m_image.size(); }
+    // The texture, with what changed since the last frame.
+    QSGTexture *texture()
+    {
+        if (m_whole || !m_fresh.isEmpty()) {
+            m_texture->take(m_image, true, m_fresh, m_whole);
+            m_fresh = QRect();
+            m_whole = false;
+        }
+        return m_texture.get();
+    }
+
+private:
+    static constexpr int Start = 512;
+    static constexpr int Most = 4096;
+    static constexpr qsizetype MostTexts = 16384;
+
+    void reset(qreal ratio)
+    {
+        m_ratio = ratio;
+        m_full = false;
+        m_image = QImage(Start, Start, QImage::Format_ARGB32_Premultiplied);
+        m_image.fill(Qt::transparent);
+        // A white block for fills, in the first row.
+        for (int y = 0; y < 2; ++y) {
+            auto line = reinterpret_cast<quint32 *>(m_image.scanLine(y));
+            line[0] = line[1] = 0xffffffff;
+        }
+        m_rows = {{0, 2, 3}};
+        m_bottom = 3;
+        m_tiles.clear();
+        m_texts.clear();
+        m_fresh = QRect();
+        m_whole = true;
+    }
+
+    // The part of a pixel that `place` lies at, in steps that tell apart those of `QPainter`.
+    quint64 steps(const QPointF &place, const QPoint &pixel) const
+    {
+        const QPointF part = place * m_ratio - QPointF(pixel);
+        const auto step = [](qreal value) { return quint64(qBound(0, qRound(value * 4096), 4096)); };
+        return (step(part.x()) << 13) | step(part.y());
+    }
+
+    // A tile of what `draw` draws in white, at the same scale as the painter of a frame and
+    // moved by whole pixels, so that it lands on the same part of a pixel as there. `box` is
+    // where it draws around its point, in logical pixels, `size` the size of its font.
+    template<typename Draw>
+    std::optional<Tile> make(const QRectF &box, qreal size, const QPoint &pixel, bool ownColors, Draw draw)
+    {
+        const qreal margin = 2 + std::ceil(size * m_ratio / 8);
+        const QRect room = QRectF(box.left() * m_ratio - margin,
+                                  box.top() * m_ratio - margin,
+                                  box.width() * m_ratio + 2 * margin,
+                                  box.height() * m_ratio + 2 * margin)
+                               .toAlignedRect()
+                               .intersected(QRect(-Most / 2, -Most / 2, Most, Most));
+        Tile tile;
+        tile.ownColors = ownColors;
+        if (room.isEmpty()) {
+            return tile;
+        }
+        QImage drawn(room.size(), QImage::Format_ARGB32_Premultiplied);
+        drawn.fill(Qt::transparent);
+        {
+            QPainter painter(&drawn);
+            painter.setTransform(QTransform(m_ratio, 0, 0, m_ratio, -qreal(pixel.x() + room.left()), -qreal(pixel.y() + room.top())));
+            painter.setPen(Qt::white);
+            draw(painter);
+        }
+        bool colored = false;
+        const QRect used = usedPart(drawn, colored);
+        if (used.isEmpty()) {
+            return tile;
+        }
+        tile.ownColors = ownColors || colored;
+        QPoint where;
+        if (!placeTile(used.size(), where)) {
+            m_full = true;
+            return std::nullopt;
+        }
+        for (int y = 0; y < used.height(); ++y) {
+            std::memcpy(m_image.scanLine(where.y() + y) + where.x() * 4,
+                        drawn.constScanLine(used.top() + y) + used.left() * 4,
+                        std::size_t(used.width()) * 4);
+        }
+        tile.rect = QRect(where, used.size());
+        tile.offset = room.topLeft() + used.topLeft();
+        m_fresh = m_fresh.united(tile.rect);
+        return tile;
+    }
+
+    // The smallest rectangle that holds every pixel the painter drew, and whether any of them
+    // has a color of its own rather than white.
+    static QRect usedPart(const QImage &image, bool &colored)
+    {
+        int left = image.width(), right = -1, top = image.height(), bottom = -1;
+        for (int y = 0; y < image.height(); ++y) {
+            const auto line = reinterpret_cast<const quint32 *>(image.constScanLine(y));
+            for (int x = 0; x < image.width(); ++x) {
+                const quint32 pixel = line[x];
+                if (pixel != 0) {
+                    left = qMin(left, x);
+                    right = qMax(right, x);
+                    top = qMin(top, y);
+                    bottom = y;
+                    colored = colored || qRed(pixel) != qGreen(pixel) || qGreen(pixel) != qBlue(pixel);
+                }
+            }
+        }
+        return right < 0 ? QRect() : QRect(QPoint(left, top), QPoint(right, bottom));
+    }
+
+    // A place for a tile of `size`, with a pixel between tiles; grows the atlas where needed.
+    bool placeTile(const QSize &size, QPoint &where)
+    {
+        for (;;) {
+            for (Row &row : m_rows) {
+                // A row of a height that the tile does not waste much of.
+                if (size.height() <= row.height && size.height() * 5 >= row.height * 4 && row.x + size.width() <= m_image.width()) {
+                    where = QPoint(row.x, row.y);
+                    row.x += size.width() + 1;
+                    return true;
+                }
+            }
+            if (size.width() <= m_image.width() && m_bottom + size.height() <= m_image.height()) {
+                m_rows.append({m_bottom, size.height(), size.width() + 1});
+                where = QPoint(0, m_bottom);
+                m_bottom += size.height() + 1;
+                return true;
+            }
+            if (m_image.width() * 2 > m_most) {
+                return false;
+            }
+            QImage larger(m_image.size() * 2, QImage::Format_ARGB32_Premultiplied);
+            larger.fill(Qt::transparent);
+            for (int y = 0; y < m_image.height(); ++y) {
+                std::memcpy(larger.scanLine(y), m_image.constScanLine(y), std::size_t(m_image.bytesPerLine()));
+            }
+            m_image = larger;
+            m_whole = true;
+        }
+    }
+
+    struct Row {
+        int y;
+        int height;
+        // Where the next tile of the row goes.
+        int x;
+    };
+
+    std::unique_ptr<RkFrameTexture> m_texture = std::make_unique<RkFrameTexture>();
+    QImage m_image;
+    QList<Row> m_rows;
+    int m_bottom = 0;
+    // By the key of the font, the glyph and its part of a pixel.
+    QHash<std::pair<std::uint64_t, quint64>, Tile> m_tiles;
+    // By the key of the font, the part of a pixel and the text.
+    QHash<QString, Tile> m_texts;
+    QRect m_fresh;
+    bool m_whole = true;
+    bool m_full = false;
+    qreal m_ratio = 1.0;
+    int m_most = Most;
+};
+
+class RkGlyphShader : public QSGMaterialShader
+{
+public:
+    RkGlyphShader()
+    {
+        setShaderFileName(VertexStage, QStringLiteral(":/kudari/shaders/glyph.vert.qsb"));
+        setShaderFileName(FragmentStage, QStringLiteral(":/kudari/shaders/glyph.frag.qsb"));
+    }
+
+    bool updateUniformData(RenderState &state, QSGMaterial *, QSGMaterial *) override
+    {
+        QByteArray *data = state.uniformData();
+        bool changed = false;
+        if (state.isMatrixDirty()) {
+            const QMatrix4x4 matrix = state.combinedMatrix();
+            std::memcpy(data->data(), matrix.constData(), 64);
+            changed = true;
+        }
+        if (state.isOpacityDirty()) {
+            const float opacity = state.opacity();
+            std::memcpy(data->data() + 64, &opacity, 4);
+            changed = true;
+        }
+        return changed;
+    }
+
+    void updateSampledImage(RenderState &state, int binding, QSGTexture **texture, QSGMaterial *material, QSGMaterial *) override;
+};
+
+class RkGlyphMaterial : public QSGMaterial
+{
+public:
+    RkGlyphMaterial() { setFlag(Blending); }
+
+    QSGMaterialType *type() const override
+    {
+        static QSGMaterialType type;
+        return &type;
+    }
+    QSGMaterialShader *createShader(QSGRendererInterface::RenderMode) const override { return new RkGlyphShader; }
+    int compare(const QSGMaterial *other) const override
+    {
+        return this == other ? 0 : (std::less<const QSGMaterial *>()(this, other) ? -1 : 1);
+    }
+
+    RkGlyphAtlas atlas;
+};
+
+void RkGlyphShader::updateSampledImage(RenderState &state, int binding, QSGTexture **texture, QSGMaterial *material, QSGMaterial *)
+{
+    if (binding != 1) {
+        return;
+    }
+    QSGTexture *atlas = static_cast<RkGlyphMaterial *>(material)->atlas.texture();
+    atlas->setFiltering(QSGTexture::Nearest);
+    atlas->commitTextureOperations(state.rhi(), state.resourceUpdateBatch());
+    *texture = atlas;
+}
+
+// What a frame on the graphics card collects while it paints on the render thread.
+struct RkGpuFrame {
+    RkGlyphAtlas *atlas;
+    qreal ratio;
+    std::vector<RkVertex> vertices;
+    // Something of the frame needs the painter, or did not fit in the atlas: it is painted.
+    bool failed = false;
+};
+static thread_local RkGpuFrame *t_gpu = nullptr;
+
+// Two triangles over `place`, with `source` of the atlas.
+static void addQuad(RkGpuFrame &frame, const QRectF &place, const QRectF &source, const QColor &color, bool ownColors)
+{
+    const int alpha = color.alpha();
+    const auto channel = [alpha](int value) { return uchar(value * alpha / 255); };
+    RkVertex corner = {0, 0, 0, 0, channel(color.red()), channel(color.green()), channel(color.blue()), uchar(alpha), {uchar(ownColors ? 255 : 0), 0, 0, 0}};
+    const float left = float(place.left());
+    const float top = float(place.top());
+    const float right = float(place.left() + place.width());
+    const float bottom = float(place.top() + place.height());
+    const float sourceLeft = float(source.left());
+    const float sourceTop = float(source.top());
+    const float sourceRight = float(source.left() + source.width());
+    const float sourceBottom = float(source.top() + source.height());
+    const float corners[6][4] = {{left, top, sourceLeft, sourceTop},
+                                 {right, top, sourceRight, sourceTop},
+                                 {left, bottom, sourceLeft, sourceBottom},
+                                 {right, top, sourceRight, sourceTop},
+                                 {right, bottom, sourceRight, sourceBottom},
+                                 {left, bottom, sourceLeft, sourceBottom}};
+    for (const auto &point : corners) {
+        corner.x = point[0];
+        corner.y = point[1];
+        corner.u = point[2];
+        corner.v = point[3];
+        frame.vertices.push_back(corner);
+    }
+}
+
+bool rk_collect_fill(const QRectF &rect, const QColor &color)
+{
+    if (!t_gpu) {
+        return false;
+    }
+    addQuad(*t_gpu, rect, QRectF(RkGlyphAtlas::white(), QSizeF()), color, false);
+    return true;
+}
+
+bool rk_collect_glyphs(std::uint64_t key,
+                       const QRawFont &font,
+                       const QColor &color,
+                       rust::Slice<const std::uint32_t> glyphs,
+                       rust::Slice<const QPointF> positions)
+{
+    if (!t_gpu) {
+        return false;
+    }
+    RkGpuFrame &frame = *t_gpu;
+    const std::size_t count = qMin(glyphs.size(), positions.size());
+    for (std::size_t i = 0; i < count && !frame.failed; ++i) {
+        // As `rk_draw_glyphs` places it, and the pixel of the device it lands in.
+        const QPointF place(std::floor(positions[i].x() * 64) / 64, std::floor(positions[i].y() * 64) / 64);
+        const QPoint pixel(int(std::floor(place.x() * frame.ratio)), int(std::floor(place.y() * frame.ratio)));
+        const std::optional<RkGlyphAtlas::Tile> tile = frame.atlas->tile(key, font, glyphs[i], place, pixel);
+        if (!tile) {
+            frame.failed = true;
+        } else if (!tile->rect.isEmpty()) {
+            const QPoint corner = pixel + tile->offset;
+            const QRectF shown(QPointF(corner) / frame.ratio, QSizeF(tile->rect.size()) / frame.ratio);
+            addQuad(frame, shown, QRectF(tile->rect), color, tile->ownColors);
+        }
+    }
+    return true;
+}
+
+bool rk_collect_text(std::uint64_t key, const QFont &font, const QString &text, const QPointF &position, const QColor &color)
+{
+    if (!t_gpu) {
+        return false;
+    }
+    RkGpuFrame &frame = *t_gpu;
+    if (frame.failed) {
+        return true;
+    }
+    const QPoint pixel(int(std::floor(position.x() * frame.ratio)), int(std::floor(position.y() * frame.ratio)));
+    const std::optional<RkGlyphAtlas::Tile> tile = frame.atlas->textTile(key, font, text, position, pixel);
+    if (!tile) {
+        frame.failed = true;
+    } else if (!tile->rect.isEmpty()) {
+        const QPoint corner = pixel + tile->offset;
+        const QRectF shown(QPointF(corner) / frame.ratio, QSizeF(tile->rect.size()) / frame.ratio);
+        addQuad(frame, shown, QRectF(tile->rect), color, tile->ownColors);
+    }
+    return true;
+}
+
+// Gives `node` the geometry of the frame.
+static void showGpuFrame(QSGGeometryNode *node, RkGpuFrame &frame)
+{
+    const QSize size = frame.atlas->size();
+    QSGGeometry *geometry = node->geometry();
+    geometry->allocate(int(frame.vertices.size()));
+    auto vertex = static_cast<RkVertex *>(geometry->vertexData());
+    for (RkVertex &corner : frame.vertices) {
+        corner.u /= float(size.width());
+        corner.v /= float(size.height());
+        *vertex++ = corner;
+    }
+    node->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+}
+
 QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
 {
     QQuickWindow *shown = window();
@@ -557,28 +978,34 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
         m_cursor = QImage();
         delete node;
         m_contentDirty = true;
+        m_shownOnGpu = false;
         return nullptr;
     }
-    // The fills of a frame on the graphics card, the frame over them, then the cursor over it,
+    // A frame on the graphics card, or the image of a painted one; then the cursor over it,
     // which fades through an opacity of its own.
-    QSGGeometryNode *fills = nullptr;
+    QSGTransformNode *move = nullptr;
+    QSGGeometryNode *drawn = nullptr;
     QSGImageNode *content = nullptr;
     QSGOpacityNode *fade = nullptr;
     QSGImageNode *cursor = nullptr;
     if (node) {
-        fills = static_cast<QSGGeometryNode *>(node->firstChild());
-        content = static_cast<QSGImageNode *>(fills->nextSibling());
+        move = static_cast<QSGTransformNode *>(node->firstChild());
+        drawn = static_cast<QSGGeometryNode *>(move->firstChild());
+        content = static_cast<QSGImageNode *>(move->nextSibling());
         fade = static_cast<QSGOpacityNode *>(content->nextSibling());
         cursor = static_cast<QSGImageNode *>(fade->firstChild());
     } else {
         node = new QSGNode;
-        fills = new QSGGeometryNode;
-        fills->setGeometry(new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), 0));
-        fills->geometry()->setDrawingMode(QSGGeometry::DrawTriangles);
-        fills->setFlag(QSGNode::OwnsGeometry);
-        fills->setMaterial(new QSGVertexColorMaterial);
-        fills->setFlag(QSGNode::OwnsMaterial);
-        node->appendChildNode(fills);
+        move = new QSGTransformNode;
+        node->appendChildNode(move);
+        drawn = new QSGGeometryNode;
+        drawn->setGeometry(new QSGGeometry(vertexAttributes(), 0));
+        drawn->geometry()->setDrawingMode(QSGGeometry::DrawTriangles);
+        drawn->geometry()->setVertexDataPattern(QSGGeometry::StreamPattern);
+        drawn->setFlag(QSGNode::OwnsGeometry);
+        drawn->setMaterial(new RkGlyphMaterial);
+        drawn->setFlag(QSGNode::OwnsMaterial);
+        move->appendChildNode(drawn);
         content = shown->createImageNode();
         content->setOwnsTexture(true);
         node->appendChildNode(content);
@@ -588,6 +1015,7 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
         cursor->setOwnsTexture(true);
         fade->appendChildNode(cursor);
         m_contentDirty = true;
+        m_shownOnGpu = false;
     }
     // The images lie on whole pixels of the device. At a fractional scale, as 125 %, the item can
     // start or end between two of them; its texture would then be stretched or sampled between
@@ -595,8 +1023,8 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
     const QPointF corner = mapToScene(QPointF());
     const QPointF snap(qRound(corner.x() * ratio) / ratio - corner.x(), qRound(corner.y() * ratio) / ratio - corner.y());
     const QRectF place(snap, QSizeF(size) / ratio);
-    // On the graphics card, each frame is whole: its fills are geometry there, so the image
-    // holds only what lies over them.
+    // On the graphics card, each frame is whole: it costs little there, and the image that
+    // would hold the frame before is not kept.
     const bool gpu = shown->rhi() && drawsOnGpu();
     if (gpu != m_gpu || (gpu && m_linesDirty)) {
         m_contentDirty = true;
@@ -622,31 +1050,71 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
         }
     }
     m_linesDirty = false;
-    const bool alone = !m_contentDirty && m_image.size() == size;
+    const bool alone = !m_contentDirty && m_shownSize == size;
     if (!alone) {
-        if (m_image.size() != size) {
-            m_image = QImage(size, QImage::Format_ARGB32_Premultiplied);
+        bool onGpu = false;
+        if (gpu) {
+            auto material = static_cast<RkGlyphMaterial *>(drawn->material());
+            material->atlas.begin(ratio, shown->rhi()->resourceLimit(QRhi::TextureSizeMax));
+            RkGpuFrame frame{&material->atlas, ratio, {}};
+            frame.vertices.reserve(std::size_t(drawn->geometry()->vertexCount()));
+            // The fonts of the frame resolve against the density of pixels of what the
+            // painter paints on, here an image that takes nothing.
+            if (m_probe.isNull() || m_probe.devicePixelRatio() != ratio) {
+                m_probe = QImage(1, 1, QImage::Format_ARGB32_Premultiplied);
+                m_probe.setDevicePixelRatio(ratio);
+            }
+            {
+                QPainter painter(&m_probe);
+                t_gpu = &frame;
+                paint(&painter);
+                t_gpu = nullptr;
+            }
+            if (!frame.failed) {
+                showGpuFrame(drawn, frame);
+                onGpu = true;
+            } else {
+                gpuFallback();
+            }
         }
-        m_image.setDevicePixelRatio(ratio);
-        // An opaque terminal paints its background over all of it first, in the image or, on
-        // the graphics card, as a fill under it.
-        if (!m_opaque || gpu) {
-            m_image.fill(Qt::transparent);
+        if (onGpu) {
+            if (!m_shownOnGpu) {
+                // Neither the image nor its texture is needed while frames are drawn there.
+                m_image = QImage();
+                QImage nothing(1, 1, QImage::Format_ARGB32_Premultiplied);
+                nothing.fill(Qt::transparent);
+                showFrame(shown, content, nothing, false, QRectF(), QSize(1, 1), false, QRegion(), true);
+            }
+        } else {
+            if (m_image.size() != size) {
+                m_image = QImage(size, QImage::Format_ARGB32_Premultiplied);
+            }
+            m_image.setDevicePixelRatio(ratio);
+            // An opaque terminal paints its background over all of it first.
+            if (!m_opaque) {
+                m_image.fill(Qt::transparent);
+            }
+            {
+                QPainter painter(&m_image);
+                paint(&painter);
+            }
+            showFrame(shown, content, m_image, m_opaque, place, size, smooth(), QRegion(), true);
+            if (drawn->geometry()->vertexCount() > 0) {
+                drawn->geometry()->allocate(0);
+                drawn->markDirty(QSGNode::DirtyGeometry);
+            }
         }
-        m_fills.clear();
-        {
-            QPainter painter(&m_image);
-            t_fills = gpu ? &m_fills : nullptr;
-            paint(&painter);
-            t_fills = nullptr;
-        }
-        showFills(fills, m_fills, snap);
-        showFrame(shown, content, m_image, m_opaque && !gpu, place, size, smooth(), QRegion(), true);
+        m_shownOnGpu = onGpu;
+        m_shownSize = size;
         m_contentDirty = false;
-    } else if (content->rect() != place) {
-        // The item moved by a part of a pixel, with the same image and fills.
+    } else if (!m_shownOnGpu && content->rect() != place) {
+        // The item moved by a part of a pixel, with the same image.
         content->setRect(place);
-        showFills(fills, m_fills, snap);
+    }
+    QMatrix4x4 shift;
+    shift.translate(float(snap.x()), float(snap.y()));
+    if (move->matrix() != shift) {
+        move->setMatrix(shift);
     }
     const QSize room = (cursorRoom() * ratio).toSize().expandedTo(QSize(1, 1));
     // A new image, or a new node, has to be painted; otherwise the cursor may keep its texture.
@@ -684,6 +1152,10 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
 // `QPainter::drawText` does for every call.
 void rk_draw_text(QPainter &painter, const QPointF &position, const QString &text)
 {
+    // Only the painter draws this: a frame on the graphics card is painted instead.
+    if (t_gpu) {
+        t_gpu->failed = true;
+    }
     painter.drawText(position, text);
 }
 

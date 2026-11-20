@@ -84,9 +84,15 @@ pub mod ffi {
         fn rk_painter_band(painter: Pin<&mut QPainter>, band: &QRectF, clear: bool);
         /// Lets the painter draw everywhere again.
         fn rk_painter_unclip(painter: Pin<&mut QPainter>);
-        /// Takes a fill for the graphics card while a frame is drawn there, under the image of
-        /// its text; false otherwise, and the painter has to fill it.
+        /// Takes a fill for the graphics card while a frame is drawn there; false otherwise,
+        /// and the painter has to fill it.
         fn rk_collect_fill(rect: &QRectF, color: &QColor) -> bool;
+        /// Takes a text for the graphics card while a frame is drawn there, as `rk_draw_text`
+        /// draws it; false otherwise. `key` tells the font apart from the others of the item.
+        fn rk_collect_text(key: u64, font: &QFont, text: &QString, position: &QPointF, color: &QColor) -> bool;
+        /// Takes glyphs for the graphics card while a frame is drawn there, as `rk_draw_glyphs`
+        /// draws them; false otherwise. `key` tells the font apart from the others of the item.
+        fn rk_collect_glyphs(key: u64, font: &QRawFont, color: &QColor, glyphs: &[u32], positions: &[QPointF]) -> bool;
         fn rk_font_family(font: &mut QFont, family: &QString);
         /// A color from `#rgb` notation or a name as `#rrggbb`, or an empty string.
         fn rk_color_from_text(text: &QString) -> QString;

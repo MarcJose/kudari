@@ -53,6 +53,7 @@ fn main() {
         "qml/WindowSettingsPage.qml",
     ]);
     let builder = CxxQtBuilder::new_qml_module(module)
+        .qrc("shaders/kudari_qt_shaders.qrc")
         .files(["src/controller.rs", "src/qt.rs", "src/terminal_item.rs"])
         .qt_module("Quick")
         .qt_module("QuickControls2")

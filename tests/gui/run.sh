@@ -8,7 +8,7 @@
 #   tests/gui/run.sh [path/to/kudari]
 #
 # Needs kwin_wayland, qdbus6, wayland-scanner, a C compiler and dbus-run-session. With
-# KUDARI_GUI_KEEP set to an absolute directory, the images of the pixel checks stay there
+# KUDARI_GUI_KEEP set to an absolute directory, the images of the pixel checks and the logs stay there
 # after the test, as for a check that fails only in the CI.
 set -u
 
@@ -61,7 +61,7 @@ finish() {
     kill -9 "$kudari" "$kwin" 2>/dev/null
     if [ -n "${KUDARI_GUI_KEEP:-}" ]; then
         mkdir -p "$KUDARI_GUI_KEEP"
-        (cd "$work" && find . -name '*.png' -exec cp --parents {} "$KUDARI_GUI_KEEP/" \;)
+        (cd "$work" && find . \( -name '*.png' -o -name '*.log' \) -exec cp --parents {} "$KUDARI_GUI_KEEP/" \;)
     fi
     rm -rf "$work"
 }
@@ -142,7 +142,7 @@ printf '__________ WWWWWWWWWW\n'
 printf '\033[31mred\033[42mgreen\033[0m \033[38;5;208m208\033[48;5;19mon19\033[0m \033[38;2;200;120;40mtrue\033[0m\n'
 printf '\033[1mbold\033[0m \033[3mitalic\033[0m \033[2mdim\033[0m \033[7minverse\033[0m \033[9mstrike\033[0m\n'
 printf '\033[4msingle\033[0m \033[4:2mdouble\033[0m \033[4:3mcurly\033[0m \033[4:4mdotted\033[0m \033[4:5mdashed\033[0m\n'
-printf '─│┼╭╮╯╰ ═║╬ ░▒▓█ ▀▄ 日本語 🙂 e\314\201 ñ\n'
+printf '─│┼╭╮╯╰ ═║╬ ░▒▓█ ▀▄ 日本語 🙂 e\314\201 ñ \364\217\277\275\n'
 EOF
 
 cat > "$work/data/applications/kudari-gui-test.desktop" <<DESKTOP
@@ -1453,18 +1453,22 @@ window toggleWindowState; sleep 3
 window toggleWindowState; sleep 1.5; settle
 check "with the setting at never, a hidden window keeps its graphics" 2 \
     "$(grep -c 'Creating QRhi' "$work/rhi.log")"
-# On the graphics card, the fills of a frame are geometry under an image of its text: the
-# window shows what the same frame painted whole shows, but for blending the text onto them,
-# which can differ by a step of a color value, and its fills went there.
-gpu_fills() { hook Stats | python3 -c 'import json, sys; print(json.load(sys.stdin).get("gpu_fills", "none"))'; }
+# On the graphics card, the fills and glyphs of a frame are geometry, the glyphs from an atlas:
+# the window shows what the same frame painted whole shows, but for blending, which can differ
+# by a step of a color value, and its fills and glyphs went there.
+gpu_drawn() {
+    hook Stats | python3 -c 'import json, sys; s = json.load(sys.stdin); print(*(s.get("gpu_" + n, "none") for n in ("fills", "runs", "texts", "fallbacks")))'
+}
 hook ResetStats; run "clear; sh $work/catalogue"
-on_cpu=$(gpu_fills)
+on_cpu=$(gpu_drawn)
 hook SetSetting Renderer gpu; settle
 hook ResetStats
 mkdir -p "$work/rhi/gpu"
 paint_check "$work/rhi/gpu" "through the RHI on the graphics card" 1
-check "on the graphics card, the fills of a frame go there and not with the setting cpu" "0 yes" \
-    "$on_cpu $(fills=$(gpu_fills); [ "$fills" -gt 0 ] 2>/dev/null && echo yes || echo "no: $fills")"
+# A character of the catalogue that no font has goes there as a text of its own, as does any
+# that the fonts of a computer lack: no frame is painted instead.
+check "on the graphics card, the fills, glyphs and texts of a frame go there and not with the setting cpu" "0 0 0 0 yes" \
+    "$on_cpu $(gpu_drawn | awk '{ print ($1 > 0 && $2 > 0 && $3 > 0 && $4 == 0) ? "yes" : "no: " $0 }')"
 hook Trigger file_quit
 wait_quit "$kudari"
 

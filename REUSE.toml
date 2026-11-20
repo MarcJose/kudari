@@ -10,6 +10,12 @@ path = ["data/kudari.notifyrc", "data/io.github.marcjose.kudari.desktop.in", "da
 SPDX-FileCopyrightText = "2026 Marc Jose <marc@hahn-jose.de>"
 SPDX-License-Identifier = "MIT"
 
+# Baked from the shaders next to them by tools/shaders.sh.
+[[annotations]]
+path = ["crates/qt/shaders/*.qsb"]
+SPDX-FileCopyrightText = "2026 Marc Jose <marc@hahn-jose.de>"
+SPDX-License-Identifier = "MIT"
+
 # Rendered from data/icons/io.github.marcjose.kudari.svg by tools/icons.py.
 [[annotations]]
 path = ["crates/windows/icons/**", "crates/windows/package/Assets/**"]

@@ -29,6 +29,14 @@ pub enum Count {
     Resizes,
     /// A fill of a frame went to the graphics card as geometry instead of into the image.
     GpuFills,
+    /// A run of glyphs of one font and color went to the graphics card instead of into the
+    /// image.
+    GpuRuns,
+    /// A text that the painter has to draw went to the graphics card as a tile of its own.
+    GpuTexts,
+    /// A frame for the graphics card had something that only the painter draws, or did not
+    /// fit in the atlas, and was painted instead.
+    GpuFallbacks,
 }
 
 /// What is timed.
@@ -155,7 +163,7 @@ mod counting {
         }
     }
 
-    pub static COUNTS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
+    pub static COUNTS: [AtomicU64; 9] = [const { AtomicU64::new(0) }; 9];
     pub static TIMES: [Histogram; 10] = [const { Histogram::new() }; 10];
     /// Paints for each terminal, by its id.
     pub static PAINTS: Mutex<BTreeMap<i32, u64>> = Mutex::new(BTreeMap::new());
@@ -174,6 +182,9 @@ mod counting {
             Count::LinePaints => 3,
             Count::Resizes => 4,
             Count::GpuFills => 5,
+            Count::GpuRuns => 6,
+            Count::GpuFallbacks => 7,
+            Count::GpuTexts => 8,
         }
     }
 
@@ -452,6 +463,9 @@ pub fn json() -> String {
             "line_paints": count(Count::LinePaints),
             "resizes": count(Count::Resizes),
             "gpu_fills": count(Count::GpuFills),
+            "gpu_runs": count(Count::GpuRuns),
+            "gpu_fallbacks": count(Count::GpuFallbacks),
+            "gpu_texts": count(Count::GpuTexts),
             "paints": paints,
             "queued": counting::QUEUED.load(Ordering::Relaxed),
             "queued_max": counting::QUEUED_MOST.load(Ordering::Relaxed),
