@@ -49,18 +49,18 @@ void rk_draw_badge(QPainter &painter,
                    const QFont &terminalFont,
                    int cellHeight);
 void rk_font_rendering(QFont &font, bool antiAlias, bool hinting);
-/// Takes a fill while a frame is drawn on the graphics card; false otherwise, and the painter
-/// has to fill it.
-bool rk_collect_fill(const QRectF &rect, const QColor &color);
+/// Takes a fill while a frame is drawn on the graphics card, in a color as `0xAARRGGBB`, as the
+/// colors of the others; false otherwise, and the painter has to fill it.
+bool rk_collect_fill(const QRectF &rect, std::uint32_t argb);
 /// Takes glyphs while a frame is drawn on the graphics card, as `rk_draw_glyphs` draws them;
 /// false otherwise, and the painter has to draw them. `key` tells the font apart from the
 /// other fonts the item draws with.
 /// Takes a text while a frame is drawn on the graphics card, as `QPainter::drawText` draws it
 /// from a point on the baseline; false otherwise.
-bool rk_collect_text(std::uint64_t key, const QFont &font, const QString &text, const QPointF &position, const QColor &color);
+bool rk_collect_text(std::uint64_t key, const QFont &font, const QString &text, const QPointF &position, std::uint32_t argb);
 bool rk_collect_glyphs(std::uint64_t key,
                        const QRawFont &font,
-                       const QColor &color,
+                       std::uint32_t argb,
                        rust::Slice<const std::uint32_t> glyphs,
                        rust::Slice<const QPointF> positions);
 

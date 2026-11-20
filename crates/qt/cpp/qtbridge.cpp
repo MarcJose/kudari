@@ -828,7 +828,9 @@ public:
 class RkGlyphMaterial : public QSGMaterial
 {
 public:
-    RkGlyphMaterial() { setFlag(Blending); }
+    // Drawn as it is, not merged with other nodes: Qt would copy and move each corner on the
+    // processor first.
+    RkGlyphMaterial() { setFlag(Blending | RequiresFullMatrix); }
 
     QSGMaterialType *type() const override
     {
@@ -842,6 +844,8 @@ public:
     }
 
     RkGlyphAtlas atlas;
+    // How many corners of the geometry the last frame wrote.
+    std::size_t shown = 0;
 };
 
 void RkGlyphShader::updateSampledImage(RenderState &state, int binding, QSGTexture **texture, QSGMaterial *material, QSGMaterial *)
@@ -855,57 +859,135 @@ void RkGlyphShader::updateSampledImage(RenderState &state, int binding, QSGTextu
     *texture = atlas;
 }
 
-// What a frame on the graphics card collects while it paints on the render thread.
+// What a frame on the graphics card collects while it paints on the render thread: the
+// corners of its fills and glyphs, straight into the geometry of the node. The geometry grows
+// and shrinks in large steps, so that it keeps its memory from frame to frame; corners beyond
+// the frame are all zero, and their triangles cover nothing.
 struct RkGpuFrame {
     RkGlyphAtlas *atlas;
     qreal ratio;
-    std::vector<RkVertex> vertices;
-    // Something of the frame needs the painter, or did not fit in the atlas: it is painted.
+    QSGGeometry *geometry;
+    // The corners the frame wrote, and up to where those of the geometry may not be zero.
+    std::size_t used = 0;
+    std::size_t written = 0;
+    // The size of the atlas that the places in it are a part of.
+    QSize atlasSize;
+    // Something of the frame did not fit in the atlas: it is painted.
     bool failed = false;
 };
 static thread_local RkGpuFrame *t_gpu = nullptr;
 
-// Two triangles over `place`, with `source` of the atlas.
-static void addQuad(RkGpuFrame &frame, const QRectF &place, const QRectF &source, const QColor &color, bool ownColors)
+// A color as the vertices take it: with its alpha multiplied in, and whether the colors come
+// from the atlas.
+struct RkVertexColor {
+    uchar red;
+    uchar green;
+    uchar blue;
+    uchar alpha;
+    uchar ownColors;
+};
+
+static RkVertexColor vertexColor(QRgb rgba, bool ownColors)
 {
-    const int alpha = color.alpha();
+    const int alpha = qAlpha(rgba);
     const auto channel = [alpha](int value) { return uchar(value * alpha / 255); };
-    RkVertex corner = {0, 0, 0, 0, channel(color.red()), channel(color.green()), channel(color.blue()), uchar(alpha), {uchar(ownColors ? 255 : 0), 0, 0, 0}};
+    return {channel(qRed(rgba)), channel(qGreen(rgba)), channel(qBlue(rgba)), uchar(alpha), uchar(ownColors ? 255 : 0)};
+}
+
+// Two triangles over `place`, in logical pixels, with `source` of the atlas, in its pixels.
+// The steps in which the geometry grows and shrinks, in corners. The GUI test takes small
+// ones, and each frame starts with the least room, so that it grows it again and again and
+// every pixel check sees that.
+#ifdef RK_TEST_HOOKS
+static constexpr std::size_t GeometryStep = 6 * 64;
+#else
+static constexpr std::size_t GeometryStep = 6 * 8192;
+#endif
+
+// The geometry with room for `count` corners, those of the frame so far kept.
+static void makeRoom(RkGpuFrame &frame, std::size_t count)
+{
+    const std::vector<RkVertex> kept(static_cast<const RkVertex *>(frame.geometry->vertexData()),
+                                     static_cast<const RkVertex *>(frame.geometry->vertexData()) + frame.used);
+    const std::size_t room = (count / GeometryStep + 1) * GeometryStep;
+    frame.geometry->allocate(int(room));
+    std::memcpy(frame.geometry->vertexData(), kept.data(), kept.size() * sizeof(RkVertex));
+    // New memory holds anything.
+    frame.written = room;
+}
+
+static void addQuad(RkGpuFrame &frame, const QRectF &place, const QRectF &source, RkVertexColor color)
+{
+    if (frame.used + 6 > std::size_t(frame.geometry->vertexCount())) {
+        makeRoom(frame, frame.used + 6);
+    }
+    // The atlas is a power of two wide and high: these are exact.
+    const float across = 1.0f / float(frame.atlasSize.width());
+    const float down = 1.0f / float(frame.atlasSize.height());
     const float left = float(place.left());
     const float top = float(place.top());
     const float right = float(place.left() + place.width());
     const float bottom = float(place.top() + place.height());
-    const float sourceLeft = float(source.left());
-    const float sourceTop = float(source.top());
-    const float sourceRight = float(source.left() + source.width());
-    const float sourceBottom = float(source.top() + source.height());
-    const float corners[6][4] = {{left, top, sourceLeft, sourceTop},
-                                 {right, top, sourceRight, sourceTop},
-                                 {left, bottom, sourceLeft, sourceBottom},
-                                 {right, top, sourceRight, sourceTop},
-                                 {right, bottom, sourceRight, sourceBottom},
-                                 {left, bottom, sourceLeft, sourceBottom}};
-    for (const auto &point : corners) {
-        corner.x = point[0];
-        corner.y = point[1];
-        corner.u = point[2];
-        corner.v = point[3];
-        frame.vertices.push_back(corner);
-    }
+    const float sourceLeft = float(source.left()) * across;
+    const float sourceTop = float(source.top()) * down;
+    const float sourceRight = float(source.left() + source.width()) * across;
+    const float sourceBottom = float(source.top() + source.height()) * down;
+    RkVertex *vertex = static_cast<RkVertex *>(frame.geometry->vertexData()) + frame.used;
+    const auto set = [&color](RkVertex &corner, float x, float y, float u, float v) {
+        corner = {x, y, u, v, color.red, color.green, color.blue, color.alpha, {color.ownColors, 0, 0, 0}};
+    };
+    set(vertex[0], left, top, sourceLeft, sourceTop);
+    set(vertex[1], right, top, sourceRight, sourceTop);
+    set(vertex[2], left, bottom, sourceLeft, sourceBottom);
+    vertex[3] = vertex[1];
+    set(vertex[4], right, bottom, sourceRight, sourceBottom);
+    vertex[5] = vertex[2];
+    frame.used += 6;
 }
 
-bool rk_collect_fill(const QRectF &rect, const QColor &color)
+// The places of the frame so far in an atlas that grew while it was collected.
+static void followAtlas(RkGpuFrame &frame)
+{
+    const QSize size = frame.atlas->size();
+    if (size == frame.atlasSize) {
+        return;
+    }
+    const float across = float(frame.atlasSize.width()) / float(size.width());
+    const float down = float(frame.atlasSize.height()) / float(size.height());
+    auto vertices = static_cast<RkVertex *>(frame.geometry->vertexData());
+    for (std::size_t i = 0; i < frame.used; ++i) {
+        RkVertex &corner = vertices[i];
+        corner.u *= across;
+        corner.v *= down;
+    }
+    frame.atlasSize = size;
+}
+
+// Shows the tile of a glyph or text whose point lies in `pixel`.
+static void addTile(RkGpuFrame &frame, const RkGlyphAtlas::Tile &tile, const QPoint &pixel, RkVertexColor color)
+{
+    if (tile.rect.isEmpty()) {
+        return;
+    }
+    followAtlas(frame);
+    const QPoint corner = pixel + tile.offset;
+    const QRectF shown(QPointF(corner) / frame.ratio, QSizeF(tile.rect.size()) / frame.ratio);
+    color.ownColors = tile.ownColors ? 255 : 0;
+    addQuad(frame, shown, QRectF(tile.rect), color);
+}
+
+bool rk_collect_fill(const QRectF &rect, std::uint32_t argb)
 {
     if (!t_gpu) {
         return false;
     }
-    addQuad(*t_gpu, rect, QRectF(RkGlyphAtlas::white(), QSizeF()), color, false);
+    addQuad(*t_gpu, rect, QRectF(RkGlyphAtlas::white(), QSizeF()), vertexColor(argb, false));
     return true;
 }
 
 bool rk_collect_glyphs(std::uint64_t key,
                        const QRawFont &font,
-                       const QColor &color,
+                       std::uint32_t argb,
                        rust::Slice<const std::uint32_t> glyphs,
                        rust::Slice<const QPointF> positions)
 {
@@ -913,6 +995,7 @@ bool rk_collect_glyphs(std::uint64_t key,
         return false;
     }
     RkGpuFrame &frame = *t_gpu;
+    const RkVertexColor packed = vertexColor(argb, false);
     const std::size_t count = qMin(glyphs.size(), positions.size());
     for (std::size_t i = 0; i < count && !frame.failed; ++i) {
         // As `rk_draw_glyphs` places it, and the pixel of the device it lands in.
@@ -921,16 +1004,14 @@ bool rk_collect_glyphs(std::uint64_t key,
         const std::optional<RkGlyphAtlas::Tile> tile = frame.atlas->tile(key, font, glyphs[i], place, pixel);
         if (!tile) {
             frame.failed = true;
-        } else if (!tile->rect.isEmpty()) {
-            const QPoint corner = pixel + tile->offset;
-            const QRectF shown(QPointF(corner) / frame.ratio, QSizeF(tile->rect.size()) / frame.ratio);
-            addQuad(frame, shown, QRectF(tile->rect), color, tile->ownColors);
+        } else {
+            addTile(frame, *tile, pixel, packed);
         }
     }
     return true;
 }
 
-bool rk_collect_text(std::uint64_t key, const QFont &font, const QString &text, const QPointF &position, const QColor &color)
+bool rk_collect_text(std::uint64_t key, const QFont &font, const QString &text, const QPointF &position, std::uint32_t argb)
 {
     if (!t_gpu) {
         return false;
@@ -943,25 +1024,23 @@ bool rk_collect_text(std::uint64_t key, const QFont &font, const QString &text, 
     const std::optional<RkGlyphAtlas::Tile> tile = frame.atlas->textTile(key, font, text, position, pixel);
     if (!tile) {
         frame.failed = true;
-    } else if (!tile->rect.isEmpty()) {
-        const QPoint corner = pixel + tile->offset;
-        const QRectF shown(QPointF(corner) / frame.ratio, QSizeF(tile->rect.size()) / frame.ratio);
-        addQuad(frame, shown, QRectF(tile->rect), color, tile->ownColors);
+    } else {
+        addTile(frame, *tile, pixel, vertexColor(argb, false));
     }
     return true;
 }
 
-// Gives `node` the geometry of the frame.
+// Ends the geometry of the frame in `node`: no corners of the frame before beyond those of
+// this one, and less room where it holds far fewer.
 static void showGpuFrame(QSGGeometryNode *node, RkGpuFrame &frame)
 {
-    const QSize size = frame.atlas->size();
-    QSGGeometry *geometry = node->geometry();
-    geometry->allocate(int(frame.vertices.size()));
-    auto vertex = static_cast<RkVertex *>(geometry->vertexData());
-    for (RkVertex &corner : frame.vertices) {
-        corner.u /= float(size.width());
-        corner.v /= float(size.height());
-        *vertex++ = corner;
+    followAtlas(frame);
+    if (frame.used + 2 * GeometryStep < std::size_t(frame.geometry->vertexCount())) {
+        makeRoom(frame, frame.used);
+    }
+    if (frame.written > frame.used) {
+        auto vertices = static_cast<RkVertex *>(frame.geometry->vertexData());
+        std::memset(static_cast<void *>(vertices + frame.used), 0, (frame.written - frame.used) * sizeof(RkVertex));
     }
     node->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
 }
@@ -1056,8 +1135,10 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
         if (gpu) {
             auto material = static_cast<RkGlyphMaterial *>(drawn->material());
             material->atlas.begin(ratio, shown->rhi()->resourceLimit(QRhi::TextureSizeMax));
-            RkGpuFrame frame{&material->atlas, ratio, {}};
-            frame.vertices.reserve(std::size_t(drawn->geometry()->vertexCount()));
+            RkGpuFrame frame{&material->atlas, ratio, drawn->geometry(), 0, material->shown, material->atlas.size()};
+#ifdef RK_TEST_HOOKS
+            makeRoom(frame, 0);
+#endif
             // The fonts of the frame resolve against the density of pixels of what the
             // painter paints on, here an image that takes nothing.
             if (m_probe.isNull() || m_probe.devicePixelRatio() != ratio) {
@@ -1072,6 +1153,7 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
             }
             if (!frame.failed) {
                 showGpuFrame(drawn, frame);
+                material->shown = frame.used;
                 onGpu = true;
             } else {
                 gpuFallback();
@@ -1100,6 +1182,7 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
             }
             showFrame(shown, content, m_image, m_opaque, place, size, smooth(), QRegion(), true);
             if (drawn->geometry()->vertexCount() > 0) {
+                static_cast<RkGlyphMaterial *>(drawn->material())->shown = 0;
                 drawn->geometry()->allocate(0);
                 drawn->markDirty(QSGNode::DirtyGeometry);
             }
