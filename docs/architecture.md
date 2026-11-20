@@ -34,6 +34,38 @@ The KDE front end is the package at the root of the workspace, so the build, the
 C++ bridge and the translations keep their places. The Qt parts that the Windows front end
 shares with it are in `kudari-qt`.
 
+## Drawing
+
+`render` gives each frame as paints: fills, shades and texts with their places, colours and
+styles. `RkImageItem` in `kudari-qt` draws them in one of two ways, which the setting
+`Appearance/Renderer` chooses: `auto` (the default) takes the graphics card where Qt Quick
+draws through its RHI, `gpu` the same, `cpu` the processor everywhere.
+
+On the graphics card, a frame is geometry: two triangles for each fill and glyph, in the
+order the frame paints them, with a material and shaders of Kudari's own.
+
+- Each glyph is drawn once by `QPainter` into an atlas of the item, white or in its own
+  colours, at its place within a pixel of the device, and cut to its pixels. A glyph shown
+  at the same place within a pixel covers the same pixels as in a painted frame. A text
+  that no font has glyphs for becomes a tile of its own, as `drawText` draws it.
+- A fill takes a white pixel of the atlas, so that fills and glyphs keep their order.
+- The badge lies between the background and the cells as an image of its own, drawn
+  anew only when it changes; the geometry has a layer under it and one over it.
+- The corners go straight into the geometry of the node, which keeps its memory from frame
+  to frame. Each frame is built whole; the item keeps no image of it.
+- A frame that does not fit in the atlas is painted instead, and the atlas starts again.
+
+The shaders are in `crates/qt/shaders`, baked by `tools/shaders.sh` into `.qsb` files with
+the variants for every backend of Qt Quick; builds need no Qt Shader Tools.
+
+With the processor, and with the software renderer of Qt Quick, `QPainter` paints the frame
+into an image of the item, and a frame of a few changed lines paints only those, into the
+image of the frame before. The texture of the image keeps its storage on the graphics card
+and takes only the parts that changed.
+
+On both ways, the cursor has an image of its own over the frame, so that blinking and a
+cursor that moves alone draw only its cells.
+
 ## Steps
 
 Every step is one or a few commits. After each, the KDE version behaves as before, the unit

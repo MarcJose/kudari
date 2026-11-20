@@ -1433,6 +1433,22 @@ msgid "Kudari uses Qt under the LGPL 3. The licenses of Qt and of the other part
 msgstr "Kudari verwendet Qt unter der LGPL 3. Die Lizenzen von Qt und der übrigen Teile liegen im Ordner licenses neben dem Programm."
 
 msgctxt "@label:listbox"
+msgid "Draw terminals:"
+msgstr "Terminals zeichnen:"
+
+msgctxt "@item:inlistbox"
+msgid "On the graphics card where possible"
+msgstr "Auf der Grafikkarte, wo möglich"
+
+msgctxt "@item:inlistbox"
+msgid "On the graphics card"
+msgstr "Auf der Grafikkarte"
+
+msgctxt "@item:inlistbox"
+msgid "With the processor"
+msgstr "Mit dem Prozessor"
+
+msgctxt "@label:listbox"
 msgid "Color scheme:"
 msgstr "Farbschema:"
 
