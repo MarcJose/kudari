@@ -113,6 +113,7 @@ Item {
     }
 
     function search(backwards) {
+        searchSettle.stop();
         if (searchField.text.length === 0) {
             // An empty field finds nothing, and the matches of the text before go.
             terminal.clearSearch();
@@ -120,6 +121,33 @@ Item {
             return;
         }
         searchBar.failed = !terminal.find(searchField.text, backwards, caseButton.checked, regexButton.checked, highlightButton.checked);
+    }
+
+    // While a pattern is typed, the newest match above is found at once, where it lies
+    // near; the search through all of the history, the marks on the scrollbar and "not
+    // found" wait for a pause, as each would take long with a long history at every key.
+    function searchWhileTyping() {
+        if (searchField.text.length === 0) {
+            search(false);
+            return;
+        }
+        const found = terminal.findWhileTyping(searchField.text, caseButton.checked, regexButton.checked, highlightButton.checked);
+        searchBar.failed = found === 0;
+        searchSettle.decided = found !== -1;
+        searchSettle.restart();
+    }
+
+    Timer {
+        id: searchSettle
+        property bool decided: false
+        interval: 150
+        onTriggered: {
+            if (decided) {
+                terminal.updateSearchLines();
+            } else {
+                pane.search(true);
+            }
+        }
     }
 
     // F3 and Shift+F3 work with the bar closed, too.
@@ -649,7 +677,7 @@ Item {
                 color: searchBar.failed ? pane.theme.negativeTextColor : pane.theme.textColor
                 onTextChanged: {
                     terminal.clearSelection();
-                    pane.search(false);
+                    pane.searchWhileTyping();
                 }
                 Keys.onReturnPressed: event => pane.search(event.modifiers & Qt.ShiftModifier)
                 Keys.onEnterPressed: event => pane.search(event.modifiers & Qt.ShiftModifier)

@@ -377,6 +377,15 @@ pub fn cases(each: &mut Each<'_>) {
             term.selection = None;
             black_box(search.find(&mut term, "nowhere", true, false, false, false));
         });
+        // A key typed into the search: only the screen and 1000 lines above it.
+        each(
+            &format!("search while typing {}k lines", history / 1000),
+            3,
+            &mut || {
+                term.selection = None;
+                black_box(search.find_near(&mut term, "nowhere", false, false, false, LINES + 1000));
+            },
+        );
     }
     let mut selected = terminal();
     feed(&mut selected, screen.as_bytes());

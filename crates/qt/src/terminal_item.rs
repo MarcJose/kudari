@@ -239,6 +239,20 @@ pub mod qobject {
             highlight_all: bool,
         ) -> bool;
 
+        /// While a pattern is typed: the nearest match above, within the screen and some
+        /// lines more. 1 when it found one, 0 when the pattern finds nothing at all, and -1
+        /// when it found none so near; then `find` decides, and the marks for the scrollbar
+        /// come with it or with `updateSearchLines`.
+        #[qinvokable]
+        #[cxx_name = "findWhileTyping"]
+        fn find_while_typing(
+            self: Pin<&mut Self>,
+            pattern: &QString,
+            case_sensitive: bool,
+            regular_expression: bool,
+            highlight_all: bool,
+        ) -> i32;
+
         #[qinvokable]
         fn end_search(self: Pin<&mut Self>);
 
@@ -999,6 +1013,41 @@ impl qobject::TerminalItem {
         self.as_mut().refresh();
         self.as_mut().update_search_lines();
         found
+    }
+
+    fn find_while_typing(
+        mut self: Pin<&mut Self>,
+        pattern: &QString,
+        case_sensitive: bool,
+        regular_expression: bool,
+        highlight_all: bool,
+    ) -> i32 {
+        /// Lines above the screen that a search while typing reads: the whole history would
+        /// take each key long in a long one.
+        const NEAR: usize = 1000;
+        let Some(backend) = self.as_ref().backend() else {
+            return 0;
+        };
+        let found = {
+            let mut term = backend.lock();
+            let lines = term.screen_lines() + NEAR;
+            let pattern = pattern.to_string();
+            let view = &mut self.as_mut().rust_mut().view;
+            view.find_near(
+                &mut term,
+                &pattern,
+                case_sensitive,
+                regular_expression,
+                highlight_all,
+                lines,
+            )
+        };
+        self.as_mut().refresh();
+        match found {
+            Some(true) => 1,
+            Some(false) => 0,
+            None => -1,
+        }
     }
 
     /// Publishes where the matches lie in the scrollback, for the scrollbar.

@@ -892,6 +892,46 @@ impl View {
         found.is_some()
     }
 
+    /// While a pattern is typed: the nearest match above the cursor, or above the match
+    /// selected, within `lines` lines of it, as only that is quick in a long history; the
+    /// newest match is the one a search while typing looks for. `Some(true)` when it found
+    /// one, `Some(false)` when the pattern finds nothing at all, and `None` when it found none
+    /// so near, for [`View::find`] to decide.
+    pub fn find_near<T: EventListener>(
+        &mut self,
+        term: &mut Term<T>,
+        pattern: &str,
+        case_sensitive: bool,
+        regular_expression: bool,
+        highlight_all: bool,
+        lines: usize,
+    ) -> Option<bool> {
+        let pattern = search_pattern(pattern, case_sensitive, regular_expression);
+        let matches_nothing = regex_automata::meta::Regex::new(&pattern).map_or(true, |regex| regex.is_match(""));
+        let Some(mut regex) = RegexSearch::new(&pattern).ok().filter(|_| !matches_nothing) else {
+            self.clear_search();
+            return Some(false);
+        };
+        let range = term.selection.as_ref().and_then(|selection| selection.to_range(term));
+        let origin = range.map_or(term.grid().cursor.point, |range| {
+            range.start.sub(term, Boundary::None, 1)
+        });
+        let reach = i32::try_from(lines).unwrap_or(i32::MAX);
+        let top = Line(origin.line.0.saturating_sub(reach)).max(term.topmost_line());
+        let found = matches_between(term, &mut regex, Point::new(top, Column(0)), origin, MOST_MATCHES)
+            .into_iter()
+            .rev()
+            .find(|found| *found.start() <= origin);
+        if let Some(found) = &found {
+            let mut selection = Selection::new(SelectionType::Simple, *found.start(), Side::Left);
+            selection.update(*found.end(), Side::Right);
+            term.selection = Some(selection);
+            term.scroll_to_point(*found.start());
+        }
+        self.search = highlight_all.then_some(regex);
+        found.is_some().then_some(true)
+    }
+
     /// Finds the matches on the screen again, after it changed.
     pub fn update_matches<T>(&mut self, term: &Term<T>) {
         self.visible_matches = match self.search.as_mut() {
@@ -2216,6 +2256,34 @@ mod tests {
         assert_eq!(press('F'), Some(Effect::Scroll(-1)));
         assert_eq!(press('G'), Some(Effect::Scroll(i32::MAX / 2)));
         assert_eq!(press('H'), Some(Effect::Scroll(i32::MIN / 2)));
+    }
+
+    #[test]
+    fn a_search_while_typing_finds_the_newest_match_nearby_and_leaves_the_rest_to_the_whole_search() {
+        let mut term = term_with(&format!("far\r\n{}near\r\nnear\r\n", "x\r\n".repeat(50)));
+        let mut view = View::default();
+        // The newest of the two "near", without reading the history up to "far".
+        assert_eq!(view.find_near(&mut term, "near", false, false, true, 10), Some(true));
+        let newest = term
+            .selection
+            .as_ref()
+            .and_then(|selection| selection.to_range(&term))
+            .map(|range| range.start.line);
+        // From that one on, the one before it.
+        assert_eq!(view.find_near(&mut term, "near", false, false, true, 10), Some(true));
+        let before = term
+            .selection
+            .as_ref()
+            .and_then(|selection| selection.to_range(&term))
+            .map(|range| range.start.line);
+        assert!(before < newest, "{before:?} before {newest:?}");
+        // "far" lies more than 10 lines back: undecided, for the whole search.
+        term.selection = None;
+        assert_eq!(view.find_near(&mut term, "far", false, false, true, 10), None);
+        assert!(term.selection.is_none());
+        assert_eq!(view.find_near(&mut term, "far", false, false, true, 100), Some(true));
+        // A pattern that finds nothing at all is decided at once.
+        assert_eq!(view.find_near(&mut term, "x*", false, true, true, 10), Some(false));
     }
 
     #[test]
