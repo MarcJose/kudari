@@ -65,3 +65,8 @@ namcap
 pacman
 PKGBUILDs?
 nosemgrep
+Vulkan
+[Ss]haders?
+[Rr]asteriz(e|ed|ing)
+[Aa]ntialiasing
+[Ss]ubpixel
