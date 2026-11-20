@@ -7,6 +7,7 @@
 #include "kudari-qt/src/qt.cxx.h"
 
 #include <QClipboard>
+#include <cmath>
 #include <cstring>
 #include <QCursor>
 #include <QDesktopServices>
@@ -37,6 +38,7 @@
 #include <QSGNode>
 #include <QSGTexture>
 #include <QTextDocument>
+#include <QTextLayout>
 #include <QTimer>
 #ifdef __GLIBC__
 #include <malloc.h>
@@ -44,6 +46,9 @@
 #include <QVarLengthArray>
 // Private, as nothing public names the key of a key event on its first level.
 #include <QtGui/private/qkeymapper_p.h>
+// Private, as nothing public tells whether a font has glyphs of its own colors.
+#include <QtGui/private/qfontengine_p.h>
+#include <QtGui/private/qrawfont_p.h>
 // With limited guarantees of compatibility, for a texture that takes only the parts of the
 // frame that changed.
 #include <rhi/qrhi.h>
@@ -156,6 +161,70 @@ void rk_font_rendering(QFont &font, bool antiAlias, bool hinting)
 std::unique_ptr<QRawFont> rk_raw_font(const QPainter &painter, const QFont &font)
 {
     return std::make_unique<QRawFont>(QRawFont::fromFont(QFont(font, painter.device())));
+}
+
+std::unique_ptr<RkShaped> rk_shape(const QPainter &painter, const QFont &font, const QString &text)
+{
+    auto shaped = std::make_unique<RkShaped>();
+    // As `drawText` lays a text out: in the font made for the device, on one line that does not
+    // wrap, with the fonts that the font database falls back on for what the font lacks.
+    QTextLayout layout(text, QFont(font, painter.device()), painter.device());
+    QTextOption option;
+    option.setWrapMode(QTextOption::NoWrap);
+    layout.setTextOption(option);
+    layout.beginLayout();
+    QTextLine line = layout.createLine();
+    if (!line.isValid()) {
+        layout.endLayout();
+        return shaped;
+    }
+    line.setLineWidth(1e6);
+    layout.endLayout();
+    // From the point on the baseline where the text starts, as `drawText` takes it.
+    const QPointF baseline(0, line.ascent());
+    for (QGlyphRun run : line.glyphRuns()) {
+        QList<QPointF> positions = run.positions();
+        for (QPointF &position : positions) {
+            position -= baseline;
+        }
+        run.setPositions(positions);
+        shaped->runs.append(run);
+    }
+    return shaped;
+}
+
+std::size_t rk_shaped_runs(const RkShaped &shaped)
+{
+    return std::size_t(shaped.runs.size());
+}
+
+std::unique_ptr<QRawFont> rk_shaped_font(const RkShaped &shaped, std::size_t run)
+{
+    return std::make_unique<QRawFont>(shaped.runs.at(qsizetype(run)).rawFont());
+}
+
+rust::Vec<std::uint32_t> rk_shaped_glyphs(const RkShaped &shaped, std::size_t run)
+{
+    rust::Vec<std::uint32_t> glyphs;
+    for (quint32 glyph : shaped.runs.at(qsizetype(run)).glyphIndexes()) {
+        glyphs.push_back(glyph);
+    }
+    return glyphs;
+}
+
+rust::Vec<double> rk_shaped_places(const RkShaped &shaped, std::size_t run)
+{
+    rust::Vec<double> places;
+    for (const QPointF &position : shaped.runs.at(qsizetype(run)).positions()) {
+        places.push_back(position.x());
+        places.push_back(position.y());
+    }
+    return places;
+}
+
+bool rk_same_raw_font(const QRawFont &one, const QRawFont &other)
+{
+    return one == other;
 }
 
 int rk_painter_dpi(const QPainter &painter)
@@ -560,10 +629,22 @@ void rk_draw_glyphs(QPainter &painter,
                     rust::Slice<const std::uint32_t> glyphs,
                     rust::Slice<const QPointF> positions)
 {
+    const std::size_t count = qMin(glyphs.size(), positions.size());
+    // On the steps of a sixty-fourth of a pixel that `drawText` places glyphs on: a bitmap of
+    // its own colors at a fractional scale lands a pixel apart otherwise.
+    QVarLengthArray<QPointF, 256> places;
+    places.reserve(qsizetype(count));
+    for (std::size_t i = 0; i < count; ++i) {
+        places.append(QPointF(std::floor(positions[i].x() * 64) / 64, std::floor(positions[i].y() * 64) / 64));
+    }
     QGlyphRun run;
     run.setRawFont(font);
-    run.setRawData(glyphs.data(), positions.data(), int(qMin(glyphs.size(), positions.size())));
-    painter.setPen(color);
+    run.setRawData(glyphs.data(), places.constData(), int(places.size()));
+    // Qt keeps the glyphs of a color font, as emoji, once for each color of the pen, though
+    // their bitmaps have colors of their own: one pen for them, so that they come from the
+    // cache rather than from the font each time a color is new.
+    const QFontEngine *engine = QRawFontPrivate::get(font)->fontEngine;
+    painter.setPen(engine && engine->isColorFont() ? QColor(Qt::white) : color);
     painter.drawGlyphRun(QPointF(), run);
 }
 
