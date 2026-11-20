@@ -497,6 +497,8 @@ pub struct Backend {
     mouse_tracking: Mutex<Option<bool>>,
     /// How the shell of the terminal reads quoted paths.
     quoting: Quoting,
+    /// The text of the badge and the format it was made from; see [`Backend::badge`].
+    badge: Mutex<Option<(String, String)>>,
 }
 
 /// A lock of a terminal, which counts how long it was held when it goes; see [`stats`].
@@ -647,6 +649,7 @@ impl Backend {
             history_lines: Mutex::new(None),
             mouse_tracking: Mutex::new(None),
             quoting,
+            badge: Mutex::new(None),
         });
         backend.apply_flow_control();
         Ok(backend)
@@ -814,6 +817,33 @@ impl Backend {
     /// The text of a format string; see [`title::format_title`].
     pub fn local_title(&self, format: &str) -> String {
         title::local_title(&*self.programs, self.working_directory(), format, &self.program_title())
+    }
+
+    /// The text of the badge for `format`, as [`Backend::refresh_badge`] last made it; made
+    /// here the first time and after the format changed. A frame reads it: making it reads the
+    /// processes of the terminal, which is too slow for every frame.
+    pub fn badge(&self, format: &str) -> String {
+        let mut badge = lock(&self.badge);
+        match badge.as_ref() {
+            Some((made_from, text)) if made_from == format => text.clone(),
+            _ => {
+                let text = self.local_title(format);
+                *badge = Some((format.to_string(), text.clone()));
+                text
+            }
+        }
+    }
+
+    /// Makes the text of the badge for `format` anew, as the front end does now and then for
+    /// a badge that follows the directory or the program; true if it changed.
+    pub fn refresh_badge(&self, format: &str) -> bool {
+        let text = self.local_title(format);
+        let mut badge = lock(&self.badge);
+        let changed = badge
+            .as_ref()
+            .is_none_or(|(made_from, old)| made_from != format || *old != text);
+        *badge = Some((format.to_string(), text));
+        changed
     }
 
     /// True while a program runs in the foreground instead of the shell.

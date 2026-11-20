@@ -395,6 +395,9 @@ pub struct TerminalItemRust {
     /// Whether the last frame showed only what the emulator tells changes of, so that the next
     /// may paint only the lines that changed; see `paint_lines`.
     plain_last: bool,
+    /// The text of the badge that the image shows, if any: a frame of lines paints it again
+    /// in its bands, and a new text needs a whole frame.
+    badge_drawn: Option<String>,
     /// Counts the looks for files among them, so that an old one is dropped.
     hint_generation: u64,
     /// A thread looks for files; on a drive that hangs it may never come back.
@@ -446,6 +449,7 @@ impl Default for TerminalItemRust {
             refreshes: 0,
             properties_queued: false,
             plain_last: false,
+            badge_drawn: None,
             hint_generation: 0,
             hint_looking: Arc::default(),
             cursor_drawn: None,
@@ -1137,7 +1141,7 @@ impl qobject::TerminalItem {
     /// Paints the lines that changed since the last frame into the image that holds it: those
     /// that the emulator tells with a line on each side, for glyphs and lines that reach over.
     /// The whole frame where it tells all of them, or where this or the last frame shows what
-    /// it does not tell changes of: a selection, the matches of a search, hints, a badge, the
+    /// it does not tell changes of: a selection, the matches of a search, hints, a new badge, the
     /// history scrolled back. Gives what it did, as `RkImageItem::paintLines` reads it: the
     /// texture of the frame takes only the bands of the lines, or all of it after a whole frame.
     ///
@@ -1164,7 +1168,7 @@ impl qobject::TerminalItem {
         let badge = options
             .badge
             .as_ref()
-            .map(|badge| (backend.local_title(&badge.format), badge));
+            .map(|badge| (backend.badge(&badge.format), badge));
         let scheme = colors::active();
         let mut clock = stats::Stopwatch::start();
         let bands = {
@@ -1175,7 +1179,9 @@ impl qobject::TerminalItem {
             };
             term.reset_damage();
             self.as_mut().follow_output(&term);
-            let plain = self.as_ref().plain(&term, &options);
+            let plain = self
+                .as_ref()
+                .plain(&term, badge.as_ref().map(|(text, _)| text.as_str()));
             let was_plain = std::mem::replace(&mut self.as_mut().rust_mut().plain_last, plain);
             // Decided before anything else is made. Under endless output the emulator tells all
             // lines in every frame: the whole frame is painted here, under the same lock, as
@@ -1235,7 +1241,8 @@ impl qobject::TerminalItem {
         let (built, origin_y) = bands;
         let (width, cell_height, opaque) = (self.size().width(), *self.cell_height(), *self.opaque());
         let dpi = kde::rk_painter_dpi(&painter);
-        Glyphs::with(dpi, self.term_font(), &options, |glyphs| {
+        let term_font = self.term_font();
+        Glyphs::with(dpi, term_font, &options, |glyphs| {
             painter.as_mut().set_font(&glyphs.fonts.regular);
             for (band, band_paints) in &built {
                 let rect = QRectF::new(
@@ -1248,6 +1255,21 @@ impl qobject::TerminalItem {
                 if opaque {
                     painter.as_mut().fill_rect(&rect, &qcolor(scheme.background));
                 }
+                // The badge lies under the text, as in a whole frame; the band cuts it.
+                if let Some((text, badge)) = badge.as_ref().filter(|(text, _)| !text.is_empty()) {
+                    kde::rk_draw_badge(
+                        painter.as_mut(),
+                        width,
+                        &kde::qs(text),
+                        &kde::qs(&badge.color),
+                        &kde::qs(&badge.family),
+                        badge.size,
+                        badge.text_only,
+                        badge.transparency,
+                        term_font,
+                        cell_height as i32,
+                    );
+                }
                 draw(painter.as_mut(), glyphs, band_paints);
             }
         });
@@ -1258,8 +1280,9 @@ impl qobject::TerminalItem {
     }
 
     /// Whether the frame shows only what the emulator tells changes of: no selection, no
-    /// search that highlights, no hints, no badge, and the end of the history.
-    fn plain<T>(&self, term: &Term<T>, options: &terminal::Options) -> bool {
+    /// search that highlights, no hints, no badge other than the one the image shows, and the
+    /// end of the history.
+    fn plain<T>(&self, term: &Term<T>, badge: Option<&str>) -> bool {
         term.selection.is_none()
             && term.grid().display_offset() == 0
             && !view::selection_mode(term)
@@ -1267,7 +1290,7 @@ impl qobject::TerminalItem {
             && self.view.matches().is_empty()
             && self.view.hints().is_empty()
             && !*self.url_hints()
-            && options.badge.is_none()
+            && badge.is_none_or(|text| self.badge_drawn.as_deref() == Some(text))
     }
 
     /// Paints the cursor into its image, which starts at the cell of the cursor; see
@@ -1418,7 +1441,7 @@ impl qobject::TerminalItem {
         let badge = options
             .badge
             .as_ref()
-            .map(|badge| (backend.local_title(&badge.format), badge));
+            .map(|badge| (backend.badge(&badge.format), badge));
         let clock = stats::Stopwatch::start();
         let term = backend.lock();
         self.paint_frame_with(painter, &backend, term, &options, badge, clock);
@@ -1469,7 +1492,9 @@ impl qobject::TerminalItem {
             // since the last refresh would else be painted with the matches of the text before.
             self.as_mut().rust_mut().view.update_matches(term);
             self.as_mut().follow_output(term);
-            let plain = self.as_ref().plain(term, &options);
+            let shown = badge.as_ref().map(|(text, _)| text.clone());
+            self.as_mut().rust_mut().badge_drawn.clone_from(&shown);
+            let plain = self.as_ref().plain(term, shown.as_deref());
             self.as_mut().rust_mut().plain_last = plain;
             let (origin_x, origin_y) = self.as_ref().text_origin(term.columns(), term.screen_lines());
             let scene = render::Scene {

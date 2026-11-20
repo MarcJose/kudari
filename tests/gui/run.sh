@@ -7,7 +7,9 @@
 #   cargo build --features test-hooks
 #   tests/gui/run.sh [path/to/kudari]
 #
-# Needs kwin_wayland, qdbus6, wayland-scanner, a C compiler and dbus-run-session.
+# Needs kwin_wayland, qdbus6, wayland-scanner, a C compiler and dbus-run-session. With
+# KUDARI_GUI_KEEP set to an absolute directory, the images of the pixel checks stay there
+# after the test, as for a check that fails only in the CI.
 set -u
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -57,6 +59,10 @@ finish() {
     kill "$kudari" 2>/dev/null
     sleep 0.5
     kill -9 "$kudari" "$kwin" 2>/dev/null
+    if [ -n "${KUDARI_GUI_KEEP:-}" ]; then
+        mkdir -p "$KUDARI_GUI_KEEP"
+        (cd "$work" && find . -name '*.png' -exec cp --parents {} "$KUDARI_GUI_KEEP/" \;)
+    fi
     rm -rf "$work"
 }
 trap finish EXIT
@@ -816,6 +822,52 @@ paint_check() { # directory, what for
 }
 mkdir -p "$work/pixels"
 paint_check "$work/pixels" "at 100 %"
+# With a badge, a frame of lines paints it again under the lines it paints, and a typed key
+# still paints only those. The badge follows the program without output of its own: the poll
+# makes it anew and has a terminal whose badge changed paint it.
+hook SetSetting BadgeEnabled true; hook SetSetting BadgeText "%n"; settle
+run "clear"
+hook ResetStats
+input key 30; settle
+badge_lines=$(hook Stats | python3 -c 'import json, sys; print(json.load(sys.stdin)["line_paints"])')
+input key 14; settle
+check "with a badge, a typed key paints only the lines that changed" 1 "$badge_lines"
+mkdir -p "$work/pixels-badge"
+paint_check "$work/pixels-badge" "with a badge"
+run "clear"
+mkdir -p "$work/badge"
+hook PaintTerminals "$work/badge/prompt"; settle
+mark
+# The program changes half a second after the last output, and nothing paints for it. The
+# poll makes the badge anew twice a second; the window has to have painted it before the
+# check takes it, as on a slow computer the poll may come just before.
+run_open "sleep 0.5; timeout 4 cat"
+sleep 2.5
+settle
+hook PaintTerminals "$work/badge/program"; settle
+# The corner of the badge, at the top right: what the window shows there has to differ from
+# the corner at the prompt and to match the frame painted anew. Only the corner, as a tooltip
+# of the pointer, which stays where an earlier check left it, may show elsewhere meanwhile.
+cat > "$work/corner" <<'EOF2'
+import sys
+from pngread import read
+def corner(path):
+    width, height, channels, rows = read(path)
+    return [bytes(row[width * channels * 2 // 3:]) for row in rows[: height // 4]]
+before, shown, painted = (corner(path) for path in sys.argv[1:])
+if shown == before:
+    print("no: the badge of the prompt")
+elif shown != painted:
+    print("no: not the badge of the program")
+else:
+    print("yes")
+EOF2
+for before in "$work"/badge/prompt-[0-9]*-shown.png; do break; done
+for shown in "$work"/badge/program-[0-9]*-shown.png; do break; done
+check "the badge follows the program without output" yes \
+    "$(cd "$work" && python3 corner "$before" "$shown" "${shown%-shown.png}.png")"
+wait_prompt "$mark_before" "the end of timeout"; settle
+hook SetSetting BadgeEnabled false; settle
 check "a terminal in a tab in the background has no size until it shows" "1 1 0" "$sizeless_in_background $sizeless_shown $sizeless_closed"
 run "clear"
 

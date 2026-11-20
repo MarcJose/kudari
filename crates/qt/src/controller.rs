@@ -747,10 +747,19 @@ impl qobject::Controller {
     }
 
     /// Periodic update of titles and the monitors.
-    fn poll(self: Pin<&mut Self>) {
+    fn poll(mut self: Pin<&mut Self>) {
         // Output of a terminal nobody sees, and of one whose frame did not come, is reported
         // again: twice a second for those, rather than for every piece of output.
         terminal::release_held(Duration::from_millis(100));
+        // The badge follows the directory and the program here rather than in every frame;
+        // a terminal whose badge changed paints it anew.
+        if let Some(badge) = terminal::options().and_then(|options| options.badge) {
+            for terminal in self.app.stack().all_terminals() {
+                if terminal::backend(terminal).is_some_and(|backend| backend.refresh_badge(&badge.format)) {
+                    self.as_mut().terminal_dirty(terminal);
+                }
+            }
+        }
         let format = self.app.settings().title_format.clone();
         let statuses: Vec<app::Status> = self
             .app
