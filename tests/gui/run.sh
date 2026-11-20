@@ -631,6 +631,42 @@ hook SlowRefresh 0
 wait_prompt "$mark_before" "the output after a refresh"; settle
 check "output between a refresh and its frame reaches the scrollbar" yes \
     "$(awk -v size="$late" 'BEGIN { print (size != "" && size < 1) ? "yes" : "no: " size }')"
+# While typing, the search finds the newest match at once: the view stays at the bottom with
+# the one there, rather than going to the first of the history. One that lies further back
+# than a search while typing reads is found after a pause, and the field does not show "not
+# found" meanwhile.
+# A property of the active terminal, or of another object of its pane: the hook gives those of
+# all panes, in the same order as their terminals.
+pane_value() { # name, property
+    awk -v ids="$(hook Property terminal terminalId)" -v values="$(hook Property "$1" "$2")" \
+        -v active="$(sessions activeTerminalId)" \
+        'BEGIN { n = split(ids, id, ","); split(values, value, ","); for (i = 1; i <= n; i++) if (id[i] == active) print value[i] }'
+}
+position() { pane_value terminal scrollPosition; }
+# In a tab of its own with a history long enough; the terminal before keeps 50 lines.
+hook SetSetting HistoryLines 10000; settle
+before_search=$(sessions activeSessionId)
+mark; searching=$(sessions addSession); wait_shells
+run "clear; echo tief; seq 1 3000; echo tief; seq 1 5"
+hook Trigger edit_find; settle
+for code in 20 23 18 33; do input key "$code"; done
+sleep 0.5; settle
+newest=$(position)
+input key 1; settle
+run "clear; echo weit; seq 1 3000"
+hook Trigger edit_find; settle
+for code in 17 18 23 20; do input key "$code"; done
+during=$(pane_value searchBar failed)
+sleep 0.5; settle
+far="$during $(pane_value searchBar failed) $(position)"
+input key 1; settle
+sessions removeSession "$searching" > /dev/null; settle
+sessions raiseSession "$before_search" > /dev/null
+hook SetSetting HistoryLines 1000; settle
+check "a search while typing finds the newest match" yes \
+    "$(awk -v at="$newest" 'BEGIN { print (at != "" && at > 0.9) ? "yes" : "no: " at }')"
+check "a match far back is found after a pause, and not missed meanwhile" "false false yes" \
+    "$(echo "$far" | awk '{ print $1, $2, ($3 != "" && $3 < 0.5) ? "yes" : "no: " $3 }')"
 for action in edit_select_all edit_copy select-line select-mode select-mode; do hook Trigger "$action"; settle; done
 
 # A blinking cursor that a program hid, as htop does, stops blinking: each blink would draw
