@@ -34,7 +34,9 @@
 #include <QPrinter>
 #include <QQuickWindow>
 #include <QRegion>
+#include <QSGGeometryNode>
 #include <QSGImageNode>
+#include <QSGVertexColorMaterial>
 #include <QSGNode>
 #include <QSGTexture>
 #include <QTextDocument>
@@ -279,6 +281,45 @@ void RkImageItem::updateLines()
 // The bands that a frame of lines paints, in pixels of the device, while
 // `RkImageItem::updatePaintNode` collects them on its thread.
 static thread_local QRegion *t_bands = nullptr;
+// The fills of a frame drawn on the graphics card, while `RkImageItem::updatePaintNode`
+// collects them on its thread.
+static thread_local QList<RkFill> *t_fills = nullptr;
+
+bool rk_collect_fill(const QRectF &rect, const QColor &color)
+{
+    if (!t_fills) {
+        return false;
+    }
+    t_fills->append({rect, color});
+    return true;
+}
+
+// The fills as two triangles each, `offset` further, in colors with their alpha multiplied
+// in, as the material of vertex colors takes them.
+static void showFills(QSGGeometryNode *node, const QList<RkFill> &fills, const QPointF &offset)
+{
+    QSGGeometry *geometry = node->geometry();
+    geometry->allocate(int(fills.size() * 6));
+    QSGGeometry::ColoredPoint2D *vertex = geometry->vertexDataAsColoredPoint2D();
+    for (const RkFill &fill : fills) {
+        const QRectF rect = fill.rect.translated(offset);
+        const int alpha = fill.color.alpha();
+        const auto channel = [alpha](int value) { return uchar(value * alpha / 255); };
+        const uchar red = channel(fill.color.red());
+        const uchar green = channel(fill.color.green());
+        const uchar blue = channel(fill.color.blue());
+        const float left = float(rect.left());
+        const float top = float(rect.top());
+        const float right = float(rect.left() + rect.width());
+        const float bottom = float(rect.top() + rect.height());
+        const float corners[6][2] = {{left, top}, {right, top}, {left, bottom}, {right, top}, {right, bottom}, {left, bottom}};
+        for (const auto &corner : corners) {
+            vertex->set(corner[0], corner[1], red, green, blue, uchar(alpha));
+            ++vertex;
+        }
+    }
+    node->markDirty(QSGNode::DirtyGeometry);
+}
 
 void rk_painter_band(QPainter &painter, const QRectF &band, bool clear)
 {
@@ -518,16 +559,26 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
         m_contentDirty = true;
         return nullptr;
     }
-    // The frame first, then the cursor over it, which fades through an opacity of its own.
+    // The fills of a frame on the graphics card, the frame over them, then the cursor over it,
+    // which fades through an opacity of its own.
+    QSGGeometryNode *fills = nullptr;
     QSGImageNode *content = nullptr;
     QSGOpacityNode *fade = nullptr;
     QSGImageNode *cursor = nullptr;
     if (node) {
-        content = static_cast<QSGImageNode *>(node->firstChild());
+        fills = static_cast<QSGGeometryNode *>(node->firstChild());
+        content = static_cast<QSGImageNode *>(fills->nextSibling());
         fade = static_cast<QSGOpacityNode *>(content->nextSibling());
         cursor = static_cast<QSGImageNode *>(fade->firstChild());
     } else {
         node = new QSGNode;
+        fills = new QSGGeometryNode;
+        fills->setGeometry(new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), 0));
+        fills->geometry()->setDrawingMode(QSGGeometry::DrawTriangles);
+        fills->setFlag(QSGNode::OwnsGeometry);
+        fills->setMaterial(new QSGVertexColorMaterial);
+        fills->setFlag(QSGNode::OwnsMaterial);
+        node->appendChildNode(fills);
         content = shown->createImageNode();
         content->setOwnsTexture(true);
         node->appendChildNode(content);
@@ -544,6 +595,13 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
     const QPointF corner = mapToScene(QPointF());
     const QPointF snap(qRound(corner.x() * ratio) / ratio - corner.x(), qRound(corner.y() * ratio) / ratio - corner.y());
     const QRectF place(snap, QSizeF(size) / ratio);
+    // On the graphics card, each frame is whole: its fills are geometry there, so the image
+    // holds only what lies over them.
+    const bool gpu = shown->rhi() && drawsOnGpu();
+    if (gpu != m_gpu || (gpu && m_linesDirty)) {
+        m_contentDirty = true;
+    }
+    m_gpu = gpu;
     // Only the lines that changed, into the image that holds the frame before, where the item
     // can tell them; else, or with nothing of the frame kept, all of it.
     bool linesPainted = false;
@@ -570,19 +628,25 @@ QSGNode *RkImageItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
             m_image = QImage(size, QImage::Format_ARGB32_Premultiplied);
         }
         m_image.setDevicePixelRatio(ratio);
-        // An opaque terminal paints its background over all of it first.
-        if (!m_opaque) {
+        // An opaque terminal paints its background over all of it first, in the image or, on
+        // the graphics card, as a fill under it.
+        if (!m_opaque || gpu) {
             m_image.fill(Qt::transparent);
         }
+        m_fills.clear();
         {
             QPainter painter(&m_image);
+            t_fills = gpu ? &m_fills : nullptr;
             paint(&painter);
+            t_fills = nullptr;
         }
-        showFrame(shown, content, m_image, m_opaque, place, size, smooth(), QRegion(), true);
+        showFills(fills, m_fills, snap);
+        showFrame(shown, content, m_image, m_opaque && !gpu, place, size, smooth(), QRegion(), true);
         m_contentDirty = false;
     } else if (content->rect() != place) {
-        // The item moved by a part of a pixel, with the same image.
+        // The item moved by a part of a pixel, with the same image and fills.
         content->setRect(place);
+        showFills(fills, m_fills, snap);
     }
     const QSize room = (cursorRoom() * ratio).toSize().expandedTo(QSize(1, 1));
     // A new image, or a new node, has to be painted; otherwise the cursor may keep its texture.

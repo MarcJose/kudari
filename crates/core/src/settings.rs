@@ -56,7 +56,7 @@ impl Source<'_> {
 }
 
 /// Settings that can be changed at runtime, with their configuration group.
-const KEYS: [(&str, &str); 108] = [
+const KEYS: [(&str, &str); 109] = [
     ("Screen", "Window"),
     ("Width", "Window"),
     ("Height", "Window"),
@@ -72,6 +72,7 @@ const KEYS: [(&str, &str); 108] = [
     ("OpenAfterStart", "Behavior"),
     ("RememberFullscreen", "Behavior"),
     ("Skin", "Appearance"),
+    ("Renderer", "Appearance"),
     ("Translucency", "Appearance"),
     ("BackgroundColor", "Appearance"),
     ("BackgroundColorOpacity", "Appearance"),
@@ -197,6 +198,10 @@ pub struct Settings {
     pub open_after_start: bool,
     pub remember_fullscreen: bool,
     pub skin: String,
+    /// Where terminals are drawn: `cpu` with `QPainter` into an image, `gpu` on the
+    /// graphics card where Qt Quick draws through its RHI, `auto` for the graphics card where
+    /// there is one.
+    pub renderer: String,
     pub translucency: bool,
     pub background_color: String,
     pub background_color_opacity: i32,
@@ -356,6 +361,7 @@ impl Settings {
             focus_follows_mouse: source.boolean("Behavior", "FocusFollowsMouse", false),
             open_after_start: source.boolean("Behavior", "OpenAfterStart", false),
             remember_fullscreen: source.boolean("Behavior", "RememberFullscreen", false),
+            renderer: source.text("Appearance", "Renderer", "cpu"),
             skin: Some(source.text("Appearance", "Skin", SYSTEM_SKIN))
                 .filter(|skin| is_themed(skin))
                 .unwrap_or_else(|| SYSTEM_SKIN.to_string()),
@@ -490,6 +496,7 @@ impl Settings {
             "OpenAfterStart": self.open_after_start,
             "RememberFullscreen": self.remember_fullscreen,
             "Skin": self.skin,
+            "Renderer": self.renderer,
             "Translucency": self.translucency,
             "BackgroundColor": self.background_color,
             "BackgroundColorOpacity": self.background_color_opacity,
