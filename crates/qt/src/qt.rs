@@ -26,6 +26,10 @@ pub mod ffi {
         include!(<QtGui/QRawFont>);
         /// A font that turns characters into glyphs without the text layout of `QPainter`.
         type QRawFont;
+        include!("qtbridge.h");
+        /// A text laid out once: the glyphs it takes from each font, the fallback fonts that
+        /// have what the font lacks among them.
+        type RkShaped;
     }
 
     unsafe extern "C++" {
@@ -53,6 +57,19 @@ pub mod ffi {
         fn rk_painter_dpi(painter: &QPainter) -> i32;
         /// The glyph of `character` in `font`, or 0 when the font has none.
         fn rk_glyph_index(font: &QRawFont, character: u32) -> u32;
+        /// Lays `text` out in `font` as `QPainter::drawText` would on what `painter` paints on,
+        /// with the fonts that fall in for what `font` lacks.
+        fn rk_shape(painter: &QPainter, font: &QFont, text: &QString) -> UniquePtr<RkShaped>;
+        /// How many runs of glyphs, each in one font, the text took.
+        fn rk_shaped_runs(shaped: &RkShaped) -> usize;
+        /// The font of a run.
+        fn rk_shaped_font(shaped: &RkShaped, run: usize) -> UniquePtr<QRawFont>;
+        /// The glyphs of a run, and their places from the point on the baseline where the
+        /// text starts, as x and y.
+        fn rk_shaped_glyphs(shaped: &RkShaped, run: usize) -> Vec<u32>;
+        fn rk_shaped_places(shaped: &RkShaped, run: usize) -> Vec<f64>;
+        /// Whether two fonts are the same, so that their glyphs can be drawn together.
+        fn rk_same_raw_font(one: &QRawFont, other: &QRawFont) -> bool;
         /// Draws each glyph with its point on the baseline, all in one color.
         fn rk_draw_glyphs(
             painter: Pin<&mut QPainter>,

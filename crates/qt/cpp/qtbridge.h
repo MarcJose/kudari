@@ -4,6 +4,7 @@
 // What the front ends need of Qt itself, for `src/qt.rs`.
 #pragma once
 
+#include <QGlyphRun>
 #include <QImage>
 #include <QPainter>
 #include <QPointF>
@@ -102,6 +103,16 @@ private:
     bool m_linesDirty = false;
 };
 std::unique_ptr<QRawFont> rk_raw_font(const QPainter &painter, const QFont &font);
+/// A text laid out once, for `rk_shape`.
+struct RkShaped {
+    QList<QGlyphRun> runs;
+};
+std::unique_ptr<RkShaped> rk_shape(const QPainter &painter, const QFont &font, const QString &text);
+std::size_t rk_shaped_runs(const RkShaped &shaped);
+std::unique_ptr<QRawFont> rk_shaped_font(const RkShaped &shaped, std::size_t run);
+rust::Vec<std::uint32_t> rk_shaped_glyphs(const RkShaped &shaped, std::size_t run);
+rust::Vec<double> rk_shaped_places(const RkShaped &shaped, std::size_t run);
+bool rk_same_raw_font(const QRawFont &one, const QRawFont &other);
 int rk_painter_dpi(const QPainter &painter);
 std::uint32_t rk_glyph_index(const QRawFont &font, std::uint32_t character);
 void rk_draw_glyphs(QPainter &painter,
