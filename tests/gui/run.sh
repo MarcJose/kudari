@@ -1383,7 +1383,7 @@ wait_quit "$kudari"
 # software: the texture of a terminal keeps its storage there and takes only the parts of the
 # frame that changed, which the window shows as the pixels below compare.
 mkdir "$work/rhi"
-printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nKeepOpen=true\n[Security]\nAllowRemoteCommands=true\n' \
+printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nKeepOpen=true\nReleaseGraphicsAfter=1\n[Security]\nAllowRemoteCommands=true\n' \
     > "$work/rhi/kudarirc"
 env -u QT_QUICK_BACKEND QSG_RHI_BACKEND=opengl LIBGL_ALWAYS_SOFTWARE=1 QSG_INFO=1 XDG_CONFIG_HOME="$work/rhi" \
     "$binary" > "$work/rhi.log" 2>&1 &
@@ -1394,6 +1394,20 @@ if grep -qi 'rhi.*opengl\|opengl.*rhi' "$work/rhi.log"; then drawn=yes; else dra
 check "without the software backend, Qt Quick draws through the RHI" yes "$drawn"
 mkdir -p "$work/rhi/pixels"
 paint_check "$work/rhi/pixels" "through the RHI"
+# Hidden for long, the window gives up its graphics, here after the 1 s of its settings, and
+# builds them again when it shows: Qt Quick makes its QRhi a second time, and the terminals
+# show what they did. With the setting at 0, it keeps them however long it is hidden.
+window toggleWindowState; sleep 3
+window toggleWindowState; sleep 1.5; settle
+check "a window hidden for long gives up its graphics and makes them again" 2 \
+    "$(grep -c 'Creating QRhi' "$work/rhi.log")"
+mkdir -p "$work/rhi/released"
+paint_check "$work/rhi/released" "through the RHI, after giving up its graphics"
+hook SetSetting ReleaseGraphicsAfter 0; settle
+window toggleWindowState; sleep 3
+window toggleWindowState; sleep 1.5; settle
+check "with the setting at never, a hidden window keeps its graphics" 2 \
+    "$(grep -c 'Creating QRhi' "$work/rhi.log")"
 hook Trigger file_quit
 wait_quit "$kudari"
 

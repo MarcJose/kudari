@@ -484,6 +484,7 @@ impl cxx_qt::Initialize for qobject::Controller {
         let skin = skin_to_json(&self.skin).to_string();
         self.as_mut().set_skin_json(qs(&skin));
         self.as_mut().apply_terminal_settings();
+        qt::release_graphics_after(self.app.settings().release_graphics_after);
         self.as_mut().set_fonts_json(qt::rk_system_fonts_json());
         self.as_mut().set_highlight_color(qs(&frontend().highlight_color()));
         self.as_mut().set_shortcuts_json(qs(&frontend().shortcuts_json()));
@@ -971,6 +972,7 @@ impl qobject::Controller {
         let old = self.as_mut().rust_mut().app.replace_settings(settings);
         let new = self.app.settings();
         let skin_changed = new.skin != old.skin;
+        qt::release_graphics_after(new.release_graphics_after);
         let agents_changed = self.app.agent_rights_changed(&old);
         self.as_mut().apply_terminal_settings();
         if skin_changed {

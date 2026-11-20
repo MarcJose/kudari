@@ -17,6 +17,8 @@
 #   memory      after the start, with 5 and with 10 tabs, with the window hidden, and after
 #               closing them again; also on the graphics card
 #   history     what a full history of 20000 lines adds to a Kudari
+#   released    the memory of a window hidden long enough to give up its graphics, here after
+#               2 s, and the time to its first frame when it shows again
 #
 # Every time is the clock of the computer in seconds since 1970, in events-RUN.txt, next to
 # the logs of each Kudari; `tools/bench.py scenarios` makes the report.
@@ -51,6 +53,7 @@ start() { # name, settings...
     cpu="$work/$name-$run.cpu"
     event spawn "$name" "$(now)"
     XDG_CONFIG_HOME=$config SHELL=/bin/sh QSG_RENDER_TIMING=1 KUDARI_TIMING=1 \
+        KUDARI_RELEASE_HIDDEN_MS=${release_after:-60000} \
         QT_MESSAGE_PATTERN='%{time yyyy-MM-ddTHH:mm:ss.zzz} %{category} %{message}' \
         "$binary" > "$log" 2>&1 &
     pid=$!
@@ -210,6 +213,24 @@ while [ "$round" -le $((KUDARI_BENCH_WARMUP + KUDARI_BENCH_RUNS)) ]; do
     # It rests after 15 seconds without input or output.
     sleep 5
     idle rested
+    stop
+
+    say "$title: a window that gives up its graphics while hidden"
+    release_after=2000
+    start released Behavior.OpenAfterStart=true
+    release_after=
+    sleep 2
+    sample memory-released-shown start
+    sample memory-released-shown end
+    toggle hide released
+    sleep 1
+    sample memory-released-hidden start
+    sample memory-released-hidden end
+    sleep 3
+    sample memory-released start
+    sample memory-released end
+    toggle show released
+    sleep 2
     stop
 
     say "$title: a fading cursor"

@@ -1578,6 +1578,9 @@ MEMORY = (
     ("memory-10", "10 tabs"),
     ("memory-hidden", "10 tabs, window hidden"),
     ("memory-closed", "closed to 1"),
+    ("memory-released-shown", "another, 1 tab, shown"),
+    ("memory-released-hidden", "the same, hidden 1 s"),
+    ("memory-released", "the same, hidden past the release"),
 )
 # The lines of history that the scenario history fills, by writing a screen more than that.
 HISTORY = 20_000
@@ -1636,7 +1639,7 @@ def scenarios(directory):
     if not runs:
         print("\nNo run of the scenarios finished; the logs of Kudari tell why.")
         return
-    starts, phases, first_shows, shows, toggles, seconds, versions = [], {}, [], [], [], [], []
+    starts, phases, first_shows, shows, released_shows, toggles, seconds, versions = [], {}, [], [], [], [], [], []
     waiting, memory, grown = {}, {}, []
     for run in runs:
         events, drawn, marks, used, woken, sizes = scenario_run(directory, run)
@@ -1648,7 +1651,7 @@ def scenarios(directory):
             for phase, moment in marks.get("main", []):
                 if phase in PHASES:
                     phases.setdefault(phase, []).append(moment - spawn)
-        for name, into in (("hidden", first_shows), ("main", shows)):
+        for name, into in (("hidden", first_shows), ("main", shows), ("released", released_shows)):
             for moment in events.get(("show", name), []):
                 if (found := first_after(drawn.get(name, []), moment)) is not None:
                     into.append(found - moment)
@@ -1679,7 +1682,8 @@ def scenarios(directory):
     table(["", "median", "slowest", "runs"], rows)
     print("\nShowing the window: from toggleWindowState over D-Bus to the next frame, and to the")
     print("call reaching Kudari, in ms.")
-    table(["", "median", "p95", "max", "times"], [["first time", *summary(first_shows)], ["the times after", *summary(shows)], ["call received", *summary(toggles)]])
+    rows = [["first time", *summary(first_shows)], ["the times after", *summary(shows)], ["after giving up its graphics", *summary(released_shows)]]
+    table(["", "median", "p95", "max", "times"], rows + [["call received", *summary(toggles)]])
     print("\nA second start, which only toggles the running Kudari, and kudari --version, to their end, in ms.")
     table(["", "median", "p95", "max", "times"], [["second start", *summary(seconds)], ["--version", *summary(versions)]])
     print("\nWaiting, ten seconds each: CPU time of all threads, how often they went to sleep or were")

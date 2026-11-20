@@ -61,6 +61,7 @@ fn main() {
         kde::rk_setup_qml_i18n(engine.as_mut());
         engine.load(&QUrl::from("qrc:/qt/qml/io/github/marcjose/kudari/qml/Main.qml"));
     }
+    kudari_qt::qt::rk_release_when_hidden();
     kudari_core::timing::mark("qml");
     let show_tray = settings::Settings::load(&config::KConfig).show_systray_icon;
     kde::rk_finish_startup(show_tray);

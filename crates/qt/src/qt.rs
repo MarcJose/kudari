@@ -100,6 +100,12 @@ pub mod ffi {
         fn rk_open_url_with_qt(url: &QString);
         /// The languages of the user, the preferred first, separated by commas.
         fn rk_ui_languages() -> QString;
+        /// Has each window of Qt Quick give up its scene graph and graphics once it has been
+        /// hidden for as long as [`release_graphics_after`] says; for the front ends, after
+        /// they loaded their windows.
+        fn rk_release_when_hidden();
+        /// How long a hidden window keeps its graphics, in milliseconds; 0 for ever.
+        fn rk_release_after(milliseconds: i32);
         /// A key with modifiers, as from a key event of QML, in the portable text of Qt.
         fn rk_key_sequence_text(key: i32, modifiers: i32) -> QString;
         /// The key of a key event without the modifiers that change what it types, from the
@@ -118,6 +124,20 @@ pub mod ffi {
 }
 
 pub use ffi::*;
+
+/// Lets a hidden window give up its scene graph, its graphics and the images of its
+/// terminals after `seconds`, from the setting, or never for 0; `KUDARI_RELEASE_HIDDEN_MS`
+/// says otherwise in milliseconds, as to measure it. Showing it soon after costs nothing,
+/// while a window hidden for long gives back its memory on the graphics card; the first frame
+/// after builds them again, which takes some milliseconds more.
+pub fn release_graphics_after(seconds: i32) {
+    let after = std::env::var("KUDARI_RELEASE_HIDDEN_MS")
+        .ok()
+        .and_then(|milliseconds| milliseconds.parse::<i32>().ok())
+        .filter(|milliseconds| *milliseconds >= 0)
+        .unwrap_or_else(|| seconds.saturating_mul(1000));
+    rk_release_after(after);
+}
 
 /// Shorthand for building a `QString`.
 #[must_use]
