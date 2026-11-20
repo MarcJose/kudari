@@ -264,7 +264,8 @@ jobs:
             target/coverage
           key: coverage-${{ steps.versions.outputs.hash }}-${{ hashFiles('third_party/**') }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: coverage-${{ steps.versions.outputs.hash }}-${{ hashFiles('third_party/**') }}-
-      - run: docker exec arch bash -euo pipefail -c 'tools/coverage.sh --html --fail-under 90 | tee coverage.txt'
+      # The images of the pixel checks stay in target/gui-images for the artifact below.
+      - run: docker exec --env KUDARI_GUI_KEEP=/src/target/gui-images arch bash -euo pipefail -c 'tools/coverage.sh --html --fail-under 90 | tee coverage.txt'
       # The container wrote as root; the steps after it read as the user of the runner.
       - if: always()
         run: sudo chown -R "$(id -u):$(id -g)" .
@@ -284,6 +285,12 @@ jobs:
             sed -n '/^Filename/,$p' coverage.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gui-images
+          path: target/gui-images
+          if-no-files-found: ignore
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

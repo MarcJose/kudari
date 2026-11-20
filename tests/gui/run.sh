@@ -7,7 +7,9 @@
 #   cargo build --features test-hooks
 #   tests/gui/run.sh [path/to/kudari]
 #
-# Needs kwin_wayland, qdbus6, wayland-scanner, a C compiler and dbus-run-session.
+# Needs kwin_wayland, qdbus6, wayland-scanner, a C compiler and dbus-run-session. With
+# KUDARI_GUI_KEEP set to an absolute directory, the images of the pixel checks stay there
+# after the test, as for a check that fails only in the CI.
 set -u
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -57,6 +59,10 @@ finish() {
     kill "$kudari" 2>/dev/null
     sleep 0.5
     kill -9 "$kudari" "$kwin" 2>/dev/null
+    if [ -n "${KUDARI_GUI_KEEP:-}" ]; then
+        mkdir -p "$KUDARI_GUI_KEEP"
+        (cd "$work" && find . -name '*.png' -exec cp --parents {} "$KUDARI_GUI_KEEP/" \;)
+    fi
     rm -rf "$work"
 }
 trap finish EXIT
@@ -852,6 +858,18 @@ for before in "$work"/badge/prompt-[0-9]*-shown.png; do break; done
 for shown in "$work"/badge/program-[0-9]*-shown.png; do break; done
 followed=$(cd "$work" && python3 corner "$before" "$shown")
 stale=$(cd "$work" && python3 pixels.py "${shown%-shown.png}.png" "$shown")
+if [ "$stale" != "0 0" ]; then
+    # Where the window differs from the frame painted anew, to tell the badge from the rest.
+    cat > "$work/where" <<'EOF2'
+import sys
+from pngread import read
+_, height, channels, a = read(sys.argv[1])
+b = read(sys.argv[2])[3]
+spots = [(x // channels, y) for y in range(height) for x in range(len(a[y])) if a[y][x] != b[y][x]]
+print(f"in x {min(x for x, _ in spots)}-{max(x for x, _ in spots)}, y {min(y for _, y in spots)}-{max(y for _, y in spots)}" if spots else "")
+EOF2
+    stale="$stale $(cd "$work" && python3 where "${shown%-shown.png}.png" "$shown"), terminals: $(cd "$work/badge" && echo program-*-shown.png)"
+fi
 check "the badge follows the program without output" "yes 0 0" "$followed $stale"
 wait_prompt "$mark_before" "the end of timeout"; settle
 hook SetSetting BadgeEnabled false; settle
