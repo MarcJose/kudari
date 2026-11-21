@@ -244,7 +244,7 @@ pub struct Settings {
     pub shell_integration: bool,
     /// Directory for new terminals. Empty means the directory of the active terminal.
     pub directory: String,
-    /// Konsole's title format; see `terminal::format_title`.
+    /// Konsole's title format; see `title::title`.
     pub title_format: String,
     /// `right`, `left` or `hidden`.
     pub scroll_bar_position: String,

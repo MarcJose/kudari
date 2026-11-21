@@ -1036,21 +1036,36 @@ impl View {
         };
     }
 
-    /// Where the matches lie in the scrollback, as fractions from its top, for the
-    /// scrollbar. `None` without a search to highlight.
-    pub fn search_lines<T>(&mut self, term: &Term<T>) -> Option<Vec<f64>> {
-        const MOST_LINES: usize = 5000;
+    /// Where the matches lie in the scrollback, as fractions from its top, for a scrollbar
+    /// of `rows` pixel rows: one match a row is all it can show, so after a match the search
+    /// goes on from the first line of the next row. That reaches the end of a long history
+    /// with a frequent pattern, at most `rows` searches, and a rare one is a single search
+    /// through it all. `None` without a search to highlight.
+    pub fn search_lines<T>(&mut self, term: &Term<T>, rows: usize) -> Option<Vec<f64>> {
         let regex = self.search.as_mut()?;
         let top = -(term.grid().history_size() as i32);
-        let total = f64::from(term.screen_lines() as i32 - top);
-        let start = Point::new(Line(top), Column(0));
         let end = Point::new(Line(term.screen_lines() as i32 - 1), term.last_column());
-        let mut lines: Vec<i32> = matches_between(term, regex, start, end, MOST_LINES)
-            .iter()
-            .map(|found| found.start().line.0)
-            .collect();
-        lines.dedup();
-        Some(lines.iter().map(|line| f64::from(line - top) / total).collect())
+        // Lines counted from the top of the history.
+        let count = (end.line.0 - top + 1) as usize;
+        let rows = rows.clamp(1, count);
+        let mut lines = Vec::new();
+        let mut start = Point::new(Line(top), Column(0));
+        while start <= end {
+            let Some(found) = matches_between(term, regex, start, end, 1).pop() else {
+                break;
+            };
+            let at = (found.start().line.0 - top).max(0) as usize;
+            lines.push(at as f64 / count as f64);
+            // On from the first line of the next row, where row r holds the lines from
+            // r * count / rows on, but after the match, which can reach into that row.
+            let row = at * rows / count;
+            let next = ((row + 1) * count).div_ceil(rows).max(at + 1);
+            if next >= count || *found.end() >= end {
+                break;
+            }
+            start = Point::new(Line(top + next as i32), Column(0)).max(found.end().add(term, Boundary::None, 1));
+        }
+        Some(lines)
     }
 
     /// Closes the search and drops what it selected.
@@ -2981,14 +2996,40 @@ mod tests {
         assert!(!view.find(&mut term, "abc(", false, false, true, true));
         view.update_matches(&term);
         assert!(view.matches().is_empty());
-        assert_eq!(view.search_lines(&term), None);
+        assert_eq!(view.search_lines(&term, 700), None);
         // The field emptied.
         assert!(view.find(&mut term, "abc", false, false, true, true));
         view.clear_search();
         view.update_matches(&term);
         assert!(view.matches().is_empty());
-        assert_eq!(view.search_lines(&term), None);
+        assert_eq!(view.search_lines(&term, 700), None);
         assert!(term.selection.is_some(), "the selection of the last match stays");
+    }
+
+    #[test]
+    fn the_marks_of_a_search_reach_the_end_of_a_long_history_once_a_row() {
+        use std::fmt::Write as _;
+
+        let mut term = term_with_history(20_000);
+        let mut output = String::new();
+        for line in 0..20_000 {
+            let _ = write!(output, "x1 {line}\r\n");
+        }
+        output.push_str("the end");
+        feed(&mut term, output.as_bytes());
+        let mut view = View::default();
+        // A match on every line: one mark for each of the 200 rows, the last at the bottom.
+        assert!(view.find(&mut term, "x1", false, false, false, true));
+        let lines = view.search_lines(&term, 200).unwrap();
+        assert!(lines.len() <= 200 && lines.len() > 190, "{} marks", lines.len());
+        assert!(lines.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(lines.first().is_some_and(|first| *first < 0.01), "{:?}", lines.first());
+        assert!(lines.last().is_some_and(|last| *last > 0.99), "{:?}", lines.last());
+        // A rare one has its marks where its matches are.
+        assert!(view.find(&mut term, "the end|x1 10000 ", false, false, true, true));
+        let rare = view.search_lines(&term, 200).unwrap();
+        assert_eq!(rare.len(), 2, "{rare:?}");
+        assert!((rare[0] - 0.5).abs() < 0.01 && rare[1] > 0.99, "{rare:?}");
     }
 
     #[test]
@@ -3016,7 +3057,7 @@ mod tests {
                 found,
                 view.matches().len(),
                 backwards,
-                view.search_lines(&term).map(|lines| lines.len()),
+                view.search_lines(&term, 700).map(|lines| lines.len()),
             ));
         });
         let done = receiver.recv_timeout(std::time::Duration::from_secs(5));
@@ -3133,7 +3174,7 @@ mod tests {
                 found.push(view.find(&mut term, pattern, false, false, true, true));
                 found.push(view.find(&mut term, pattern, true, false, true, true));
                 view.update_matches(&term);
-                found.push(!view.matches().is_empty() || view.search_lines(&term).is_some());
+                found.push(!view.matches().is_empty() || view.search_lines(&term, 700).is_some());
             }
             // A pattern that matches something still does.
             found.push(view.find(&mut term, "t+", true, false, true, true));
@@ -3171,10 +3212,10 @@ mod tests {
         assert!(view.find(&mut term, "t.o", false, false, true, true));
         view.update_matches(&term);
         assert_eq!(view.matches().len(), 1);
-        assert_eq!(view.search_lines(&term).map(|lines| lines.len()), Some(1));
+        assert_eq!(view.search_lines(&term, 700).map(|lines| lines.len()), Some(1));
         assert!(view.find(&mut term, "one", false, false, false, false));
         view.update_matches(&term);
-        assert!(view.matches().is_empty() && view.search_lines(&term).is_none());
+        assert!(view.matches().is_empty() && view.search_lines(&term, 700).is_none());
         view.end_search(&mut term);
         assert!(term.selection.is_none());
     }
