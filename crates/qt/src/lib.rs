@@ -9,6 +9,11 @@ pub mod controller;
 pub mod frontend;
 pub mod qt;
 pub mod qt_input;
+#[cfg_attr(
+    not(any(test, feature = "test-hooks")),
+    allow(dead_code, reason = "only the GUI test guards against calls back")
+)]
+mod reentry;
 pub mod terminal;
 pub mod terminal_item;
 

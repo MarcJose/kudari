@@ -637,7 +637,13 @@ impl qobject::TerminalItem {
         self.refresh();
     }
 
-    fn refresh(mut self: Pin<&mut Self>) {
+    fn refresh(self: Pin<&mut Self>) {
+        crate::reentry::reentry!("TerminalItem::refresh");
+        self.refresh_now();
+    }
+
+    /// [`Self::refresh`] where another guarded method calls it itself.
+    fn refresh_now(mut self: Pin<&mut Self>) {
         stats::count(stats::Count::Refreshes);
         terminal::frame_asked(*self.terminal_id());
         self.as_mut().refresh_properties();
@@ -723,6 +729,7 @@ impl qobject::TerminalItem {
             tracks_mouse: backend.tracks_mouse() && *self.keyboard_enabled(),
             directory: &directory,
         };
+        crate::reentry::reentry!("TerminalItem::handle");
         let effects = {
             let mut term = backend.lock();
             action(&mut self.as_mut().rust_mut().view, &mut term, &context)
@@ -755,7 +762,7 @@ impl qobject::TerminalItem {
                 Effect::Scroll(lines) => self.as_mut().scroll_lines(lines),
                 Effect::SelectionMode(active) => self.as_mut().set_selection_mode(active),
                 Effect::Hints(shown) => self.as_mut().set_url_hints(shown),
-                Effect::Refresh => self.as_mut().refresh(),
+                Effect::Refresh => self.as_mut().refresh_now(),
                 Effect::Repaint => self.as_mut().update(),
             }
         }
@@ -799,6 +806,7 @@ impl qobject::TerminalItem {
     }
 
     fn input_method_query(&self, query: qobject::InputMethodQuery) -> QVariant {
+        crate::reentry::reentry!("TerminalItem::input_method_query");
         match query {
             qobject::InputMethodQuery::ImEnabled => QVariant::from(&true),
             qobject::InputMethodQuery::ImCursorRectangle => QVariant::from(&QRectF::new(
@@ -945,7 +953,7 @@ impl qobject::TerminalItem {
             let serial = self.scroll_mark_serial().wrapping_add(1);
             self.as_mut().set_scroll_mark_serial(serial);
         }
-        self.as_mut().refresh();
+        self.as_mut().refresh_now();
     }
 
     fn scroll_to_position(mut self: Pin<&mut Self>, position: f64) {
