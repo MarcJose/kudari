@@ -40,6 +40,15 @@ Comment[en_GB]=A program rang the bell in a session that is not on screen
 Sound=bell-window-system
 Action=Popup
 
+[Event/terminalFailed]
+Name=Terminal stopped
+Name[de]=Terminal angehalten
+Name[en_GB]=Terminal stopped
+Comment=A terminal stopped after an internal error
+Comment[de]=Ein Terminal wurde nach einem internen Fehler angehalten
+Comment[en_GB]=A terminal stopped after an internal error
+Action=Popup
+
 [Event/processFinished]
 Name=Program finished
 Name[de]=Programm beendet

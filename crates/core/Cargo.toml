@@ -50,6 +50,8 @@ harness = false
 fuzz = []
 # Counters of what Kudari does, for the GUI test and the bench; see src/stats.rs.
 stats = []
+# Lets the GUI test break a terminal on purpose. Never enabled for normal builds.
+test-hooks = []
 
 [lints]
 workspace = true

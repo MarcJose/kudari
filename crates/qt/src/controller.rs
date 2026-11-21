@@ -721,6 +721,10 @@ impl qobject::Controller {
         self.update(|app| app.terminal_exited(terminal));
     }
 
+    pub fn terminal_failed(self: Pin<&mut Self>, terminal: TerminalId) {
+        self.update(|app| app.terminal_failed(terminal));
+    }
+
     pub fn terminal_output(self: Pin<&mut Self>, terminal: TerminalId) {
         if let Some(backend) = terminal::backend(terminal) {
             *backend

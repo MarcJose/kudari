@@ -610,6 +610,11 @@ impl TestHooks {
         });
     }
 
+    /// Lets the next frame a terminal paints panic, which breaks only that terminal.
+    fn panic_next_paint(&self) {
+        kudari_qt::terminal_item::panic_next_paint();
+    }
+
     /// Lets each refresh of a terminal wait `milliseconds` at its end, so that output comes
     /// between a refresh and the paint of its frame; 0 ends that.
     fn slow_refresh(&self, milliseconds: u32) {

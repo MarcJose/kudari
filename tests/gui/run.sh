@@ -687,6 +687,25 @@ check "a search while typing finds the newest match" yes \
     "$(awk -v at="$newest" 'BEGIN { print (at != "" && at > 0.9) ? "yes" : "no: " at }')"
 check "a match far back is found after a pause, and not missed meanwhile" "false false yes" \
     "$(echo "$far" | awk '{ print $1, $2, ($3 != "" && $3 < 0.5) ? "yes" : "no: " $3 }')"
+# A panic breaks only its terminal, in the thread of its PTY and while it is drawn: its tab
+# closes, Kudari goes on, and the terminal of the tab before still takes commands.
+for place in pty paint; do
+    before_panic=$(sessions sessionIdList)
+    mark; sessions addSession > /dev/null; wait_shells
+    if [ "$place" = pty ]; then
+        # Only the output asks for it, not the echo of the command.
+        sessions runCommand "printf 'KUDARI-TEST-''PANIC-PTY'" 2>/dev/null
+    else
+        hook PanicNextPaint
+        sessions runCommand "echo drawn" 2>/dev/null
+    fi
+    sleep 1; settle
+    after_panic=$(sessions sessionIdList)
+    alive=$(kill -0 "$kudari" 2>/dev/null && echo yes || echo no)
+    run "echo after-panic"
+    check "a panic in the $place breaks only its terminal, and the others go on" "yes $before_panic" \
+        "$alive $after_panic"
+done
 for action in edit_select_all edit_copy select-line select-mode select-mode; do hook Trigger "$action"; settle; done
 
 # A blinking cursor that a program hid, as htop does, stops blinking: each blink would draw
