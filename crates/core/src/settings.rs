@@ -333,6 +333,43 @@ pub fn mark_first_run_done(store: &dyn Store) {
     store.write("Dialogs", "FirstRun", "false");
 }
 
+/// What a change of the settings carries out anew beyond taking them: everything else is read
+/// where it is used, or reaches QML with the settings. The options of the terminals are
+/// compared as they are, see [`crate::options::Options`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools, reason = "one flag for each thing to carry out")]
+pub struct Changes {
+    /// The tray icon shows or hides.
+    pub tray: bool,
+    /// How long a hidden window keeps its graphics.
+    pub graphics: bool,
+    /// The colors of the terminals, from the color scheme and the skin.
+    pub palette: bool,
+    /// The colors of the window.
+    pub skin: bool,
+    /// The key table, which is read from a file.
+    pub keys: bool,
+    /// The scrollbar shows or hides.
+    pub scrollbar: bool,
+    /// The window blurs what shines through it.
+    pub blur: bool,
+}
+
+impl Changes {
+    #[must_use]
+    pub fn between(old: &Settings, new: &Settings) -> Self {
+        Self {
+            tray: new.show_systray_icon != old.show_systray_icon,
+            graphics: new.release_graphics_after != old.release_graphics_after,
+            palette: new.color_scheme != old.color_scheme || new.skin != old.skin,
+            skin: new.skin != old.skin,
+            keys: new.key_bindings != old.key_bindings,
+            scrollbar: (new.scroll_bar_position == "hidden") != (old.scroll_bar_position == "hidden"),
+            blur: new.blurs_behind() != old.blurs_behind(),
+        }
+    }
+}
+
 impl Settings {
     /// Whether the window blurs what shines through it.
     #[must_use]
@@ -639,6 +676,36 @@ mod tests {
             table.write("", key, value);
         }
         Settings::load(&table)
+    }
+
+    /// Each setting carries out only what depends on it, and one that only QML shows nothing.
+    #[test]
+    fn a_change_carries_out_only_what_depends_on_it() {
+        let changes = |key: &str, value: &str| Changes::between(&with(&[]), &with(&[(key, value)]));
+        let only = |change: fn(&mut Changes)| {
+            let mut changes = Changes::default();
+            change(&mut changes);
+            changes
+        };
+        assert_eq!(changes("Width", "50"), Changes::default());
+        assert_eq!(changes("ToggleToFocus", "true"), Changes::default());
+        assert_eq!(changes("Opacity", "80"), only(|c| c.blur = true));
+        assert_eq!(changes("ShowSystrayIcon", "false"), only(|c| c.tray = true));
+        assert_eq!(changes("ReleaseGraphicsAfter", "5"), only(|c| c.graphics = true));
+        assert_eq!(changes("ColorScheme", "dark"), only(|c| c.palette = true));
+        assert_eq!(
+            changes("Skin", "theme:dark"),
+            only(|c| {
+                c.palette = true;
+                c.skin = true;
+            })
+        );
+        assert_eq!(changes("KeyBindings", "linux"), only(|c| c.keys = true));
+        assert_eq!(changes("ScrollBarPosition", "hidden"), only(|c| c.scrollbar = true));
+        assert_eq!(changes("ScrollBarPosition", "left"), Changes::default());
+        let translucent = with(&[("Opacity", "80"), ("Blur", "true")]);
+        let opaque = with(&[("Opacity", "100"), ("Blur", "true")]);
+        assert_eq!(Changes::between(&translucent, &opaque), only(|c| c.blur = true));
     }
 
     #[test]

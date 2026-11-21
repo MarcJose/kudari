@@ -866,6 +866,17 @@ behind="$(paints "$first_terminal") $(hook Stats | python3 -c 'import json, sys;
 sessions removeSession "$background"; settle
 sessions raiseSession "$first"; settle
 check "output in a tab in the background neither refreshes nor paints" "0 0" "$behind"
+# A change of a setting paints the terminals anew only where they show it: a slider in the
+# settings changes them at every step.
+some() { [ "$1" -gt 0 ] && echo yes || echo "no: $1"; }
+hook ResetStats; hook SetSetting ToggleToFocus true; settle
+by_window=$(paints all)
+hook ResetStats; hook SetSetting BoldIntense false; settle
+by_bold=$(some "$(paints all)")
+hook ResetStats; hook SetSetting Skin theme:kudari.test.dark; settle
+by_skin=$(some "$(paints all)")
+hook SetSetting Skin system; hook SetSetting BoldIntense true; hook SetSetting ToggleToFocus false; settle
+check "a setting paints the terminals anew only where they show it" "0 yes yes" "$by_window $by_bold $by_skin"
 # A key that the shell echoes paints the terminal once.
 run "clear"
 hook ResetStats
