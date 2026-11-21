@@ -424,10 +424,13 @@ Item {
 
         Text {
             id: preeditText
+            objectName: "preeditText"
 
             visible: terminal.preedit.length > 0
             x: terminal.cursorX
             y: terminal.cursorY
+            // What an input method composes is text, whatever it looks like.
+            textFormat: Text.PlainText
             text: terminal.preedit
             font.family: metrics.font.family
             font.pointSize: metrics.font.pointSize

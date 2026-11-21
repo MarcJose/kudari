@@ -1005,10 +1005,14 @@ sessions removeTerminal "$split"; sleep 0.6
 run "clear; cd"
 run_open "clear; cat > $work/typed"
 hook Key A; sleep 0.2
-hook InputMethod "vor" ""; sleep 0.2
+# What an input method composes shows as text, markup and all: ten cells, not a bold "vor".
+hook InputMethod "<b>vor</b>" ""; sleep 0.2
+composed=$(awk -v width="$(pane_value preeditText implicitWidth)" -v cell="$(pane_value terminal cellWidth)" \
+    'BEGIN { print (cell > 0 && width >= 9.5 * cell) ? "yes" : "no: " width " for cells of " cell }')
 hook InputMethod "" "ü"; sleep 0.2
 end_input
 check "keys and input methods reach the terminal" "aü|" "$(content "$work/typed")"
+check "what an input method composes shows as text" yes "$composed"
 
 # The real menus, opened as a click would open them and walked with the keyboard.
 hook SetSetting Width 100; hook SetSetting TabActivityColor "#ff0000"; settle
@@ -1147,6 +1151,15 @@ hook SetSetting TitleFormat "%w"; settle
 run "clear; printf '\033]2;<img src=\"http://127.0.0.1:18765/t.png\">x\a'"
 sleep 2
 check "a title shows its markup as text" '<img src="http://127.0.0.1:18765/t.png">x' "$(tabs tabTitle "$first")"
+# A notification names the session by that title. KNotification takes markup, and the text
+# of a notification is markup of KDE's translations, in which the title is text: the image
+# loads nothing there either.
+hook Toggle toggle-session-monitor-process true; settle
+run "sleep 1"; sleep 1
+hook Toggle toggle-session-monitor-process false; settle
+check "a notification shows the title of its session as text" \
+    '<html>Process finished in monitored terminal in session "&lt;img src=&quot;http://127.0.0.1:18765/t.png&quot;&gt;x".</html>' \
+    "$(hook LastNotification)"
 kill "$http"
 check "a title loads nothing from the network" no "$(grep -q 't.png' "$work/http.log" && echo yes || echo no)"
 hook SetSetting TitleFormat "%d : %n"; settle
