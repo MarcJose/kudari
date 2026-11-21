@@ -857,6 +857,18 @@ stale_hidden=$(stale)
 window toggleWindowState; sleep 1
 check "output nobody sees waits until the terminal shows" "1 0 1 0" "$stale_in_background $stale_shown $stale_hidden $(stale)"
 
+# Hidden, with no terminal watched or saved, the window looks at its terminals for titles only
+# every 4 s, which only D-Bus sees then; shown, it looks at once rather than after its timer.
+polls() { hook Stats | python3 -c 'import json, sys; print(json.load(sys.stdin)["polls"])'; }
+window toggleWindowState; sleep 1
+hook ResetStats; sleep 3
+polls_hidden=$(polls)
+hook ResetStats; window toggleWindowState; sleep 0.4
+polls_shown=$(polls)
+looked="hidden $polls_hidden, shown $polls_shown"
+[ "$polls_hidden" -le 1 ] && [ "$polls_shown" -ge 1 ] && looked=yes
+check "a hidden window looks at its terminals seldom, and at once when it shows" yes "$looked"
+
 # The counters of the test build: output, its refresh and paint, the lock of the terminal, the
 # queue of the Qt thread and the frame all count.
 hook ResetStats
