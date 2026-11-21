@@ -6,47 +6,108 @@
 //! mounts its drive first, and with it reaches a server: a program could make Kudari do that
 //! with a path in its output, as soon as the pointer passes over it with Ctrl held.
 
+use std::collections::VecDeque;
+use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
-/// Whether looking at `path` would mount a drive: it lies under a mount point of autofs with
-/// nothing mounted over it yet. Decided by the path alone, from the table of mounts: asking
-/// the file system would mount it as well.
+/// The path that `path` names with each symbolic link on the way followed, or nothing where
+/// a step would go into a mount point of autofs with nothing mounted over it yet: looking
+/// there would mount its drive. Each step is checked against the table of mounts before it
+/// is looked at, so that neither the path nor a link on it, such as one in an unpacked
+/// archive or `/proc/self/cwd`, can lead there.
 #[must_use]
-pub fn mounts_on_look(path: &Path) -> bool {
+pub fn resolved(path: &Path) -> Option<PathBuf> {
     #[cfg(target_os = "linux")]
     {
-        table::on_demand(path)
+        resolved_in(&table::mounts(), path)
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = path;
-        false
+        Some(path.to_path_buf())
     }
 }
 
 #[cfg(target_os = "linux")]
 mod table {
-    use super::{Mount, PathBuf, under_demand};
-    use std::path::Path;
-    use std::sync::Mutex;
+    use super::Mount;
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
     /// How long the table counts as it is: mounts come and go rarely, and reading it is a
     /// read of `/proc` at every look.
     const FRESH: Duration = Duration::from_secs(1);
 
-    static TABLE: Mutex<Option<(Instant, Vec<Mount>)>> = Mutex::new(None);
+    static TABLE: Mutex<Option<(Instant, Arc<Vec<Mount>>)>> = Mutex::new(None);
 
-    pub fn on_demand(path: &Path) -> bool {
+    /// The table, read again when it is older than [`FRESH`]. Handed out, so that no look at
+    /// a drive holds the lock.
+    pub fn mounts() -> Arc<Vec<Mount>> {
         let mut table = TABLE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let stale = table.as_ref().is_none_or(|(read, _)| read.elapsed() > FRESH);
-        if stale {
-            let text = std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
-            *table = Some((Instant::now(), super::parse(&text)));
+        match table.as_ref() {
+            Some((read, mounts)) if read.elapsed() <= FRESH => Arc::clone(mounts),
+            _ => {
+                let text = std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+                let mounts = Arc::new(super::parse(&text));
+                *table = Some((Instant::now(), Arc::clone(&mounts)));
+                mounts
+            }
         }
-        table
-            .as_ref()
-            .is_some_and(|(_, mounts)| under_demand(mounts, &PathBuf::from(path)))
+    }
+}
+
+/// The most symbolic links one path may lead through, as Linux allows.
+const MOST_LINKS: usize = 40;
+
+/// [`resolved`] with the table `mounts`.
+fn resolved_in(mounts: &[Mount], path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut steps: VecDeque<OsString> = VecDeque::new();
+    let mut at = PathBuf::from("/");
+    let mut links = 0;
+    push_front(&mut steps, path);
+    while let Some(step) = steps.pop_front() {
+        match step.to_str() {
+            Some("/") => at = PathBuf::from("/"),
+            Some(".") => {}
+            Some("..") => {
+                at.pop();
+            }
+            _ => {
+                let next = at.join(&step);
+                if under_demand(mounts, &next) {
+                    return None;
+                }
+                let metadata = std::fs::symlink_metadata(&next).ok()?;
+                if metadata.is_symlink() {
+                    links += 1;
+                    if links > MOST_LINKS {
+                        return None;
+                    }
+                    push_front(&mut steps, &std::fs::read_link(&next).ok()?);
+                } else {
+                    at = next;
+                }
+            }
+        }
+    }
+    Some(at)
+}
+
+/// Puts the steps of `path` before `steps`: a `/` for its root, then each part.
+fn push_front(steps: &mut VecDeque<OsString>, path: &Path) {
+    let parts: Vec<OsString> = path
+        .components()
+        .map(|component| match component {
+            Component::RootDir | Component::Prefix(_) => OsString::from("/"),
+            Component::CurDir => OsString::from("."),
+            Component::ParentDir => OsString::from(".."),
+            Component::Normal(name) => name.to_os_string(),
+        })
+        .collect();
+    for part in parts.into_iter().rev() {
+        steps.push_front(part);
     }
 }
 
@@ -159,6 +220,42 @@ mod tests {
         assert!(!on_demand("/home/user/notes.txt"));
         assert!(!on_demand("/network/x"));
         assert!(!on_demand("/net/other/../../home/x"));
+    }
+
+    /// A link on the way can lead into a mount on demand as well as the path itself: each
+    /// step is checked before it is looked at.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_into_a_mount_on_demand_is_not_followed() {
+        let root = std::env::temp_dir().join(format!("kudari-mounts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        // What the links lead to is there: only the check keeps them out.
+        std::fs::create_dir_all(root.join("auto/host")).unwrap();
+        std::fs::write(root.join("auto/host/x"), "").unwrap();
+        std::fs::write(root.join("auto/x"), "").unwrap();
+        std::fs::write(root.join("real/notes.txt"), "").unwrap();
+        let link = |target: &str, name: &str| std::os::unix::fs::symlink(target, root.join(name)).unwrap();
+        link("auto/host", "into");
+        link(&root.join("auto").to_string_lossy(), "absolute");
+        link("real/../auto", "around");
+        link("real", "fine");
+        link("again", "loop");
+        std::os::unix::fs::symlink("loop", root.join("again")).unwrap();
+        let mounts = [Mount {
+            point: root.join("auto"),
+            on_demand: true,
+        }];
+        let resolved = |path: &str| resolved_in(&mounts, &root.join(path));
+        assert_eq!(resolved("into/x"), None);
+        assert_eq!(resolved("absolute/x"), None);
+        assert_eq!(resolved("around/x"), None);
+        assert_eq!(resolved("real/../auto/x"), None);
+        assert_eq!(resolved("loop/x"), None);
+        assert_eq!(resolved("fine/notes.txt"), Some(root.join("real/notes.txt")));
+        assert_eq!(resolved("real/./notes.txt"), Some(root.join("real/notes.txt")));
+        assert_eq!(resolved_in(&mounts, Path::new("relative/notes.txt")), None);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

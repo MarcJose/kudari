@@ -453,9 +453,8 @@ impl Look {
     #[must_use]
     pub fn resolve(self, directory: &dyn Fn() -> Option<PathBuf>, schemes: &[String]) -> Option<Link> {
         let local = self.local.and_then(|(path, link)| {
-            let target = Some(path)
-                .filter(|path| !crate::mounts::mounts_on_look(Path::new(path)))
-                .and_then(|path| crate::links::openable(&path, schemes))?;
+            let real = crate::mounts::resolved(Path::new(&path))?;
+            let target = crate::links::openable(&real.to_string_lossy(), schemes)?;
             Some(Link { target, ..link })
         });
         if local.is_some() {
@@ -1434,12 +1433,12 @@ fn file_at(name: &str, position: &str, directory: &Path) -> Option<String> {
         Some(rest) => crate::process::home()?.join(rest),
         None => directory.join(name),
     };
-    if crate::mounts::mounts_on_look(&path) {
-        return None;
-    }
-    let metadata = std::fs::metadata(&path).ok()?;
-    let plain = metadata.is_file() && is_inert(&path, &metadata);
-    let desktop_entry = path.extension().is_some_and(|extension| extension == "desktop");
+    let real = crate::mounts::resolved(&path)?;
+    let metadata = std::fs::metadata(&real).ok()?;
+    let plain = metadata.is_file() && is_inert(&real, &metadata);
+    let desktop_entry = [&path, &real]
+        .iter()
+        .any(|path| path.extension().is_some_and(|extension| extension == "desktop"));
     let is_position = position
         .split(':')
         .skip(1)

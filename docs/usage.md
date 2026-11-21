@@ -39,8 +39,8 @@ uses the same global shortcut, Kudari asks before taking it over.
   `kate --line LINE --column COLUMN PATH`, they open at that position.
 - A file on a drive that does not answer within 50 ms, such as a share whose server is
   gone, is no link until it answers again; Kudari goes on meanwhile. Paths under an
-  automount that is not mounted yet, such as `/net/host`, are never links: looking at them
-  would mount the drive.
+  automount that is not mounted yet, such as `/net/host`, are never links, also not through
+  a symbolic link: looking at them would mount the drive.
 
 ## Security
 
