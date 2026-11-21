@@ -1048,19 +1048,17 @@ impl App {
                 effects.extend(self.end_one_shot(id, Monitor::Process));
             }
             let silent = status.quiet_for >= Duration::from_secs(self.settings.silence_seconds as u64);
-            if self
-                .stack
-                .terminal_state(id)
-                .is_some_and(|state| state.title != status.title)
-            {
-                if let Some(session) = self.stack.set_terminal_title(id, &status.title)
+            // A title can show the name of a directory or of a program, which anybody chooses.
+            let title = crate::sessions::bounded_title(&status.title);
+            if self.stack.terminal_state(id).is_some_and(|state| state.title != title) {
+                if let Some(session) = self.stack.set_terminal_title(id, &title)
                     && self.settings.dynamic_tab_titles
                     && self
                         .stack
                         .session(session)
                         .is_some_and(|found| found.active_terminal == id)
                 {
-                    self.stack.set_tab_title(session, &status.title, false);
+                    self.stack.set_tab_title(session, &title, false);
                 }
                 changed = true;
             }
@@ -1969,6 +1967,19 @@ mod tests {
             fixed.stack().tab_title(fixed.stack().active_id().unwrap()),
             Some("Shell")
         );
+    }
+
+    #[test]
+    fn titles_from_the_terminal_show_nothing_that_turns_the_text_around() {
+        let mut app = app_with(&[]);
+        let session = app.stack().active_id().unwrap();
+        let terminal = app.active_terminal().unwrap();
+        // A directory named so that its end shows first, as `exe.txt` shown as `txt.exe`.
+        let turned = status(terminal, "~/photo\u{202e}gpj.exe : sh", false, 0);
+        assert!(app.poll(std::slice::from_ref(&turned)).contains(&Effect::Publish));
+        assert_eq!(app.stack().tab_title(session), Some("~/photogpj.exe : sh"));
+        // The same title again is no change.
+        assert!(!app.poll(&[turned]).contains(&Effect::Publish));
     }
 
     #[test]

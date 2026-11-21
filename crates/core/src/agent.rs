@@ -495,9 +495,14 @@ impl App {
                 Ok(String::new())
             }
             Request::Open { title } => {
-                if title.chars().count() > MAX_TITLE || title.chars().any(char::is_control) {
+                if title.chars().count() > MAX_TITLE
+                    || title
+                        .chars()
+                        .any(|character| character.is_control() || crate::sessions::sets_direction(character))
+                {
                     return Err(Error::Invalid(format!(
-                        "A title has at most {MAX_TITLE} characters and no control characters."
+                        "A title has at most {MAX_TITLE} characters, and no control characters or \
+                         marks of the direction of text."
                     )));
                 }
                 // Behind the tabs: the user may be typing elsewhere, a password even, which
@@ -1204,6 +1209,14 @@ mod tests {
                 &host,
             );
             assert!(matches!(long, Err(Error::Invalid(_))));
+            let turned = ask(
+                &mut app,
+                Request::Open {
+                    title: "photo\u{202e}gpj.exe".into(),
+                },
+                &host,
+            );
+            assert!(matches!(turned, Err(Error::Invalid(_))), "{turned:?}");
             assert!(matches!(
                 ask(&mut app, Request::Close { session: 0 }, &host),
                 Err(Error::Denied(_))

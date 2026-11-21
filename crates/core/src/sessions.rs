@@ -20,6 +20,38 @@ pub const MIN_EXTENT: i32 = 40;
 const MIN_FONT_ZOOM: i32 = -8;
 const MAX_FONT_ZOOM: i32 = 40;
 
+/// The most bytes of a title that a program sets: tabs, the window and notifications show
+/// little of it, and a longer one only takes time to copy and lay out.
+pub const MAX_TITLE: usize = 1024;
+
+/// Whether `character` sets the direction of the text around it: the marks and the embeddings,
+/// overrides and isolates of Unicode. In a title from a program, a file name or a script, one
+/// can turn the text after it around, so that `exe.txt` shows as `txt.exe`, or leave an
+/// embedding open into the rest of the tab bar.
+#[must_use]
+pub fn sets_direction(character: char) -> bool {
+    matches!(
+        character,
+        '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+    )
+}
+
+/// A title as Kudari shows it when it comes from a program, a file name or a script: cut to
+/// [`MAX_TITLE`] at the end of a character, with spaces for control characters, and without
+/// what sets the direction of the text. A name the user types stays as it is.
+#[must_use]
+pub fn bounded_title(title: &str) -> String {
+    let mut end = title.len().min(MAX_TITLE);
+    while !title.is_char_boundary(end) {
+        end -= 1;
+    }
+    title[..end]
+        .chars()
+        .filter(|character| !sets_direction(*character))
+        .map(|character| if character.is_control() { ' ' } else { character })
+        .collect()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Orientation {
     /// Side by side.
