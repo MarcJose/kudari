@@ -69,5 +69,12 @@ fn main() {
 
     let code = app.as_mut().map_or(1, |app| app.exec());
     drop(connection);
+    // The debug service of QML sends what it recorded as the application goes, and qmlprofiler
+    // gets nothing from one that ends without: in the build for it, both go first.
+    #[cfg(feature = "qml-profile")]
+    {
+        drop(engine);
+        drop(app);
+    }
     std::process::exit(code);
 }

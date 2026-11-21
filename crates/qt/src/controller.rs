@@ -593,6 +593,7 @@ impl qobject::Controller {
     }
 
     fn publish_settings(self: Pin<&mut Self>) {
+        stats::count(stats::Count::SettingsPublished);
         let s = self.app.settings();
         let value = json!({
             "width": s.width, "height": s.height, "position": s.position, "screen": s.screen,
@@ -978,6 +979,7 @@ impl qobject::Controller {
     }
 
     fn reload_settings(mut self: Pin<&mut Self>) {
+        stats::count(stats::Count::SettingsReloaded);
         let settings = Settings::load(frontend().store());
         frontend().set_tray_visible(settings.show_systray_icon);
         let old = self.as_mut().rust_mut().app.replace_settings(settings);

@@ -90,6 +90,10 @@ verify() {
     if grep -aq -e 'kudari-stats' -e 'io.github.marcjose.kudari.Test' bin/kudari; then
         die "bin/kudari is a build with the feature stats or test-hooks"
     fi
+    # Nor one with the debug service of QML (qml-profile), whose client could run code in it.
+    if nm -D --undefined-only bin/kudari | grep -q QQmlDebuggingEnabler; then
+        die "bin/kudari is a build with the feature qml-profile"
+    fi
     QT_QPA_PLATFORM=offscreen bin/kudari --version
 }
 

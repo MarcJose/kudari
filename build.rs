@@ -89,6 +89,7 @@ fn main() {
         files
     });
     let test_hooks = std::env::var_os("CARGO_FEATURE_TEST_HOOKS").is_some();
+    let qml_profile = std::env::var_os("CARGO_FEATURE_QML_PROFILE").is_some();
     let qt_headers = qt_headers();
     let kf6 = kf6_prefix();
     let mut builder = CxxQtBuilder::new_qml_module(module)
@@ -117,6 +118,11 @@ fn main() {
             if test_hooks {
                 cc.define("RK_TEST_HOOKS", None);
                 cc.define("QT_GUI_LIB", None);
+            }
+            if qml_profile {
+                // qqmldebug.h then turns the debug service on, and only with -qmljsdebugger
+                // does it listen.
+                cc.define("QT_QML_DEBUG_NO_WARNING", None);
             }
         })
     };

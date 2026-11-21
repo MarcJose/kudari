@@ -312,7 +312,15 @@ class Report(unittest.TestCase):
         times = {name: {"count": 0, "total_us": 0, "buckets": [0] * 32} for name, _ in bench.TIMED}
         times["lock_wait"] = {"count": sum(waits), "total_us": 0, "buckets": waits + [0] * (32 - len(waits))}
         times["frame_build"] = {"count": builds[0], "total_us": builds[1], "buckets": [0] * 32}
-        counters = {"wakeups": wakeups, "reports": 0, "refreshes": wakeups // 2, "paints": paints, **times}
+        counters = {
+            "wakeups": wakeups,
+            "reports": 0,
+            "refreshes": wakeups // 2,
+            "cursor_moves": wakeups // 4,
+            "input_method_queries": wakeups // 5,
+            "paints": paints,
+            **times,
+        }
         return f"kudari-stats {bench.when(stamp(seconds)):.3f} {json.dumps(counters)}"
 
     def test_the_counters_of_a_stats_build_count_per_load_between_their_lines(self):
@@ -326,10 +334,11 @@ class Report(unittest.TestCase):
         ])
         text = self.report("kudari")
         row = next(line.split() for line in text.split("what the build with the feature stats counted")[1].splitlines() if line.startswith("plain "))
-        # 40 times woken, 20 refreshes and 40 paints in the 0.4 s between the lines; 95 % of 20
-        # waits need the two in the bucket up to 1024 µs; ten frames built in 1500 µs.
-        self.assertEqual(row[:5], ["plain", "100", "50", "100", "1024"])
-        self.assertEqual(row[7], "150")
+        # 40 times woken, 20 refreshes, 40 paints, 10 moves of the cursor and 8 questions of the
+        # input method in the 0.4 s between the lines; 95 % of 20 waits need the two in the
+        # bucket up to 1024 µs; ten frames built in 1500 µs.
+        self.assertEqual(row[:7], ["plain", "100", "50", "100", "25", "20", "1024"])
+        self.assertEqual(row[9], "150")
 
     def monotonic_run(self, name, log_lines, loads, trips=(), wall=None, keys=None):
         """A run as the driver writes it now: seconds on the monotonic clock, from 1000 on, and
