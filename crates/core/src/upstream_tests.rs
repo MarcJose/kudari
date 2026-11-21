@@ -162,6 +162,70 @@ fn a_repeat_ends_as_writing_the_character_that_often() {
 
 #[cfg(unix)]
 #[test]
+fn input_reaches_the_program_while_its_costly_output_is_parsed() {
+    use std::borrow::Cow;
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    use alacritty_terminal::event::WindowSize;
+    use alacritty_terminal::event_loop::{EventLoop, Msg};
+    use alacritty_terminal::sync::FairMutex;
+    use alacritty_terminal::tty::{self, Options as Pty, Shell};
+
+    // A large screen filled with E (DECALN) for every four bytes: `alacritty_terminal` 0.26
+    // sent what the user typed, as Ctrl+C, to the program only after it had parsed up to
+    // 64 KiB of that, for seconds; fixed in `third_party`, which sends it each time it lets
+    // others have the terminal.
+    let _alone = REAL_PTY.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let marks = std::env::temp_dir().join(format!("kudari-interrupted-{}", std::process::id()));
+    let _ = std::fs::remove_file(&marks);
+    let term = Arc::new(FairMutex::new(Term::new(
+        Config::default(),
+        &TermSize::new(500, 200),
+        VoidListener,
+    )));
+    let options = Pty {
+        shell: Some(Shell::new(
+            "sh".to_string(),
+            vec![
+                "-c".to_string(),
+                format!(
+                    "trap ': > {}' INT; yes \"$(printf '\\033#8')\" | head -c 400000000; sleep 30",
+                    marks.display()
+                ),
+            ],
+        )),
+        ..Pty::default()
+    };
+    let size = WindowSize {
+        num_lines: 200,
+        num_cols: 500,
+        cell_width: 8,
+        cell_height: 16,
+    };
+    let pty = tty::new(&options, size, 0).expect("a PTY");
+    let event_loop = EventLoop::new(Arc::clone(&term), VoidListener, pty, false, false).expect("an event loop");
+    let channel = event_loop.channel();
+    let thread = event_loop.spawn();
+    // The output has begun.
+    std::thread::sleep(Duration::from_millis(500));
+    let sent = Instant::now();
+    let _ = channel.send(Msg::Input(Cow::Borrowed(b"\x03")));
+    while !marks.exists() && sent.elapsed() < Duration::from_secs(20) {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let taken = sent.elapsed();
+    let _ = channel.send(Msg::Shutdown);
+    let _ = thread.join();
+    let _ = std::fs::remove_file(&marks);
+    assert!(
+        taken < Duration::from_millis(300),
+        "Ctrl+C took {taken:?} to reach the program"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn costly_output_lets_others_have_the_terminal() {
     use std::sync::Arc;
     use std::time::Instant;
