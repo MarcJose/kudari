@@ -1588,6 +1588,15 @@ hook Trigger file_quit
 wait_quit "$kudari"
 check "quitting after a screen went away ends the program" no "$(kill -0 "$kudari" 2>/dev/null && echo yes || echo no)"
 
+# Calls back into the controller or a terminal item while one of their methods still runs:
+# each pair is in reentry.txt, and one more fails, so that a change in the order of the work
+# cannot add one unnoticed. A pair no longer seen is told, to take it out there.
+sed -n 's/^kudari: reentrant //p' "$work/log" "$work"/*.log 2>/dev/null | LC_ALL=C sort -u > "$work/reentries"
+grep -v -e '^#' -e '^$' "$here/reentry.txt" | LC_ALL=C sort -u > "$work/reentries-known"
+check "Qt calls back into Kudari only where it is known to" "" \
+    "$(LC_ALL=C comm -23 "$work/reentries" "$work/reentries-known" | paste -sd ';' -)"
+LC_ALL=C comm -13 "$work/reentries" "$work/reentries-known" | sed 's/^/Reentry no longer seen: /'
+
 echo "$checks checks, $failures failed"
 if [ "$failures" != 0 ]; then
     tail -n 25 "$work/kwin.log" "$work/log" 2>/dev/null | sed 's/^/Error in log: /'

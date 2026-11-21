@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de>
+# SPDX-License-Identifier: MIT
+#
+# The calls back from Qt or QML into Kudari that the GUI test knows, as `<inner> in <outer>`:
+# a guarded method of the controller or a terminal item entered while another one still
+# runs. A pair that is not here fails the test; see crates/qt/src/reentry.rs.
+
+# Showing the window sets windowVisible, and a binding in Main.qml calls afterShow().
+Controller::apply in Controller::apply
+# A terminal to paint anew: terminalDirty, and Main.qml asks the pane to refresh.
+TerminalItem::refresh in Controller::apply
+# An action for a terminal from a menu or a shortcut: terminalAction, and the pane calls
+# the item, for one the selection mode.
+TerminalItem::handle in Controller::apply
+# terminalAction for the search bar gives its field the focus, and Qt asks the input method
+# of the terminal that had it.
+TerminalItem::input_method_query in Controller::apply

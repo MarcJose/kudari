@@ -70,3 +70,4 @@ Vulkan
 [Rr]asteriz(e|ed|ing)
 [Aa]ntialiasing
 [Ss]ubpixel
+[Rr]eentrant
