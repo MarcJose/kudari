@@ -27,7 +27,7 @@ use crate::frontend::frontend;
 use crate::qt::{self, qs};
 use crate::services;
 use crate::sessions::{Layout, Orientation, SessionId, SessionStack, SessionType, TerminalId};
-use crate::settings::{self, Settings};
+use crate::settings::{self, Changes, Settings};
 use crate::stats;
 use crate::terminal;
 use crate::theme;
@@ -978,17 +978,23 @@ impl qobject::Controller {
         self.reload_settings();
     }
 
+    /// Takes the settings anew and carries out only what changed with them: a slider or a
+    /// number field changes them at every step.
     fn reload_settings(mut self: Pin<&mut Self>) {
         stats::count(stats::Count::SettingsReloaded);
         let settings = Settings::load(frontend().store());
-        frontend().set_tray_visible(settings.show_systray_icon);
         let old = self.as_mut().rust_mut().app.replace_settings(settings);
         let new = self.app.settings();
-        let skin_changed = new.skin != old.skin;
-        qt::release_graphics_after(new.release_graphics_after);
+        let changes = Changes::between(&old, new);
+        if changes.tray {
+            frontend().set_tray_visible(new.show_systray_icon);
+        }
+        if changes.graphics {
+            qt::release_graphics_after(new.release_graphics_after);
+        }
         let agents_changed = self.app.agent_rights_changed(&old);
-        self.as_mut().apply_terminal_settings();
-        if skin_changed {
+        self.as_mut().apply_changed_terminal_settings(changes);
+        if changes.skin {
             self.as_mut().apply_skin();
         }
         if self.app.screen_changed(&old) {
@@ -999,8 +1005,40 @@ impl qobject::Controller {
         if agents_changed {
             self.as_mut().update(App::forget_agents);
         }
-        for terminal in self.app.stack().all_terminals() {
-            self.as_mut().terminal_dirty(terminal);
+    }
+
+    /// [`Self::apply_terminal_settings`] for what changed: the palette, the key table and the
+    /// terminals only where their part of the settings did.
+    fn apply_changed_terminal_settings(mut self: Pin<&mut Self>, changes: Changes) {
+        let settings = self.app.settings();
+        if changes.palette {
+            frontend().set_color_scheme(&settings.color_scheme);
+            if let Some(scheme) = theme::terminal_scheme(frontend(), &settings.skin) {
+                colors::set_scheme(scheme);
+            }
+        }
+        if changes.scrollbar {
+            terminal::set_scrollbar_visible(settings.scroll_bar_position != "hidden");
+        }
+        if changes.blur {
+            frontend().set_blur(settings.blurs_behind());
+        }
+        let before = terminal::options();
+        let keys = before
+            .as_ref()
+            .filter(|_| !changes.keys)
+            .map(|before| before.key_rules.clone());
+        let options = match keys {
+            Some(keys) => terminal::Options::from_settings_with_keys(settings, keys),
+            None => terminal::Options::from_settings(settings),
+        };
+        // Applying the options marks every terminal as changed all over, which a new palette,
+        // scrollbar or font needs as well.
+        if before.as_ref() != Some(&options) || changes.palette || changes.scrollbar || changes.drawn {
+            terminal::apply_options(options);
+            for terminal in self.app.stack().all_terminals() {
+                self.as_mut().terminal_dirty(terminal);
+            }
         }
     }
 
