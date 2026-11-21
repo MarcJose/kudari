@@ -221,6 +221,7 @@ Item {
         // The room of the scrollbar beside the terminal. From the setting, not from
         // scrollBar.visible: that turns false with a hidden tab, and the terminal would get more
         // columns there and wrap again on every switch of tabs.
+        searchRows: Math.max(1, Math.round(scrollBar.railHeight))
         readonly property real leftGap: pane.config.ScrollBarPosition === "left" ? scrollBar.width : 0
         readonly property real rightGap: pane.config.ScrollBarPosition !== "left" && pane.config.ScrollBarPosition !== "hidden" ? scrollBar.width : 0
 
@@ -769,19 +770,29 @@ Item {
             border.color: "#5d6060"
         }
 
-        // Lines with search matches.
-        Repeater {
-            model: terminal.searchLines.length > 0 ? JSON.parse(terminal.searchLines) : []
+        // Lines with search matches, at most one a pixel row, all in one item.
+        Canvas {
+            id: searchMarks
 
-            Rectangle {
-                required property real modelData
+            readonly property var lines: terminal.searchLines.length > 0 ? JSON.parse(terminal.searchLines) : []
+            readonly property color color: pane.config.SearchLineColor ?? "#ffff00"
 
-                x: 2
-                y: 3 + modelData * scrollBar.railHeight
-                width: scrollBar.width - 4
-                height: 1
-                color: pane.config.SearchLineColor ?? "#ffff00"
-                opacity: (pane.config.SearchLineOpacity ?? 100) / 100
+            x: 2
+            y: 3
+            width: scrollBar.width - 4
+            height: scrollBar.railHeight + 1
+            visible: lines.length > 0
+            opacity: (pane.config.SearchLineOpacity ?? 100) / 100
+            onLinesChanged: requestPaint()
+            onColorChanged: requestPaint()
+            onHeightChanged: requestPaint()
+            onPaint: {
+                const context = getContext("2d");
+                context.reset();
+                context.fillStyle = color;
+                for (const line of lines) {
+                    context.fillRect(0, Math.floor(line * scrollBar.railHeight), width, 1);
+                }
             }
         }
 

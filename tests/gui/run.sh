@@ -699,6 +699,37 @@ check "a search while typing finds the newest match" yes \
     "$(awk -v at="$newest" 'BEGIN { print (at != "" && at > 0.9) ? "yes" : "no: " at }')"
 check "a match far back is found after a pause, and not missed meanwhile" "false false yes" \
     "$(echo "$far" | awk '{ print $1, $2, ($3 != "" && $3 < 0.5) ? "yes" : "no: " $3 }')"
+# The marks on the scrollbar, in a tab of its own: a match on every line of a history longer
+# than the rail, but at most one mark for each pixel row of the rail, down to its end, and one
+# item draws them all, in yellow on the rail at the right edge of the window.
+hook SetSetting HistoryLines 10000; settle
+before_marks=$(sessions activeSessionId)
+mark; marked=$(sessions addSession); wait_shells
+run "seq 1 12000 | sed 's/^/x gefunden /'"
+hook Trigger edit_find; settle
+for code in 34 18 33; do input key "$code"; done
+sleep 1; settle
+spread=$(printf '%s\n%s\n' "$(hook Property terminal searchRows)" "$(hook Property terminal searchLines)" | python3 -c '
+import re, sys
+rows = max(int(row) for row in sys.stdin.readline().split(","))
+marks = [float(mark) for mark in re.findall(r"[0-9.]+", sys.stdin.read())]
+print("yes" if 0 < len(marks) <= rows and max(marks) > 0.95 else f"no: {len(marks)} marks for {rows} rows, last {max(marks, default=0)}")')
+hook Grab "$work/marks"; sleep 1
+drawn=$(cd "$work" && python3 -c '
+import glob
+from pngread import read
+width, height, channels, rows = read(sorted(glob.glob("marks-*.png"))[0])
+def yellow(row, x):
+    red, green, blue = row[x * channels:x * channels + 3]
+    return red > 200 and green > 200 and blue < 100
+lit = sum(1 for row in rows if any(yellow(row, x) for x in range(width - 20, width)))
+print("yes" if lit > 50 else f"no: {lit} rows")')
+input key 1; settle
+sessions removeSession "$marked" > /dev/null; settle
+sessions raiseSession "$before_marks" > /dev/null
+hook SetSetting HistoryLines 1000; settle
+check "the scrollbar shows the matches once a pixel row, to the end of the history" yes "$spread"
+check "the marks of the matches are drawn on the scrollbar" yes "$drawn"
 # A panic breaks only its terminal, in the thread of its PTY and while it is drawn: its tab
 # closes, Kudari goes on, and the terminal of the tab before still takes commands.
 for place in pty paint; do
