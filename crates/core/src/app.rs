@@ -812,6 +812,28 @@ impl App {
         }
     }
 
+    /// A terminal broke on a panic: it closes as if its shell had ended, and the user is told
+    /// why, as the others go on.
+    pub fn terminal_failed(&mut self, terminal: TerminalId) -> Vec<Effect> {
+        if !self.running.contains(&terminal) {
+            return Vec::new();
+        }
+        let told = self.notify(
+            "terminalFailed",
+            &|title| {
+                tr_arg(
+                    "@info",
+                    "A terminal in session \"%1\" stopped after an internal error. The other terminals go on.",
+                    title,
+                )
+            },
+            terminal,
+        );
+        let mut effects = vec![told];
+        effects.extend(self.close_terminal(terminal));
+        effects
+    }
+
     /// The answer to a question. Questions about sessions that are gone meanwhile do nothing.
     /// The answer to a question. The terminal gets the keyboard back from the question.
     pub fn answer(&mut self, id: u32, accepted: bool) -> Vec<Effect> {

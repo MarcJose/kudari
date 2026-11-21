@@ -58,6 +58,7 @@ impl Listener for Qt {
                 controller.terminal_bell(terminal);
             }
             Report::Exited => controller.terminal_exited(terminal),
+            Report::Failed => controller.terminal_failed(terminal),
         });
     }
 
