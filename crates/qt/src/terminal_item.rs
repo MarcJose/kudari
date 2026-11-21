@@ -117,6 +117,8 @@ pub mod qobject {
         /// True when output came since the places of the matches were found last; QML finds
         /// them again a moment later, see `updateSearchLines`.
         #[qproperty(bool, search_lines_stale, cxx_name = "searchLinesStale")]
+        /// Pixel rows of the rail of the scrollbar: `searchLines` has at most one match each.
+        #[qproperty(i32, search_rows, cxx_name = "searchRows")]
         #[qproperty(f64, scroll_mark_y, cxx_name = "scrollMarkY")]
         #[qproperty(f64, scroll_mark_height, cxx_name = "scrollMarkHeight")]
         #[qproperty(i32, scroll_mark_serial, cxx_name = "scrollMarkSerial")]
@@ -397,6 +399,7 @@ pub struct TerminalItemRust {
     url_hints: bool,
     search_lines: QString,
     search_lines_stale: bool,
+    search_rows: i32,
     scroll_mark_y: f64,
     scroll_mark_height: f64,
     scroll_mark_serial: i32,
@@ -460,6 +463,7 @@ impl Default for TerminalItemRust {
             url_hints: false,
             search_lines: QString::default(),
             search_lines_stale: false,
+            search_rows: 1000,
             scroll_mark_y: 0.0,
             scroll_mark_height: 0.0,
             scroll_mark_serial: 0,
@@ -1088,7 +1092,8 @@ impl qobject::TerminalItem {
         };
         let lines = {
             let term = backend.lock();
-            self.as_mut().rust_mut().view.search_lines(&term)
+            let rows = usize::try_from(*self.search_rows()).unwrap_or(1);
+            self.as_mut().rust_mut().view.search_lines(&term, rows)
         };
         let json = lines.map(|lines| serde_json::to_string(&lines).unwrap_or_default());
         self.as_mut().set_search_lines(kde::qs(&json.unwrap_or_default()));
