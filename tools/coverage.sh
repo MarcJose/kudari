@@ -28,7 +28,8 @@ export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/target}/coverage"
 eval "$(cargo llvm-cov show-env --sh 2>/dev/null)"
 cargo llvm-cov clean --workspace
 
-cargo test --locked --workspace --quiet
+# With the features of the GUI test, so that the build scripts of cxx-qt run once.
+cargo test --locked --workspace --quiet --features test-hooks
 cargo build --locked --features test-hooks
 tests/gui/run.sh "$CARGO_TARGET_DIR/debug/kudari"
 cargo build --locked --package kudari-windows
