@@ -47,6 +47,9 @@ pub enum Report {
     Bell(Pending),
     /// The shell ended.
     Exited,
+    /// The terminal broke: Kudari or its emulator panicked in the thread of its PTY or
+    /// while drawing it. What it holds may be half done; the terminal is of no use any more.
+    Failed,
 }
 
 /// Holds back further reports of the same kind while it lives.
@@ -314,6 +317,8 @@ struct Mailbox {
     /// The same for the primary selection, which a middle click pastes.
     selected: Mutex<Option<String>>,
     replies: Mutex<Vec<Reply>>,
+    /// Whether the terminal broke; see [`Report::Failed`].
+    failed: AtomicBool,
 }
 
 /// The most bytes of a title that a program sets: tabs, the window and notifications show
@@ -351,6 +356,34 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 pub struct Proxy {
     id: TerminalId,
     mailbox: Arc<Mailbox>,
+}
+
+/// A panic in the thread of the PTY ends that thread and drops the proxy it holds: the
+/// terminal is marked broken and the user interface told, and the other terminals go on.
+impl Drop for Proxy {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            fail_with(self.id, &self.mailbox);
+        }
+    }
+}
+
+/// Marks the terminal broken, once, and tells the user interface.
+fn fail_with(id: TerminalId, mailbox: &Mailbox) {
+    if !mailbox.failed.swap(true, Ordering::AcqRel)
+        && let Some(listener) = listener()
+    {
+        listener.report(id, Report::Failed);
+    }
+}
+
+/// Marks a terminal broken after a panic while drawing it; see [`Report::Failed`]. From
+/// then on, [`backend`] no longer gives it, so that nothing reads what it holds.
+pub fn fail(id: TerminalId) {
+    let found = backends().get(&id).cloned();
+    if let Some(backend) = found {
+        fail_with(id, &backend.mailbox);
+    }
 }
 
 impl Proxy {
@@ -1038,7 +1071,11 @@ fn backends() -> std::sync::MutexGuard<'static, HashMap<TerminalId, Arc<Backend>
 /// Looks up the backend of a terminal.
 #[must_use]
 pub fn backend(id: TerminalId) -> Option<Arc<Backend>> {
-    backends().get(&id).cloned()
+    // A broken terminal is no terminal: what it holds may be half done.
+    backends()
+        .get(&id)
+        .filter(|backend| !backend.mailbox.failed.load(Ordering::Acquire))
+        .cloned()
 }
 
 /// Starts the shell of a terminal.

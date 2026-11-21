@@ -498,6 +498,10 @@ msgid "Paste selection"
 msgstr "Auswahl einfügen"
 
 msgctxt "@info"
+msgid "A terminal in session \"%1\" stopped after an internal error. The other terminals go on."
+msgstr "Ein Terminal in der Sitzung „%1“ wurde nach einem internen Fehler angehalten. Die anderen Terminals laufen weiter."
+
+msgctxt "@info"
 msgid "Process finished in monitored terminal in session \"%1\"."
 msgstr "Prozess im überwachten Terminal in Sitzung „%1“ beendet."
 

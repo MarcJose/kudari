@@ -11,6 +11,7 @@
 // The bridge compares `f64` properties to notice changes; an exact compare is right there.
 #![allow(clippy::float_cmp)]
 
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1182,10 +1183,27 @@ impl qobject::TerminalItem {
         self.as_mut().update();
     }
 
+    /// Paints a frame; a panic meanwhile breaks only this terminal, which closes, rather than
+    /// all of Kudari. The same holds for [`Self::paint_lines`] and [`Self::paint_cursor`].
+    ///
     /// # Safety
     ///
     /// `painter` must be null or valid for the duration of the call, which Qt guarantees.
     pub unsafe fn paint(self: Pin<&mut Self>, painter: *mut qobject::QPainter) {
+        let id = *self.terminal_id();
+        // SAFETY: as the caller promises, passed on.
+        let painted = std::panic::catch_unwind(AssertUnwindSafe(|| unsafe { self.paint_now(painter) }));
+        if painted.is_err() {
+            terminal::fail(id);
+        }
+    }
+
+    /// # Safety
+    ///
+    /// As for [`Self::paint`].
+    unsafe fn paint_now(self: Pin<&mut Self>, painter: *mut qobject::QPainter) {
+        #[cfg(feature = "test-hooks")]
+        panic_when_asked();
         // SAFETY: Qt passes null or a painter that is valid during this call and stays in place.
         let Some(painter) = (unsafe { painter.as_mut() }) else {
             return;
@@ -1209,11 +1227,26 @@ impl qobject::TerminalItem {
     /// # Safety
     ///
     /// `painter` is null or a painter that stays valid and in place during the call.
-    pub unsafe fn paint_lines(mut self: Pin<&mut Self>, painter: *mut qobject::QPainter) -> i32 {
+    pub unsafe fn paint_lines(self: Pin<&mut Self>, painter: *mut qobject::QPainter) -> i32 {
+        let id = *self.terminal_id();
+        // SAFETY: as the caller promises, passed on.
+        let painted = std::panic::catch_unwind(AssertUnwindSafe(|| unsafe { self.paint_lines_now(painter) }));
+        painted.unwrap_or_else(|_| {
+            terminal::fail(id);
+            0
+        })
+    }
+
+    /// # Safety
+    ///
+    /// As for [`Self::paint_lines`].
+    unsafe fn paint_lines_now(mut self: Pin<&mut Self>, painter: *mut qobject::QPainter) -> i32 {
         const NOTHING: i32 = 0;
         const PAINTED: i32 = 1;
         const WHOLE: i32 = 2;
         const ALL: i32 = 3;
+        #[cfg(feature = "test-hooks")]
+        panic_when_asked();
         // SAFETY: Qt passes null or a painter that is valid during this call and stays in place.
         let Some(painter) = (unsafe { painter.as_mut() }) else {
             return WHOLE;
@@ -1382,6 +1415,27 @@ impl qobject::TerminalItem {
     ///
     /// `painter` is null or a painter that stays valid and in place during the call.
     pub unsafe fn paint_cursor(
+        self: Pin<&mut Self>,
+        painter: *mut qobject::QPainter,
+        alone: bool,
+        may_keep: bool,
+        kept: &mut bool,
+    ) -> QRectF {
+        let id = *self.terminal_id();
+        let painted = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: as the caller promises, passed on.
+            unsafe { self.paint_cursor_now(painter, alone, may_keep, kept) }
+        }));
+        painted.unwrap_or_else(|_| {
+            terminal::fail(id);
+            QRectF::default()
+        })
+    }
+
+    /// # Safety
+    ///
+    /// As for [`Self::paint_cursor`].
+    unsafe fn paint_cursor_now(
         mut self: Pin<&mut Self>,
         painter: *mut qobject::QPainter,
         alone: bool,
@@ -2076,6 +2130,25 @@ impl Read {
 
 fn qcolor(rgb: Rgb) -> QColor {
     QColor::from_rgb(rgb.r.into(), rgb.g.into(), rgb.b.into())
+}
+
+/// For the GUI test: the next frame of a terminal panics, to show that it breaks only that
+/// terminal.
+#[cfg(feature = "test-hooks")]
+static PANIC_NEXT_PAINT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Lets the next frame a terminal paints panic; see [`PANIC_NEXT_PAINT`].
+#[cfg(feature = "test-hooks")]
+pub fn panic_next_paint() {
+    PANIC_NEXT_PAINT.store(true, std::sync::atomic::Ordering::Release);
+}
+
+#[cfg(feature = "test-hooks")]
+fn panic_when_asked() {
+    assert!(
+        !PANIC_NEXT_PAINT.swap(false, std::sync::atomic::Ordering::AcqRel),
+        "the GUI test asked for a panic while painting"
+    );
 }
 
 /// For the GUI test: draw every text with `drawText` of its own instead of in runs of
