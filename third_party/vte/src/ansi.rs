@@ -505,6 +505,14 @@ pub trait Handler {
     /// A character to be displayed.
     fn input(&mut self, _c: char) {}
 
+    /// A run of printable ASCII characters to be displayed, each as [`Self::input`] would.
+    /// A handler that can write such a run at once does so here.
+    fn input_str(&mut self, text: &str) {
+        for c in text.chars() {
+            self.input(c);
+        }
+    }
+
     /// The character before, `count` more times (REP). A handler that knows the size of its
     /// screen can do less where more would only repeat what it shows.
     fn repeat(&mut self, c: char, count: usize) {
@@ -1298,6 +1306,14 @@ where
     fn print(&mut self, c: char) {
         self.handler.input(c);
         self.state.preceding_char = Some(c);
+    }
+
+    #[inline]
+    fn print_str(&mut self, text: &str) {
+        self.handler.input_str(text);
+        if let Some(c) = text.chars().next_back() {
+            self.state.preceding_char = Some(c);
+        }
     }
 
     #[inline]
