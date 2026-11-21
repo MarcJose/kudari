@@ -57,6 +57,8 @@ pub mod qobject {
         #[qproperty(i32, work_width, cxx_name = "workWidth")]
         #[qproperty(i32, work_height, cxx_name = "workHeight")]
         #[qproperty(bool, window_visible, cxx_name = "windowVisible")]
+        /// How often QML calls `poll`, in milliseconds.
+        #[qproperty(i32, poll_interval, cxx_name = "pollInterval")]
         #[qproperty(bool, fullscreen)]
         /// True while a dialog of Kudari is open, which the window then stays below.
         #[qproperty(bool, dialog_open, cxx_name = "dialogOpen", READ, NOTIFY)]
@@ -424,6 +426,7 @@ pub struct ControllerRust {
     work_width: i32,
     work_height: i32,
     window_visible: bool,
+    poll_interval: i32,
     fullscreen: bool,
     dialog_open: bool,
     agent_access: bool,
@@ -451,6 +454,7 @@ impl Default for ControllerRust {
             work_width: 0,
             work_height: 0,
             window_visible: false,
+            poll_interval: interval_ms(app::POLL_INTERVAL),
             fullscreen: false,
             dialog_open: false,
             agent_access: false,
@@ -490,6 +494,11 @@ impl cxx_qt::Initialize for qobject::Controller {
         self.as_mut().set_shortcuts_json(qs(&frontend().shortcuts_json()));
         self.as_mut().publish_settings();
     }
+}
+
+/// `interval` in the milliseconds of a timer of QML.
+fn interval_ms(interval: Duration) -> i32 {
+    i32::try_from(interval.as_millis()).unwrap_or(i32::MAX)
 }
 
 fn skin_to_json(colors: &theme::WindowColors) -> Value {
@@ -552,7 +561,13 @@ impl qobject::Controller {
                 }
                 Effect::Quit => self.as_mut().quit_requested(),
                 Effect::UpdateWorkArea => self.as_mut().update_work_area(),
-                Effect::WindowVisible(visible) => self.as_mut().set_window_visible(visible),
+                Effect::WindowVisible(visible) => {
+                    // A hidden window polls seldom; shown, its titles and badges are due now.
+                    if visible && *self.poll_interval() > interval_ms(app::POLL_INTERVAL) {
+                        queue(qobject::Controller::poll);
+                    }
+                    self.as_mut().set_window_visible(visible);
+                }
                 Effect::Refocus => {
                     self.as_mut().set_window_visible(false);
                     queue(|controller| controller.set_window_visible(true));
@@ -584,6 +599,11 @@ impl qobject::Controller {
                 }
             }
         }
+        let auto_saving = self.app.stack().all_terminals().into_iter().any(|terminal| {
+            terminal::backend(terminal).is_some_and(|backend| backend.auto_save.lock().is_ok_and(|path| path.is_some()))
+        });
+        let interval = interval_ms(self.app.poll_interval(auto_saving));
+        self.as_mut().set_poll_interval(interval);
     }
 
     /// Runs `action` on the app and carries out its effects.
@@ -787,15 +807,17 @@ impl qobject::Controller {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .elapsed();
                 let session = self.app.stack().session_for_terminal(terminal).unwrap_or_default();
+                let (title, busy) = backend.status(&format, session);
                 Some(app::Status {
                     terminal,
-                    title: backend.title(&format, session),
-                    busy: backend.is_busy_recent(),
+                    title,
+                    busy,
                     quiet_for,
                 })
             })
             .collect();
-        self.update(|app| app.poll(&statuses));
+        stats::count(stats::Count::Polls);
+        self.update(|app| app.poll(&statuses, Instant::now()));
     }
 
     pub fn split(mut self: Pin<&mut Self>, session: SessionId, orientation: Option<Orientation>) -> i32 {

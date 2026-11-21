@@ -235,7 +235,7 @@ Window {
     }
 
     Timer {
-        interval: 500
+        interval: app.pollInterval
         running: true
         repeat: true
         onTriggered: app.poll()
