@@ -610,6 +610,12 @@ impl TestHooks {
         });
     }
 
+    /// Lets each look at the file system for a link wait `milliseconds` first, as at a slow
+    /// drive; 0 ends that.
+    fn slow_file_looks(&self, milliseconds: u32) {
+        kudari_core::file_looks::slow_down(milliseconds.into());
+    }
+
     /// Lets the next frame a terminal paints panic, which breaks only that terminal.
     fn panic_next_paint(&self) {
         kudari_qt::terminal_item::panic_next_paint();

@@ -371,6 +371,18 @@ hook SetSetting EditorCommand "$work/editor PATH:LINE"; hook SetSetting OpenLink
 run "clear; printf 'see notes.txt:12:3 end\n'"
 input click 130 8
 check "a plain click opens a file link in the editor" "$work/home/notes.txt:12|" "$(content "$work/edited")"
+# A look at a slow or hanging drive holds up neither the window nor the terminal: the click
+# opens nothing, and a command goes through at once.
+rm -f "$work/edited"
+hook SlowFileLooks 3000
+input click 130 8
+started=$(date +%s%N)
+run "echo still-here"
+taken=$((($(date +%s%N) - started) / 1000000))
+sleep 3
+hook SlowFileLooks 0; settle
+check "a slow look at a file holds up neither the window nor the terminal" "yes nothing opened" \
+    "$([ "$taken" -lt 1500 ] && echo yes || echo "no: $taken ms") $([ -e "$work/edited" ] && echo opened || echo nothing opened)"
 # The link numbers find the file on a thread of their own, and a number opens it.
 rm -f "$work/edited"
 hook SetSetting UrlHintsModifier ctrl+alt; settle

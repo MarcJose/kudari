@@ -32,6 +32,9 @@ pub enum Effect {
     /// Bytes for the program that are no typing, such as mouse reports.
     Write(Vec<u8>),
     OpenLink(String),
+    /// A link to open that may be a file, to look for without the lock of the terminal; see
+    /// [`Look`].
+    OpenLook(Look),
     /// Text for the clipboard.
     Copy(String),
     /// Text for the primary selection.
@@ -378,13 +381,105 @@ fn on_grid<T>(term: &Term<T>, point: Point) -> bool {
 /// The link at a cell: a hyperlink the program set, a web address, or with `files` the path
 /// of an existing file. Only safe schemes count, and files that would start a program do not.
 pub fn link_at<T>(term: &Term<T>, point: Point, files: bool, context: &Context) -> Option<Link> {
+    match find_link(term, point, files, context.options)? {
+        Found::Link(link) => Some(link),
+        Found::Look(look) => look.resolve(context.directory, &context.options.link_schemes),
+    }
+}
+
+/// What [`find_link`] finds at a cell.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Found {
+    /// A link that needs no look at the file system.
+    Link(Link),
+    /// One that may be a file.
+    Look(Look),
+}
+
+impl Found {
+    /// What opens it.
+    #[must_use]
+    pub fn opening(self) -> Effect {
+        match self {
+            Self::Link(link) => Effect::OpenLink(link.target),
+            Self::Look(look) => Effect::OpenLook(look),
+        }
+    }
+}
+
+/// What a link that may be a file needs from the terminal, taken under its lock:
+/// [`Look::resolve`] looks at the file system for it afterwards. A look at a slow or hanging
+/// drive can take seconds, and the terminal must not stay locked for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Look {
+    /// A hyperlink of the program to a path on this computer, and its cells.
+    local: Option<(String, Link)>,
+    /// A web address in the words around the cell, which counts where the hyperlink does not.
+    url: Option<Link>,
+    /// The words around the cell, to look for a file in where neither counts.
+    words: Option<Words>,
+}
+
+/// The words around a cell, on the lines that wrap into one another.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Words {
+    text: String,
+    /// The cell of the wrapped line where the words start.
+    start: usize,
+    /// The cell of the wrapped line where the line of the cell starts.
+    row: usize,
+    line: Line,
+    columns: usize,
+}
+
+impl Words {
+    /// The link of `cells` cells from cell `begin` of the wrapped line, as much of it as is on
+    /// the line of the cell: the front end underlines that part.
+    fn link(&self, target: String, begin: usize, cells: usize) -> Option<Link> {
+        let from = begin.max(self.row);
+        let to = (begin + cells).min(self.row + self.columns);
+        (from < to).then(|| Link {
+            target,
+            start: Point::new(self.line, Column(from - self.row)),
+            cells: to - from,
+        })
+    }
+}
+
+impl Look {
+    /// The link, looked up on the file system: the real path of a hyperlink to a file that
+    /// may open, a web address, or a file in `directory` that the words name. Nothing under a
+    /// mount on demand counts, which a look would mount.
+    #[must_use]
+    pub fn resolve(self, directory: &dyn Fn() -> Option<PathBuf>, schemes: &[String]) -> Option<Link> {
+        let local = self.local.and_then(|(path, link)| {
+            let target = Some(path)
+                .filter(|path| !crate::mounts::mounts_on_look(Path::new(path)))
+                .and_then(|path| crate::links::openable(&path, schemes))?;
+            Some(Link { target, ..link })
+        });
+        if local.is_some() {
+            return local;
+        }
+        if self.url.is_some() {
+            return self.url;
+        }
+        let words = self.words?;
+        let (path, offset, cells) = file_in(&words.text, &directory()?)?;
+        words.link(path, words.start + offset, cells)
+    }
+}
+
+/// [`link_at`] up to the look at the file system: all it takes from the terminal.
+pub fn find_link<T>(term: &Term<T>, point: Point, files: bool, options: &Options) -> Option<Found> {
     if !on_grid(term, point) {
         return None;
     }
     let grid = term.grid();
     let columns = term.columns();
     let cell = &grid[point.line][point.column];
-    let hyperlink = cell.hyperlink().filter(|_| context.options.escaped_links);
+    let hyperlink = cell.hyperlink().filter(|_| options.escaped_links);
+    let mut local = None;
     if let Some(link) = hyperlink {
         let same = |column: usize| grid[point.line][Column(column)].hyperlink().as_ref() == Some(&link);
         let start = (0..point.column.0)
@@ -401,42 +496,39 @@ pub fn link_at<T>(term: &Term<T>, point: Point, files: bool, context: &Context) 
             start: Point::new(point.line, Column(start)),
             cells: end - start + 1,
         };
-        if is_safe_link(link.uri(), &context.options.link_schemes) {
-            return Some(found(link.uri().to_string()));
+        if is_safe_link(link.uri(), &options.link_schemes) {
+            return Some(Found::Link(found(link.uri().to_string())));
         }
         // A file of this computer, as `ls --hyperlink` names it with the name of the host:
         // it opens after the checks of a file in the text. Else the visible text counts.
-        let local = crate::marks::local_directory(link.uri())
-            .and_then(|path| crate::links::openable(&path.to_string_lossy(), &context.options.link_schemes));
-        if let Some(path) = local.filter(|_| files) {
-            return Some(found(path));
-        }
+        local = crate::marks::local_directory(link.uri())
+            .filter(|_| files)
+            .map(|path| (path.to_string_lossy().into_owned(), found(String::new())));
     }
     // An address can wrap onto the next lines, as the long ones for logging in often do.
     let (first, line) = wrapped_text(term, point.line);
     let row = (point.line.0 - first.0) as usize * columns;
-    let (start, _, text) = word_span(&line, row + point.column.0)?;
-    let (target, begin, cells) = url_in(&text)
-        .map(|url| {
-            let offset = text
-                .find(url.as_str())
-                .map_or(0, |offset| text[..offset].chars().count());
-            let cells = url.chars().count();
-            (url, start + offset, cells)
-        })
-        .or_else(|| {
-            let directory = (context.directory)().filter(|_| files)?;
-            let (path, offset, cells) = file_in(&text, &directory)?;
-            Some((path, start + offset, cells))
-        })?;
-    // The front end underlines the part on the line of the point.
-    let from = begin.max(row);
-    let to = (begin + cells).min(row + columns);
-    (from < to).then(|| Link {
-        target,
-        start: Point::new(point.line, Column(from - row)),
-        cells: to - from,
-    })
+    let words = word_span(&line, row + point.column.0).map(|(start, _, text)| Words {
+        text,
+        start,
+        row,
+        line: point.line,
+        columns,
+    });
+    let url = words.as_ref().and_then(|words| {
+        let url = url_in(&words.text)?;
+        let offset = words
+            .text
+            .find(url.as_str())
+            .map_or(0, |offset| words.text[..offset].chars().count());
+        let cells = url.chars().count();
+        words.link(url, words.start + offset, cells)
+    });
+    if local.is_none() && (url.is_some() || !files) {
+        return url.map(Found::Link);
+    }
+    let words = words.filter(|_| files && url.is_none());
+    (local.is_some() || words.is_some()).then_some(Found::Look(Look { local, url, words }))
 }
 
 /// The most cells that the lines of one wrapped line can have for links, so that a long
@@ -674,8 +766,8 @@ impl View {
                 .collect();
         }
         match button {
-            Some(MouseButton::Left) if opens_link => link_at(term, point, true, context)
-                .map(|link| Effect::OpenLink(link.target))
+            Some(MouseButton::Left) if opens_link => find_link(term, point, true, context.options)
+                .map(Found::opening)
                 .into_iter()
                 .collect(),
             Some(MouseButton::Left) => {
@@ -766,11 +858,11 @@ impl View {
         self.selecting = false;
         let opens =
             clicked && button == Some(MouseButton::Left) && modifiers.is_empty() && context.options.open_links_by_click;
-        if let Some(link) = point
+        if let Some(found) = point
             .filter(|_| opens)
-            .and_then(|point| link_at(term, point, true, context))
+            .and_then(|point| find_link(term, point, true, context.options))
         {
-            return vec![Effect::OpenLink(link.target)];
+            return vec![found.opening()];
         }
         // A finished selection goes into the primary selection, as in other terminals.
         selected_text(term, context.options)
@@ -1342,6 +1434,9 @@ fn file_at(name: &str, position: &str, directory: &Path) -> Option<String> {
         Some(rest) => crate::process::home()?.join(rest),
         None => directory.join(name),
     };
+    if crate::mounts::mounts_on_look(&path) {
+        return None;
+    }
     let metadata = std::fs::metadata(&path).ok()?;
     let plain = metadata.is_file() && is_inert(&path, &metadata);
     let desktop_entry = path.extension().is_some_and(|extension| extension == "desktop");
@@ -2063,6 +2158,19 @@ mod tests {
 
     const LEFT: Option<MouseButton> = Some(MouseButton::Left);
 
+    /// `effects` with each look at a file resolved in `directory`, as the front end does.
+    fn resolved(effects: Vec<Effect>, directory: &dyn Fn() -> Option<PathBuf>) -> Vec<Effect> {
+        effects
+            .into_iter()
+            .filter_map(|effect| match effect {
+                Effect::OpenLook(look) => look
+                    .resolve(directory, &Options::default().link_schemes)
+                    .map(|link| Effect::OpenLink(link.target)),
+                other => Some(other),
+            })
+            .collect()
+    }
+
     /// A terminal of 10 columns and 5 lines with room for `history` lines of history.
     fn term_with_history(history: usize) -> Term<VoidListener> {
         let size = alacritty_terminal::term::test::TermSize::new(10, 5);
@@ -2702,18 +2810,18 @@ mod tests {
             view.press(&mut term, on_link, LEFT, 1, Modifiers::CONTROL, None, &context),
             opened
         );
-        assert!(
-            view.press(
-                &mut term,
-                (Point::new(Line(0), Column(0)), Side::Left),
-                LEFT,
-                1,
-                Modifiers::CONTROL,
-                None,
-                &context
-            )
-            .is_empty()
+        // A word that may name a file is looked up after the lock, as the front end does.
+        let on_word = view.press(
+            &mut term,
+            (Point::new(Line(0), Column(0)), Side::Left),
+            LEFT,
+            1,
+            Modifiers::CONTROL,
+            None,
+            &context,
         );
+        assert!(matches!(on_word.as_slice(), [Effect::OpenLook(_)]), "{on_word:?}");
+        assert!(resolved(on_word, &nowhere).is_empty());
         let by_click = Options {
             open_links_by_click: true,
             ..Options::default()

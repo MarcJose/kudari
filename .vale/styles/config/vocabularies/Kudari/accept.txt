@@ -70,3 +70,6 @@ Vulkan
 [Rr]asteriz(e|ed|ing)
 [Aa]ntialiasing
 [Ss]ubpixel
+autofs
+systemd
+[Aa]utomounts?
