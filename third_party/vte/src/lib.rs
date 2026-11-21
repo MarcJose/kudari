@@ -67,7 +67,8 @@ pub struct Parser<const OSC_RAW_BUF_SIZE: usize = MAX_OSC_RAW> {
     ignoring: bool,
     partial_utf8: [u8; 4],
     partial_utf8_len: usize,
-    /// In tests, the ground state without the way for ASCII, to compare with.
+    /// In tests, the parser without the way for ASCII in the ground state and for the
+    /// parameters of a CSI, to compare with.
     #[cfg(test)]
     reference: bool,
 }
@@ -120,6 +121,9 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
         while i != bytes.len() {
             match self.state {
                 State::Ground => i += self.advance_ground(performer, &bytes[i..]),
+                State::CsiEntry | State::CsiParam if self.csi_params_way() && matches!(bytes[i], 0x30..=0x3B) => {
+                    i += self.advance_csi_params(&bytes[i..]);
+                },
                 _ => {
                     // Inlining it results in worse codegen.
                     let byte = bytes[i];
@@ -155,6 +159,9 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
         while i != bytes.len() && !performer.terminated() {
             match self.state {
                 State::Ground => i += self.advance_ground(performer, &bytes[i..]),
+                State::CsiEntry | State::CsiParam if self.csi_params_way() && matches!(bytes[i], 0x30..=0x3B) => {
+                    i += self.advance_csi_params(&bytes[i..]);
+                },
                 _ => {
                     // Inlining it results in worse codegen.
                     let byte = bytes[i];
@@ -236,6 +243,58 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
             0x40..=0x7E => self.action_csi_dispatch(performer, byte),
             _ => self.anywhere(performer, byte),
         }
+    }
+
+    /// Whether the parameters of a CSI go through [`Self::advance_csi_params`]; in tests, not
+    /// in the parser they are compared with.
+    #[inline(always)]
+    fn csi_params_way(&self) -> bool {
+        #[cfg(test)]
+        return !self.reference;
+        #[cfg(not(test))]
+        return true;
+    }
+
+    /// The digits and separators at the start of `bytes`, of the parameters of a CSI, in one
+    /// go: each as the state machine takes it in `CsiEntry` or `CsiParam`, without going
+    /// through it for every byte, and the parameter kept in a local until the run ends. Gives
+    /// how many bytes it took, at least one; any other byte goes through the state machine.
+    #[inline]
+    fn advance_csi_params(&mut self, bytes: &[u8]) -> usize {
+        let mut param = self.param;
+        let mut taken = 0;
+        for &byte in bytes {
+            match byte {
+                b'0'..=b'9' => {
+                    if self.params.is_full() {
+                        self.ignoring = true;
+                    } else {
+                        param = param.saturating_mul(10).saturating_add(u16::from(byte - b'0'));
+                    }
+                },
+                b':' => {
+                    if self.params.is_full() {
+                        self.ignoring = true;
+                    } else {
+                        self.params.extend(param);
+                        param = 0;
+                    }
+                },
+                b';' => {
+                    if self.params.is_full() {
+                        self.ignoring = true;
+                    } else {
+                        self.params.push(param);
+                        param = 0;
+                    }
+                },
+                _ => break,
+            }
+            taken += 1;
+        }
+        self.param = param;
+        self.state = State::CsiParam;
+        taken
     }
 
     #[inline(always)]
@@ -1608,6 +1667,33 @@ mod tests {
         bytes
     }
 
+    /// Feeds `bytes` through the parser and through the one it is compared with, whole and
+    /// cut at random as the PTY reads, and compares every call of `Perform`.
+    fn performs_as_the_reference(bytes: &[u8], seed: &mut u64) {
+        let mut cuts = Vec::new();
+        let mut at = 0;
+        while at < bytes.len() {
+            *seed ^= *seed << 13;
+            *seed ^= *seed >> 7;
+            *seed ^= *seed << 17;
+            let step = 1 + (*seed % 23) as usize;
+            cuts.push(at..(at + step).min(bytes.len()));
+            at += step;
+        }
+        let run = |reference: bool, cuts: &[core::ops::Range<usize>]| {
+            let mut parser = Parser::new();
+            parser.reference = reference;
+            let mut dispatcher = Dispatcher::default();
+            for cut in cuts {
+                parser.advance(&mut dispatcher, &bytes[cut.clone()]);
+            }
+            dispatcher.dispatched
+        };
+        let whole = [0..bytes.len()];
+        assert_eq!(run(false, &cuts), run(true, &cuts), "{bytes:?} in {cuts:?}");
+        assert_eq!(run(false, &whole), run(true, &whole), "{bytes:?}");
+    }
+
     /// The way for ASCII gives every call of `Perform` the decoding does, byte for byte, also
     /// where the PTY cuts the output anywhere.
     #[test]
@@ -1615,28 +1701,64 @@ mod tests {
         let mut seed = 0x9E37_79B9_7F4A_7C15;
         for _ in 0..2000 {
             let bytes = mixed_output(&mut seed);
-            let mut cuts = Vec::new();
-            let mut at = 0;
-            while at < bytes.len() {
-                seed ^= seed << 13;
-                seed ^= seed >> 7;
-                seed ^= seed << 17;
-                let step = 1 + (seed % 23) as usize;
-                cuts.push(at..(at + step).min(bytes.len()));
-                at += step;
+            performs_as_the_reference(&bytes, &mut seed);
+        }
+    }
+
+    /// Random CSI sequences of every kind the parameters meet: many digits and values past
+    /// 65,535, more parameters than fit, subparameters, private markers before and after
+    /// parameters, intermediates, controls within, sequences ended by CAN, SUB or ESC, and text
+    /// between them.
+    fn csi_output(seed: &mut u64) -> Vec<u8> {
+        let mut next = |bound: u64| {
+            *seed ^= *seed << 13;
+            *seed ^= *seed >> 7;
+            *seed ^= *seed << 17;
+            *seed % bound
+        };
+        let mut bytes = Vec::new();
+        for _ in 0..next(20) {
+            bytes.extend_from_slice(b"\x1b[");
+            if next(5) == 0 {
+                bytes.push(b"?<=>"[next(4) as usize]);
             }
-            let run = |reference: bool, cuts: &[core::ops::Range<usize>]| {
-                let mut parser = Parser::new();
-                parser.reference = reference;
-                let mut dispatcher = Dispatcher::default();
-                for cut in cuts {
-                    parser.advance(&mut dispatcher, &bytes[cut.clone()]);
+            let most = if next(6) == 0 { 40 } else { 6 };
+            for _ in 0..next(most) {
+                match next(9) {
+                    0 => bytes.extend_from_slice(b"65535"),
+                    1 => bytes.extend_from_slice(b"99999999"),
+                    2 => bytes.push(b':'),
+                    3 => bytes.push(b';'),
+                    4 => bytes.push(next(32) as u8),
+                    5 => bytes.push(0x20 + next(16) as u8),
+                    // A private marker after parameters ends them in a sequence to ignore.
+                    6 => bytes.push(0x3C + next(4) as u8),
+                    _ => (0..1 + next(3)).for_each(|_| bytes.push(b'0' + next(10) as u8)),
                 }
-                dispatcher.dispatched
-            };
-            let whole = [0..bytes.len()];
-            assert_eq!(run(false, &cuts), run(true, &cuts), "{bytes:?} in {cuts:?}");
-            assert_eq!(run(false, &whole), run(true, &whole), "{bytes:?}");
+                if next(4) != 0 {
+                    bytes.push(b';');
+                }
+            }
+            match next(6) {
+                0 => bytes.push([0x18, 0x1A, 0x1B, 0x7F][next(4) as usize]),
+                1 => {},
+                _ => bytes.push(0x40 + next(63) as u8),
+            }
+            if next(2) == 0 {
+                bytes.extend_from_slice("text é ".as_bytes());
+            }
+        }
+        bytes
+    }
+
+    /// The parameters of a CSI in one go give every call of `Perform` the state machine gives
+    /// for them byte by byte, also where the PTY cuts a sequence anywhere.
+    #[test]
+    fn csi_parameters_in_one_go_perform_what_the_state_machine_performs() {
+        let mut seed = 0x2545_F491_4F6C_DD1D;
+        for _ in 0..3000 {
+            let bytes = csi_output(&mut seed);
+            performs_as_the_reference(&bytes, &mut seed);
         }
     }
 }

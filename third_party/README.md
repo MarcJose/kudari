@@ -40,6 +40,7 @@ against the way it replaces.
 | `alacritty_terminal` | Waits for the terminal where the PTY has nothing new to read, instead of reading again at once while others hold it. | `the_thread_of_the_pty_waits_for_the_terminal_without_spinning` |
 | `alacritty_terminal` | A wider grid gives each row room for its new columns only, where `resize_with` doubled it for every row of the history and the rows kept it; a narrower one cuts off empty cells without a new row for them, and gives back room beyond a quarter more than the new width. | `three_columns_more_take_little_more_memory`, `a_terminal_as_narrow_as_before_gives_the_memory_back` in `crates/core/tests/reflow_memory.rs` |
 | `vte` | In the ground state, prints and executes the ASCII at the start of a run byte by byte, without checking and decoding it as UTF-8 first; the rest of the run goes the way it went. | `ascii_way_performs_what_decoding_performs` in `vte`, against that way |
+| `vte` | Takes the digits and separators of the parameters of a CSI in one go, the parameter kept in a local until they end, rather than through the state machine for every byte; any other byte goes through it as before. | `csi_parameters_in_one_go_perform_what_the_state_machine_performs` in `vte`, against the state machine |
 | `vte` | Hands a repeat (REP) to the handler as one call, `Handler::repeat`, which repeats as before unless the handler knows better. | `repeating_a_character_fills_no_more_than_the_screen` |
 
 Once releases of both carry a fix, delete it here; once they carry all of them, delete both
