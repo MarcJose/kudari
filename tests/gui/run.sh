@@ -894,8 +894,12 @@ print("refreshes", stats["refreshes"], "line_paints", stats["line_paints"], "dra
 }
 hook ResetStats; hook SetSetting ToggleToFocus true; settle; sleep 0.5
 by_window=$(paints all)
+# From a known start: what the checks before left there is told where it fails.
+bold_before="$(setting BoldIntense)"
+hook SetSetting BoldIntense true; settle
 hook ResetStats; hook SetSetting BoldIntense false; settle
 by_bold="$(pane_value terminal boldIntense) $(some)"
+case $by_bold in *no:*) by_bold="$by_bold stored-before=$bold_before" ;; esac
 hook ResetStats; hook SetSetting Skin theme:kudari.test.dark; settle
 by_skin=$(some)
 hook SetSetting Skin system; hook SetSetting BoldIntense true; hook SetSetting ToggleToFocus false; settle
