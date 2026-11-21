@@ -5,6 +5,10 @@
 //! a path under a mount point of autofs, as `/net/host` or a mount of systemd on demand,
 //! mounts its drive first, and with it reaches a server: a program could make Kudari do that
 //! with a path in its output, as soon as the pointer passes over it with Ctrl held.
+#![cfg_attr(
+    not(target_os = "linux"),
+    allow(dead_code, reason = "only Linux has mounts on demand to look for")
+)]
 
 use std::collections::VecDeque;
 use std::ffi::OsString;
