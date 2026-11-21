@@ -878,6 +878,32 @@ behind="$(paints "$first_terminal") $(hook Stats | python3 -c 'import json, sys;
 sessions removeSession "$background"; settle
 sessions raiseSession "$first"; settle
 check "output in a tab in the background neither refreshes nor paints" "0 0" "$behind"
+# A change of a setting paints the terminals anew only where they show it: a slider in the
+# settings changes them at every step.
+# A paint that is asked for can come after the settling, where frames are slow to draw.
+some() {
+    tries=0
+    while [ "$(paints all)" = 0 ] && [ "$tries" -lt 20 ]; do sleep 0.1; tries=$((tries + 1)); done
+    count=$(paints all)
+    # Where it fails, how far it came: refreshes, paints of lines, frames drawn, the window,
+    # and whether the terminal waits to be seen.
+    [ "$count" -gt 0 ] && echo yes || echo "no: $count $(hook Stats | python3 -c '
+import json, sys
+stats = json.load(sys.stdin)
+print("refreshes", stats["refreshes"], "line_paints", stats["line_paints"], "draws", stats["frame_draw"]["count"])') $(state) stale=$(pane_value terminal stale)"
+}
+hook ResetStats; hook SetSetting ToggleToFocus true; settle; sleep 0.5
+by_window=$(paints all)
+# From a known start: what the checks before left there is told where it fails.
+bold_before="$(setting BoldIntense)"
+hook SetSetting BoldIntense true; settle
+hook ResetStats; hook SetSetting BoldIntense false; settle
+by_bold="$(pane_value terminal boldIntense) $(some)"
+case $by_bold in *no:*) by_bold="$by_bold stored-before=$bold_before" ;; esac
+hook ResetStats; hook SetSetting Skin theme:kudari.test.dark; settle
+by_skin=$(some)
+hook SetSetting Skin system; hook SetSetting BoldIntense true; hook SetSetting ToggleToFocus false; settle
+check "a setting paints the terminals anew only where they show it" "0 false yes yes" "$by_window $by_bold $by_skin"
 # A key that the shell echoes paints the terminal once.
 run "clear"
 hook ResetStats
