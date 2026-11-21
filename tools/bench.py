@@ -41,6 +41,7 @@ import threading
 import time
 from pathlib import Path
 from typing import NamedTuple
+from xml.etree import ElementTree
 
 WORDS = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor".split()
 CELLS = "abcdefghijklmnopqrstuvwxyz0123456789#@%&"
@@ -832,7 +833,7 @@ def counted(snapshots, start, end):
         return None
     (first, old), (last, new) = before[-1], after[0]
     result = {"seconds": last - first}
-    for name in ("wakeups", "reports", "refreshes"):
+    for name in ("wakeups", "reports", "refreshes", "cursor_moves", "input_method_queries"):
         result[name] = new.get(name, 0) - old.get(name, 0)
     result["paints"] = sum(new.get("paints", {}).values()) - sum(old.get("paints", {}).values())
     for name, _ in TIMED + STEPS:
@@ -1536,7 +1537,7 @@ def counters(terminal, measured):
             count = sum(found[name]["count"] for found in done)
             return f"{sum(found[name]['total_us'] for found in done) / count:.0f}" if count else "-"
 
-        rows.append([load, rate("wakeups"), rate("refreshes"), rate("paints"), p95("lock_wait"), p95("lock_hold"), p95("queue"), mean("frame_build"), mean("frame_draw")])
+        rows.append([load, rate("wakeups"), rate("refreshes"), rate("paints"), rate("cursor_moves"), rate("input_method_queries"), p95("lock_wait"), p95("lock_hold"), p95("queue"), mean("frame_build"), mean("frame_draw")])
     if not rows:
         return
     print(f"\n{terminal}: what the build with the feature stats counted during each load")
@@ -1545,7 +1546,7 @@ def counters(terminal, measured):
     print("that holds 95 % of the times, over all runs, in microseconds: the wait for the lock of a")
     print("terminal, how long it was held, and the wait in the queue of the Qt thread. A frame is")
     print("built and drawn into its image; those are the means.")
-    table(["load", "wakeups/s", "refreshes/s", "paints/s", "lock wait p95", "lock hold p95", "queue p95", "build µs", "draw µs"], rows)
+    table(["load", "wakeups/s", "refreshes/s", "paints/s", "cursor/s", "IM/s", "lock wait p95", "lock hold p95", "queue p95", "build µs", "draw µs"], rows)
     key_path(terminal, measured)
 
 
@@ -1640,6 +1641,59 @@ def profiles(directory):
         print(f"{terminal} run {run}, {load}: {command}")
 
 
+# What QML does that a trace of qmlprofiler sums up, as the report names it.
+QML_WORK = {"Binding": "binding", "HandlingSignal": "signal handler", "Javascript": "function"}
+
+
+def qml_work(path):
+    """The work of QML in a trace of qmlprofiler: for each binding, signal handler and function,
+    by its place, how often it ran and how long in all, in nanoseconds; and how long the trace
+    is and how long compiling and creating took. A function that a binding calls counts in both."""
+    root = ElementTree.parse(path).getroot()
+    events = {}
+    for event in root.iter("event"):
+        kind = event.findtext("type") or ""
+        place = f"{(event.findtext('filename') or '').rsplit('/', 1)[-1]}:{event.findtext('line') or '?'}"
+        events[event.get("index")] = (kind, place, event.findtext("details") or "")
+    work = {}
+    start = 0
+    for item in root.iter("range"):
+        kind, place, details = events.get(item.get("eventIndex"), ("", "", ""))
+        duration = int(item.get("duration") or 0)
+        if kind in ("Compiling", "Creating"):
+            start += duration
+        elif kind in QML_WORK:
+            key = (QML_WORK[kind], place, details)
+            count, total = work.get(key, (0, 0))
+            work[key] = (count + 1, total + duration)
+    length = int(root.get("traceEnd") or 0) - int(root.get("traceStart") or 0)
+    return work, length, start
+
+
+def qml_profiles(directory):
+    """For a run with --qml-profile: what QML did in all the runs, the costliest first."""
+    traces = sorted(directory.glob("qml-*.qtd"))
+    if not traces:
+        return
+    work = {}
+    length = start = 0
+    for path in traces:
+        found, seconds, creating = qml_work(path)
+        length += seconds
+        start += creating
+        for key, (count, total) in found.items():
+            before = work.get(key, (0, 0))
+            work[key] = (before[0] + count, before[1] + total)
+    print(f"\nWhat QML did, in {len(traces)} traces of qmlprofiler of {length / 1e9:.1f} s in all; compiling and creating at the")
+    print(f"start took {start / 1e6:.0f} ms. The costliest bindings, signal handlers and functions; a function")
+    print("that a binding calls counts in both. The traces open in Qt Creator as well.")
+    rows = []
+    for (kind, place, details), (count, total) in sorted(work.items(), key=lambda item: -item[1][1])[:20]:
+        rows.append([place, kind, str(count), f"{count / (length / 1e9):.1f}" if length else "-", f"{total / 1e6:.1f}", f"{total / count / 1e3:.0f}", details[:40]])
+    table(["where", "what", "runs", "runs/s", "ms", "µs each", "code"], rows)
+    print("Traces: " + " ".join(str(path) for path in traces))
+
+
 def ranged(whole, width):
     """Whole milliseconds cut off, `width` of them added up, as the range they stand for."""
     return milliseconds(whole) if width == 1 else f"{whole}-{whole + width}"
@@ -1692,6 +1746,7 @@ def report(directory, order, detail=False):
     if len(builds) > 1:
         compare(runs, builds)
     profiles(directory)
+    qml_profiles(directory)
     gone = [(path.stem, load) for path in sorted(directory.glob("*-*.txt")) if path.stem.rsplit("-", 1)[1].isdigit() and (load := ended(directory, path.stem))]
     if gone:
         print("\nTerminals that ended or hung during a load, which then and after counts for nothing:")

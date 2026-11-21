@@ -7,7 +7,7 @@
 #   tools/bench.sh [--binary [NAME=]PATH] [--rev [NAME=]REV] [--runs N] [--warmup N] [--seed N]
 #                  [--loads LOAD,...]
 #                  [--set GROUP.KEY=VALUE] [--scale N] [--detail] [--scenarios] [--perf]
-#                  [--keep] [--keep-env] [TERMINAL...]
+#                  [--qml-profile] [--keep] [--keep-env] [TERMINAL...]
 #
 # The terminals are kudari, yakuake, konsole, alacritty, kitty, ghostty, contour and xterm;
 # without any, every one of them that is installed. Kudari is the installed one, or else the
@@ -56,7 +56,9 @@
 # closing them, on the graphics card too, and what a full history adds; see
 # tools/bench-scenarios.sh. --perf samples Kudari with perf during the loads and keeps the
 # data; the report gives the command of perf report for each load. A build of the profile
-# profiling names the functions; CONTRIBUTING.md tells how to build one.
+# profiling names the functions; CONTRIBUTING.md tells how to build one. --qml-profile records
+# what QML does with qmlprofiler, over a local socket, and the report sums up its bindings and
+# signal handlers; it needs a build with the feature qml-profile.
 #
 # The report starts with what was measured on what: the build of Kudari with its hash and
 # origin, the processor and its clock, the versions of Qt, KWin and Mesa. It warns about a
@@ -193,18 +195,22 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
                     profiler=
                     [ -z "$KUDARI_BENCH_PERF" ] ||
                         profiler="perf record -q -k monotonic -e cycles:u -F 4999 --call-graph fp --user-callchains -o $work/perf-$terminal-$run.data --"
+                    # With --qml-profile, qmlprofiler starts Kudari the same way, and hands it
+                    # the local socket that it listens on.
+                    [ -z "$KUDARI_BENCH_QML" ] ||
+                        profiler="$KUDARI_BENCH_QML -o $work/qml-$terminal-$run.qtd"
                     # shellcheck disable=SC2086 # the profiler is words of its own, or none
                     SHELL=$shell QSG_RENDER_TIMING=1 KUDARI_STATS=1 KUDARI_STATS_MS=100 \
                         QT_MESSAGE_PATTERN='%{time boot} %{category} %{message}' \
                         $profiler "$binary" > "$log" 2>&1 &
                     pid=$!
-                    if [ -n "$KUDARI_BENCH_PERF" ]; then
+                    if [ -n "$KUDARI_BENCH_PERF$KUDARI_BENCH_QML" ]; then
                         # Kudari itself, which owns the name on the bus and whose threads count.
                         profiler=$pid
                         tries=0
                         until pid=$(pgrep -P "$profiler" | head -n 1) && [ -n "$pid" ]; do
                             tries=$((tries + 1))
-                            [ "$tries" -lt 100 ] || fail "perf did not start Kudari; see $log"
+                            [ "$tries" -lt 100 ] || fail "the profiler did not start Kudari; see $log"
                             sleep 0.1
                         done
                     fi
@@ -252,8 +258,8 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
             done
             kill "$pid" 2> /dev/null || true
             wait "$pid" 2> /dev/null || true
-            # perf writes its data once Kudari has ended.
-            if [ "${terminal%%@*}" = kudari ] && [ -n "$KUDARI_BENCH_PERF" ]; then
+            # perf and qmlprofiler write their data once Kudari has ended.
+            if [ "${terminal%%@*}" = kudari ] && [ -n "$KUDARI_BENCH_PERF$KUDARI_BENCH_QML" ]; then
                 wait "$profiler" 2> /dev/null || true
             fi
             sleep 1
@@ -278,6 +284,7 @@ settings=
 seed=
 detail=
 perf=
+qml_profile=
 scenarios=
 terminals=
 while [ $# -gt 0 ]; do
@@ -315,6 +322,7 @@ while [ $# -gt 0 ]; do
         --detail) detail=1; shift ;;
         --scenarios) scenarios=1; shift ;;
         --perf) perf=1 keep=1; shift ;;
+        --qml-profile) qml_profile=1 keep=1; shift ;;
         --set)
             case $2 in
                 [A-Za-z]*.[A-Za-z]*=*) ;;
@@ -330,7 +338,7 @@ while [ $# -gt 0 ]; do
         *)
             case " $all " in
                 *" $1 "*) terminals="$terminals $1"; shift ;;
-                *) die "usage: tools/bench.sh [--binary [NAME=]PATH] [--rev [NAME=]REV] [--runs N] [--warmup N] [--seed N] [--loads LOAD,...] [--scale N] [--detail] [--scenarios] [--perf] [--keep] [--keep-env] [TERMINAL...]; the terminals are: $all" ;;
+                *) die "usage: tools/bench.sh [--binary [NAME=]PATH] [--rev [NAME=]REV] [--runs N] [--warmup N] [--seed N] [--loads LOAD,...] [--scale N] [--detail] [--scenarios] [--perf] [--qml-profile] [--keep] [--keep-env] [TERMINAL...]; the terminals are: $all" ;;
             esac
             ;;
     esac
@@ -393,6 +401,10 @@ if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
     [ "$scale" = 1 ] || command -v kscreen-doctor > /dev/null || die "--scale needs kscreen-doctor"
     [ -z "$perf" ] || command -v perf > /dev/null || die "--perf needs perf"
     [ -z "$perf" ] || [ -z "$scenarios" ] || die "--perf profiles the loads, not the scenarios"
+    [ -z "$qml_profile" ] || [ -z "$perf$scenarios" ] || die "--qml-profile goes neither with --perf nor with --scenarios"
+    # Without the debug service, Kudari leaves -qmljsdebugger alone, and qmlprofiler would wait.
+    [ -z "$qml_profile" ] || nm -D --undefined-only "$binary" 2>/dev/null | grep -q QQmlDebuggingEnabler ||
+        die "--qml-profile needs a build with the feature qml-profile: cargo build --release --features qml-profile,stats"
     # Some 400 MB of data and logs, kept only when the measurement fails.
     work=$(mktemp -d "${TMPDIR:-/tmp}/kudari-bench.XXXXXX")
     trap 'rm -rf "$work"; exit 1' INT TERM
@@ -448,7 +460,7 @@ VARIANTS
     if env -u WAYLAND_DISPLAY -u DISPLAY -u QSG_RENDER_LOOP -u QT_QUICK_BACKEND -u QSG_RHI_BACKEND $unset_variables \
         XDG_CONFIG_HOME=/nonexistent XDG_DATA_HOME=/nonexistent KUDARI_BENCH_WORK="$work" KUDARI_BENCH_VARIANTS="$variants" \
         dbus-run-session -- "$0" --binary "$binary" --runs "$runs" --warmup "$warmup" --seed "$seed" --scale "$scale" \
-        --loads "$(echo $loads | tr " " ",")" ${scenarios:+--scenarios} ${perf:+--perf} $terminals \
+        --loads "$(echo $loads | tr " " ",")" ${scenarios:+--scenarios} ${perf:+--perf} ${qml_profile:+--qml-profile} $terminals \
         < /dev/null 3>&2 2> "$work/dbus.log"; then
         if [ -n "$scenarios" ]; then
             python3 "$tools/bench.py" scenarios "$work"
@@ -480,6 +492,14 @@ export QT_QPA_PLATFORM=wayland QT_FORCE_STDERR_LOGGING=1
 export KUDARI_BENCH_RUNS="$runs" KUDARI_BENCH_TERMINALS="$terminals" KUDARI_BENCH_BINARY="$binary"
 export KUDARI_BENCH_LOADS="$loads" KUDARI_BENCH_SCALE="$scale" KUDARI_BENCH_WARMUP="$warmup" KUDARI_BENCH_SEED="$seed"
 export KUDARI_BENCH_SCENARIOS="$scenarios" KUDARI_BENCH_PERF="$perf"
+# The qmlprofiler of the Qt that Kudari uses, for --qml-profile.
+KUDARI_BENCH_QML=
+if [ -n "$qml_profile" ]; then
+    KUDARI_BENCH_QML=$("${QMAKE:-qmake6}" -query QT_HOST_BINS 2>/dev/null)/qmlprofiler
+    [ -x "$KUDARI_BENCH_QML" ] || KUDARI_BENCH_QML=$(command -v qmlprofiler || echo /usr/lib/qt6/bin/qmlprofiler)
+    [ -x "$KUDARI_BENCH_QML" ] || die "--qml-profile needs qmlprofiler of Qt"
+fi
+export KUDARI_BENCH_QML
 : > "$work/progress.log"
 tail -f "$work/progress.log" &
 progress=$!

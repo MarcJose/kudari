@@ -684,6 +684,10 @@ impl qobject::TerminalItem {
             // at its last line.
             let line = (f64::from(cursor.line.0) + offset).clamp(0.0, (lines - 1.0).max(0.0));
             let y = origin_y + line * *self.cell_height();
+            // QML follows each move with the input method, which asks the item where it is.
+            if self.cursor_x().to_bits() != x.to_bits() || self.cursor_y().to_bits() != y.to_bits() {
+                stats::count(stats::Count::CursorMoves);
+            }
             self.as_mut().set_cursor_x(x);
             self.as_mut().set_cursor_y(y);
             // The places of the matches move as the scrollback grows. Finding them runs over
@@ -807,6 +811,7 @@ impl qobject::TerminalItem {
 
     fn input_method_query(&self, query: qobject::InputMethodQuery) -> QVariant {
         crate::reentry::reentry!("TerminalItem::input_method_query");
+        stats::count(stats::Count::InputMethodQueries);
         match query {
             qobject::InputMethodQuery::ImEnabled => QVariant::from(&true),
             qobject::InputMethodQuery::ImCursorRectangle => QVariant::from(&QRectF::new(
