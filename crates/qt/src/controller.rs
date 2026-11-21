@@ -593,6 +593,7 @@ impl qobject::Controller {
     }
 
     fn publish_settings(self: Pin<&mut Self>) {
+        stats::count(stats::Count::SettingsPublished);
         let s = self.app.settings();
         let value = json!({
             "width": s.width, "height": s.height, "position": s.position, "screen": s.screen,
@@ -980,6 +981,7 @@ impl qobject::Controller {
     /// Takes the settings anew and carries out only what changed with them: a slider or a
     /// number field changes them at every step.
     fn reload_settings(mut self: Pin<&mut Self>) {
+        stats::count(stats::Count::SettingsReloaded);
         let settings = Settings::load(frontend().store());
         let old = self.as_mut().rust_mut().app.replace_settings(settings);
         let new = self.app.settings();

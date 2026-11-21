@@ -93,6 +93,8 @@ tools/security.sh                                # secrets, dependencies, workfl
 tools/bench.sh                                   # speed of output and drawing, against other terminals
 tools/bench.sh --scenarios                       # start, showing, waiting and memory of Kudari
 tools/bench.sh --perf                            # the same loads under perf, with a profile of each
+tools/bench.sh --qml-profile --binary PATH       # what QML does in the loads, with qmlprofiler
+tools/qml-compiler.sh                            # the QML that the QML compiler leaves to the interpreter
 tools/bench.sh --rev main --binary new=PATH      # two builds of Kudari in the same runs, with a verdict
 cargo bench -p kudari-core --bench core          # scanner, parser and frames alone, without a window
 cargo bench -p kudari-core --bench allocations   # the allocations of the same frames and cases
@@ -201,6 +203,27 @@ must never be published.
 pieces of the stack into the data, and with them what the terminal showed; the loads of the
 bench are made up, but keep that in mind for anything else. For memory, `heaptrack` runs
 Kudari the same way: `heaptrack ~/.cache/kudari-profiling/profiling/kudari`.
+
+What QML does, its bindings, signal handlers and functions, `perf` does not name. For that,
+build Kudari with the feature `qml-profile`, which turns on the debug service of QML:
+
+```sh
+CARGO_TARGET_DIR=~/.cache/kudari-qml cargo build --release --features qml-profile,stats
+tools/bench.sh --binary ~/.cache/kudari-qml/release/kudari --qml-profile --runs 1 --warmup 0 kudari
+```
+
+With `--qml-profile`, `tools/bench.sh` starts Kudari under `qmlprofiler`, which talks to it over
+a local socket, and the report sums up the costliest bindings, signal handlers and functions of
+all runs. The traces stay with the data of the bench and open in Qt Creator as well. A client
+of the debug service can run code in Kudari: a build with `qml-profile` must never be
+published, and `tools/dist.sh` refuses one. Such a build also quits on `SIGTERM` through its
+event loop and tears its QML down, as `qmlprofiler` gets nothing from a program that ends
+otherwise. With `stats`, the counters of the bench add how often the cursor moved for QML and
+how often the input method asked for it.
+
+`tools/qml-compiler.sh` counts for each QML file the bindings and functions that the QML
+compiler does not turn into C++, and `--list` names them: compare it before and after a
+change of the QML.
 
 On Windows, `tools/windows-package.ps1` builds the Windows front end and packs it, as the
 release workflow does. It needs PowerShell 7, Git, Rust, Python, the Visual Studio Build

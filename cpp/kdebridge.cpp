@@ -50,6 +50,15 @@
 #include <QPushButton>
 #include <QFontMetrics>
 #include <QQmlApplicationEngine>
+// With the feature qml-profile, QT_QML_DEBUG_NO_WARNING makes this turn the debug service of
+// QML on, for qmlprofiler; without it, it adds nothing.
+#include <QQmlDebuggingEnabler>
+#ifdef QT_QML_DEBUG_NO_WARNING
+#include <QSocketNotifier>
+#include <csignal>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 #include <QDBusMessage>
 #include <QDBusReply>
 #include <QDialog>
@@ -415,6 +424,33 @@ void addToggle(QMenu *menu, const QString &actionName, const QString &singleText
 }
 }
 
+#ifdef QT_QML_DEBUG_NO_WARNING
+namespace
+{
+// For qmlprofiler, in the build with the feature qml-profile: SIGTERM, which tools/bench.sh
+// sends at the end of a run, quits Kudari through its event loop. qmlprofiler takes an end by
+// the signal for a crash and keeps none of what it recorded.
+int s_terms[2] = {-1, -1};
+
+void onTerm(int)
+{
+    const char byte = 1;
+    // Nothing else is safe in a signal handler; the event loop reads it.
+    (void)!::write(s_terms[1], &byte, 1);
+}
+
+void quitOnTerm()
+{
+    if (::socketpair(AF_UNIX, SOCK_STREAM, 0, s_terms) != 0) {
+        return;
+    }
+    auto notifier = new QSocketNotifier(qintptr(s_terms[0]), QSocketNotifier::Read, qApp);
+    QObject::connect(notifier, &QSocketNotifier::activated, qApp, [] { QCoreApplication::quit(); });
+    std::signal(SIGTERM, onTerm);
+}
+}
+#endif
+
 void rk_command_line(const QString &version)
 {
     KLocalizedString::setApplicationDomain("kudari");
@@ -449,6 +485,9 @@ void rk_command_line(const QString &version)
                                  QStringLiteral("[mcp]"));
     parser.process(*qApp);
     about.processCommandLine(&parser);
+#ifdef QT_QML_DEBUG_NO_WARNING
+    quitOnTerm();
+#endif
 }
 
 // The icon of Kudari, or that of terminals while Kudari is not installed, as in a build.

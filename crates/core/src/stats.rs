@@ -37,6 +37,14 @@ pub enum Count {
     /// A frame for the graphics card had something that only the painter draws, or did not
     /// fit in the atlas, and was painted instead.
     GpuFallbacks,
+    /// The settings went to QML anew, which evaluates every binding on them.
+    SettingsPublished,
+    /// A change of the settings was taken, see `reload_settings` of the controller.
+    SettingsReloaded,
+    /// The cursor of a terminal moved for QML, whose input method then asks where it is.
+    CursorMoves,
+    /// The input method asked a terminal, as for the place of the cursor.
+    InputMethodQueries,
 }
 
 /// What is timed.
@@ -163,7 +171,7 @@ mod counting {
         }
     }
 
-    pub static COUNTS: [AtomicU64; 9] = [const { AtomicU64::new(0) }; 9];
+    pub static COUNTS: [AtomicU64; 13] = [const { AtomicU64::new(0) }; 13];
     pub static TIMES: [Histogram; 10] = [const { Histogram::new() }; 10];
     /// Paints for each terminal, by its id.
     pub static PAINTS: Mutex<BTreeMap<i32, u64>> = Mutex::new(BTreeMap::new());
@@ -185,6 +193,10 @@ mod counting {
             Count::GpuRuns => 6,
             Count::GpuFallbacks => 7,
             Count::GpuTexts => 8,
+            Count::SettingsPublished => 9,
+            Count::SettingsReloaded => 10,
+            Count::CursorMoves => 11,
+            Count::InputMethodQueries => 12,
         }
     }
 
@@ -466,6 +478,10 @@ pub fn json() -> String {
             "gpu_runs": count(Count::GpuRuns),
             "gpu_fallbacks": count(Count::GpuFallbacks),
             "gpu_texts": count(Count::GpuTexts),
+            "settings_published": count(Count::SettingsPublished),
+            "settings_reloaded": count(Count::SettingsReloaded),
+            "cursor_moves": count(Count::CursorMoves),
+            "input_method_queries": count(Count::InputMethodQueries),
             "paints": paints,
             "queued": counting::QUEUED.load(Ordering::Relaxed),
             "queued_max": counting::QUEUED_MOST.load(Ordering::Relaxed),

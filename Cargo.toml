@@ -63,6 +63,9 @@ cxx-qt-build.workspace = true
 test-hooks = ["kudari-qt/test-hooks"]
 # Counters of what Kudari does, written once a second with KUDARI_STATS=1, for the bench.
 stats = ["kudari-qt/stats"]
+# The debug service of QML, for `qmlprofiler` and `tools/bench.sh --qml-profile`. A client of
+# it can run code in Kudari, so never in a build to hand out; `tools/dist.sh` checks that.
+qml-profile = []
 
 [lints]
 workspace = true
