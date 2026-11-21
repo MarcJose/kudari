@@ -13,7 +13,7 @@ use crate::keytab;
 use crate::settings::Settings;
 
 /// Terminal settings, applied to new and running terminals alike.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Options {
     pub history_lines: usize,
     pub cursor: CursorShape,
@@ -62,7 +62,7 @@ pub struct Options {
     pub link_schemes: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Badge {
     pub format: String,
     pub color: String,
@@ -86,6 +86,13 @@ impl Options {
     /// The options the settings ask for. Reads the key binding file they name.
     #[must_use]
     pub fn from_settings(settings: &Settings) -> Self {
+        Self::from_settings_with_keys(settings, Arc::new(keytab::load(&settings.key_bindings)))
+    }
+
+    /// The same with the rules of a key table already read, as a change of another setting
+    /// keeps them: reading them means reading a file.
+    #[must_use]
+    pub fn from_settings_with_keys(settings: &Settings, key_rules: Arc<Vec<keytab::Rule>>) -> Self {
         Self {
             history_lines: settings.history_lines as usize,
             cursor: cursor_shape(&settings.cursor_shape),
@@ -126,7 +133,7 @@ impl Options {
             editor_command: settings.editor_command.clone(),
             scroll_full_page: settings.scroll_full_page,
             escaped_links: settings.escaped_links,
-            key_rules: Arc::new(keytab::load(&settings.key_bindings)),
+            key_rules,
             url_hints_modifiers: Modifiers::from_names(&settings.url_hints_modifier),
             reverse_url_hints: settings.reverse_url_hints,
             emoji_font: settings.emoji_font.clone(),
