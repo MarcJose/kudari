@@ -353,6 +353,9 @@ pub struct Changes {
     pub scrollbar: bool,
     /// The window blurs what shines through it.
     pub blur: bool,
+    /// What the terminals get through QML and show in all of their frame: the font, the
+    /// space between lines and bold for intense colors.
+    pub drawn: bool,
 }
 
 impl Changes {
@@ -366,6 +369,10 @@ impl Changes {
             keys: new.key_bindings != old.key_bindings,
             scrollbar: (new.scroll_bar_position == "hidden") != (old.scroll_bar_position == "hidden"),
             blur: new.blurs_behind() != old.blurs_behind(),
+            drawn: new.font_family != old.font_family
+                || new.font_size != old.font_size
+                || new.line_spacing != old.line_spacing
+                || new.bold_intense != old.bold_intense,
         }
     }
 }
@@ -701,6 +708,14 @@ mod tests {
             })
         );
         assert_eq!(changes("KeyBindings", "linux"), only(|c| c.keys = true));
+        for (key, value) in [
+            ("FontFamily", "Hack"),
+            ("FontSize", "14"),
+            ("LineSpacing", "2"),
+            ("BoldIntense", "false"),
+        ] {
+            assert_eq!(changes(key, value), only(|c| c.drawn = true), "{key}");
+        }
         assert_eq!(changes("ScrollBarPosition", "hidden"), only(|c| c.scrollbar = true));
         assert_eq!(changes("ScrollBarPosition", "left"), Changes::default());
         let translucent = with(&[("Opacity", "80"), ("Blur", "true")]);

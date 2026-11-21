@@ -371,17 +371,6 @@ impl cxx_qt::Initialize for qobject::TerminalItem {
                 item.update();
             })
             .release();
-        // The settings reach these through QML; a new value shows in all of the frame.
-        self.as_mut()
-            .on_bold_intense_changed(qobject::TerminalItem::update)
-            .release();
-        self.as_mut()
-            .on_cell_width_changed(qobject::TerminalItem::update)
-            .release();
-        self.as_mut()
-            .on_cell_height_changed(qobject::TerminalItem::update)
-            .release();
-        self.as_mut().on_ascent_changed(qobject::TerminalItem::update).release();
         self.on_url_hints_changed(qobject::TerminalItem::update).release();
     }
 }

@@ -1030,9 +1030,9 @@ impl qobject::Controller {
             Some(keys) => terminal::Options::from_settings_with_keys(settings, keys),
             None => terminal::Options::from_settings(settings),
         };
-        // Applying the options marks every terminal as changed all over, which a new palette
-        // or scrollbar needs as well.
-        if before.as_ref() != Some(&options) || changes.palette || changes.scrollbar {
+        // Applying the options marks every terminal as changed all over, which a new palette,
+        // scrollbar or font needs as well.
+        if before.as_ref() != Some(&options) || changes.palette || changes.scrollbar || changes.drawn {
             terminal::apply_options(options);
             for terminal in self.app.stack().all_terminals() {
                 self.as_mut().terminal_dirty(terminal);
