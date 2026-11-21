@@ -77,7 +77,8 @@ unused_must_use = "deny"
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
-# Code must not be able to take the terminals down: see `panic = "abort"` below.
+# Code must not be able to take the terminals down: these keep panics out of Kudari's own code,
+# and `panic = "unwind"` below lets one that still comes break only its terminal.
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
@@ -102,7 +103,10 @@ opt-level = 3
 debug = false
 strip = "symbols"
 lto = true
-panic = 'abort'
+# A panic, as in the emulator, ends the thread of the PTY of its terminal or is caught where a
+# terminal is drawn: that terminal closes, the others go on. Where Qt calls into Rust, cxx
+# still ends the program on a panic that is not caught.
+panic = 'unwind'
 incremental = false
 codegen-units = 1
 rpath = false

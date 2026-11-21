@@ -332,11 +332,24 @@ impl<P> Tee<P> {
     }
 }
 
+/// For the GUI test: a panic in the thread of the PTY where its output asks for one, to show
+/// that it breaks only this terminal.
+#[cfg(feature = "test-hooks")]
+fn panic_when_asked(bytes: &[u8]) {
+    const ASKED: &[u8] = b"KUDARI-TEST-PANIC-PTY";
+    assert!(
+        !bytes.windows(ASKED.len()).any(|window| window == ASKED),
+        "the GUI test asked for a panic in the thread of the PTY"
+    );
+}
+
 impl<P: EventedReadWrite> io::Read for Tee<P> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         let count = self.inner.reader().read(buffer)?;
         if let Some(bytes) = buffer.get_mut(..count) {
             self.scanner.scan(bytes, &self.marks, &*self.at_shell);
+            #[cfg(feature = "test-hooks")]
+            panic_when_asked(bytes);
         }
         Ok(count)
     }
