@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 //! The memory of the history when the width of a terminal changes. A test binary of its own,
-//! so that its allocator counts only what this test holds.
+//! so that its allocator counts only what these tests hold, one after the other.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -49,6 +49,10 @@ fn held() -> isize {
     HELD.load(Ordering::Relaxed)
 }
 
+/// One test at a time: the counter is of the whole process, and the tests run on threads side
+/// by side, so that one would count what the other allocates or frees.
+static ALONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// A terminal with a history of 20,000 full lines of 100 columns.
 fn full_history() -> Term<VoidListener> {
     let config = Config {
@@ -66,21 +70,31 @@ fn full_history() -> Term<VoidListener> {
 /// widened and kept it; fixed in `third_party`.
 #[test]
 fn three_columns_more_take_little_more_memory() {
+    let _alone = ALONE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut term = full_history();
     let before = held();
     term.resize(TermSize::new(103, 24));
-    let grown = (held() - before) * 100 / before;
-    assert!(grown < 10, "three columns more took {grown} % more memory");
+    let after = held();
+    let grown = (after - before) * 100 / before;
+    assert!(
+        grown < 10,
+        "three columns more took {grown} % more memory: {before} bytes before, {after} after"
+    );
 }
 
 /// A history gives the memory of a much wider terminal back when it is as narrow as before,
 /// as after zooming out and in again.
 #[test]
 fn a_terminal_as_narrow_as_before_gives_the_memory_back() {
+    let _alone = ALONE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut term = full_history();
     let before = held();
     term.resize(TermSize::new(140, 24));
     term.resize(TermSize::new(100, 24));
-    let kept = (held() - before) * 100 / before;
-    assert!(kept < 5, "as narrow as before, the history kept {kept} % more memory");
+    let after = held();
+    let kept = (after - before) * 100 / before;
+    assert!(
+        kept < 5,
+        "as narrow as before, the history kept {kept} % more memory: {before} bytes before, {after} after"
+    );
 }
