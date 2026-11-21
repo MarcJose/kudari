@@ -45,6 +45,8 @@ pub enum Count {
     CursorMoves,
     /// The input method asked a terminal, as for the place of the cursor.
     InputMethodQueries,
+    /// The periodic look at the terminals, for titles and watched programs.
+    Polls,
 }
 
 /// What is timed.
@@ -171,7 +173,7 @@ mod counting {
         }
     }
 
-    pub static COUNTS: [AtomicU64; 13] = [const { AtomicU64::new(0) }; 13];
+    pub static COUNTS: [AtomicU64; 14] = [const { AtomicU64::new(0) }; 14];
     pub static TIMES: [Histogram; 10] = [const { Histogram::new() }; 10];
     /// Paints for each terminal, by its id.
     pub static PAINTS: Mutex<BTreeMap<i32, u64>> = Mutex::new(BTreeMap::new());
@@ -197,6 +199,7 @@ mod counting {
             Count::SettingsReloaded => 10,
             Count::CursorMoves => 11,
             Count::InputMethodQueries => 12,
+            Count::Polls => 13,
         }
     }
 
@@ -482,6 +485,7 @@ pub fn json() -> String {
             "settings_reloaded": count(Count::SettingsReloaded),
             "cursor_moves": count(Count::CursorMoves),
             "input_method_queries": count(Count::InputMethodQueries),
+            "polls": count(Count::Polls),
             "paints": paints,
             "queued": counting::QUEUED.load(Ordering::Relaxed),
             "queued_max": counting::QUEUED_MOST.load(Ordering::Relaxed),
