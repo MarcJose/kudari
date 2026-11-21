@@ -94,11 +94,18 @@ pub struct WorkArea {
 
 /// `MainWindow::getScreen` and `getDesktopGeometry`: the screen of the `Screen` setting,
 /// counted from 1, or with 0 the one under the pointer, else the one with the active window.
+/// With a single screen, that one, without asking where the pointer is: that takes a script in
+/// `KWin` and a wait for its answer.
 #[must_use]
 pub fn work_area(screens: &dyn Screens, screen: i32) -> WorkArea {
     let names = screens.outputs();
     let configured = usize::try_from(screen - 1).ok().and_then(|index| names.get(index));
+    let only = match names.as_slice() {
+        [only] => Some(only),
+        _ => None,
+    };
     let output = configured
+        .or(only)
         .cloned()
         .or_else(|| screens.pointer_output().filter(|output| names.contains(output)))
         .unwrap_or_else(|| screens.active_output());
@@ -167,6 +174,7 @@ mod tests {
     struct Desk {
         outputs: Vec<String>,
         pointer: Option<String>,
+        asked: std::cell::Cell<usize>,
     }
 
     impl Screens for Desk {
@@ -175,6 +183,7 @@ mod tests {
         }
 
         fn pointer_output(&self) -> Option<String> {
+            self.asked.set(self.asked.get() + 1);
             self.pointer.clone()
         }
 
@@ -195,7 +204,25 @@ mod tests {
         Desk {
             outputs: vec!["DP-1".into(), "HDMI-1".into()],
             pointer: pointer.map(str::to_string),
+            asked: std::cell::Cell::new(0),
         }
+    }
+
+    #[test]
+    fn a_single_screen_is_taken_without_asking_for_the_pointer() {
+        let single = Desk {
+            outputs: vec!["DP-1".into()],
+            ..desk(Some("HDMI-1"))
+        };
+        assert_eq!(work_area(&single, 0).output, "DP-1");
+        assert_eq!(single.asked.get(), 0);
+        // A setting for a screen that is not there leaves the one there is.
+        assert_eq!(work_area(&single, 2).output, "DP-1");
+        assert_eq!(single.asked.get(), 0);
+        // With two, the pointer decides.
+        let two = desk(Some("HDMI-1"));
+        assert_eq!(work_area(&two, 0).output, "HDMI-1");
+        assert_eq!(two.asked.get(), 1);
     }
 
     #[test]

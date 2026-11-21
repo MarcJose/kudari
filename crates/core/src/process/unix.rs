@@ -87,9 +87,73 @@ impl Pty {
         in_group && state.is_some_and(|state| state != "Z")
     }
 
-    /// The program in the foreground to read about in `/proc`.
-    fn reading(&self) -> i32 {
-        self.member(self.foreground())
+    /// The program in the foreground as it is now, to read about in `/proc`.
+    fn look(&self) -> Foreground<'_> {
+        let group = self.foreground();
+        Foreground {
+            pty: self,
+            busy: group != self.shell,
+            pid: self.member(group),
+        }
+    }
+}
+
+/// One look at the program in the foreground of a PTY: which one it is was found once, and
+/// what `/proc` tells about it is read when asked.
+struct Foreground<'a> {
+    pty: &'a Pty,
+    busy: bool,
+    pid: i32,
+}
+
+impl Programs for Foreground<'_> {
+    fn is_root(&self) -> bool {
+        std::fs::read_to_string(self.pty.file(self.pid, "status")).is_ok_and(|status| is_root_status(&status))
+    }
+
+    fn is_busy(&self) -> bool {
+        self.busy
+    }
+
+    fn working_directory(&self) -> Option<PathBuf> {
+        std::fs::read_link(self.pty.file(self.pid, "cwd"))
+            .or_else(|_| std::fs::read_link(self.pty.file(self.pty.shell, "cwd")))
+            .ok()
+    }
+
+    fn name(&self) -> Option<String> {
+        std::fs::read_to_string(self.pty.file(self.pid, "comm"))
+            .ok()
+            .map(|name| name.trim().to_string())
+    }
+
+    fn arguments(&self) -> Option<Vec<String>> {
+        let command_line = std::fs::read(self.pty.file(self.pid, "cmdline")).ok()?;
+        let mut arguments: Vec<String> = command_line
+            .split(|byte| *byte == 0)
+            .map(|part| String::from_utf8_lossy(part).into_owned())
+            .collect();
+        // The arguments end with a zero byte each.
+        if arguments.last().is_some_and(String::is_empty) {
+            arguments.pop();
+        }
+        Some(arguments)
+    }
+
+    fn signal(&self, signal: Signal) {
+        self.pty.signal(signal);
+    }
+
+    fn supports(&self, signal: Signal) -> bool {
+        self.pty.supports(signal)
+    }
+
+    fn set_flow_control(&self, enabled: bool) {
+        self.pty.set_flow_control(enabled);
+    }
+
+    fn hang_up(&self) {
+        self.pty.hang_up();
     }
 }
 
@@ -104,7 +168,7 @@ fn is_root_status(status: &str) -> bool {
 
 impl Programs for Pty {
     fn is_root(&self) -> bool {
-        std::fs::read_to_string(self.file(self.reading(), "status")).is_ok_and(|status| is_root_status(&status))
+        self.look().is_root()
     }
 
     fn is_busy(&self) -> bool {
@@ -112,28 +176,19 @@ impl Programs for Pty {
     }
 
     fn working_directory(&self) -> Option<PathBuf> {
-        std::fs::read_link(self.file(self.reading(), "cwd"))
-            .or_else(|_| std::fs::read_link(self.file(self.shell, "cwd")))
-            .ok()
+        self.look().working_directory()
     }
 
     fn name(&self) -> Option<String> {
-        std::fs::read_to_string(self.file(self.reading(), "comm"))
-            .ok()
-            .map(|name| name.trim().to_string())
+        self.look().name()
     }
 
     fn arguments(&self) -> Option<Vec<String>> {
-        let command_line = std::fs::read(self.file(self.reading(), "cmdline")).ok()?;
-        let mut arguments: Vec<String> = command_line
-            .split(|byte| *byte == 0)
-            .map(|part| String::from_utf8_lossy(part).into_owned())
-            .collect();
-        // The arguments end with a zero byte each.
-        if arguments.last().is_some_and(String::is_empty) {
-            arguments.pop();
-        }
-        Some(arguments)
+        self.look().arguments()
+    }
+
+    fn now(&self) -> Box<dyn Programs + '_> {
+        Box::new(self.look())
     }
 
     fn signal(&self, signal: Signal) {
@@ -321,6 +376,29 @@ mod tests {
         let _ = process.kill();
         let _ = process.wait();
         assert!(alive, "the process with the id of the shell was ended");
+    }
+
+    #[test]
+    fn a_look_at_the_programs_finds_the_foreground_once() {
+        let root = std::env::temp_dir().join(format!("kudari-pty-look-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let pty = shell(&root);
+        std::fs::write(root.join("42/stat"), "42 (zsh) S 1 42 42").unwrap();
+        let now = pty.now();
+        assert_eq!(now.name().as_deref(), Some("zsh"));
+        // The leader of the group ends, and the end of its pipeline, 43, is what the PTY shows
+        // from now on; the look taken before stays with the program it found.
+        std::fs::remove_file(root.join("42/stat")).unwrap();
+        std::fs::create_dir_all(root.join("42/task/42")).unwrap();
+        std::fs::write(root.join("42/task/42/children"), "43").unwrap();
+        std::fs::create_dir_all(root.join("43")).unwrap();
+        std::fs::write(root.join("43/stat"), "43 (less) S 42 42 42").unwrap();
+        std::fs::write(root.join("43/comm"), "less\n").unwrap();
+        assert_eq!(pty.name().as_deref(), Some("less"));
+        assert_eq!(now.name().as_deref(), Some("zsh"));
+        assert!(!now.is_busy());
+        assert_eq!(now.working_directory(), Some(PathBuf::from("/work")));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

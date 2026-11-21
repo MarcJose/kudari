@@ -3,55 +3,44 @@
 
 //! The titles of terminals, with the placeholders of Konsole, so that formats carry over.
 
+use std::cell::OnceCell;
 use std::path::{Path, PathBuf};
 
 use crate::process::{self, Programs};
 use crate::sessions::SessionId;
 
 /// The title of a terminal: `remote_format` while `ssh` runs in the foreground, unless it
-/// is empty, else `format`. `directory` is the working directory, as far as it is known;
-/// `window_title` is the title the program set.
+/// is empty, else `format`. `directory` gives the working directory, as far as it is known;
+/// `window_title` is the title the program set. Only what the format shows is read, each once,
+/// so `programs` is best a look at them [`Programs::now`].
 #[must_use]
 pub fn title(
     programs: &dyn Programs,
-    directory: Option<PathBuf>,
+    directory: &dyn Fn() -> Option<PathBuf>,
     format: &str,
     remote_format: &str,
     window_title: &str,
 ) -> String {
+    let look = Look::new(programs, directory);
+    // The name of the program is one file, its command line another; most programs are no ssh.
     if !remote_format.is_empty()
+        && look.name().eq_ignore_ascii_case("ssh")
         && let Some(target) = ssh_target(programs)
     {
         return format_remote_title(remote_format, &target, window_title);
     }
-    local_title(programs, directory, format, window_title)
+    fill_in_local(&look, format, window_title)
 }
 
-/// The text of a format string; see [`format_title`].
+/// The text of a format string; see [`fill_in_local`].
 #[must_use]
-pub fn local_title(programs: &dyn Programs, directory: Option<PathBuf>, format: &str, window_title: &str) -> String {
-    let home = process::home();
-    let values = TitleValues {
-        directory: directory
-            .as_ref()
-            .map_or_else(String::new, |path| short_directory(path, home.as_deref())),
-        full_directory: directory
-            .as_ref()
-            .map_or_else(String::new, |path| full_directory(path, home.as_deref())),
-        process: programs.name().unwrap_or_default(),
-        // Reading the user of the program takes a file, so only for formats that show it.
-        prompt: if !format.contains("%B") {
-            String::new()
-        } else if programs.is_root() {
-            "#".to_string()
-        } else {
-            "$".to_string()
-        },
-        user: process::user(),
-        host: process::host(),
-        window_title: window_title.to_string(),
-    };
-    format_title(format, &values)
+pub fn local_title(
+    programs: &dyn Programs,
+    directory: &dyn Fn() -> Option<PathBuf>,
+    format: &str,
+    window_title: &str,
+) -> String {
+    fill_in_local(&Look::new(programs, directory), format, window_title)
 }
 
 /// The target of an `ssh` running in the foreground.
@@ -61,17 +50,38 @@ fn ssh_target(programs: &dyn Programs) -> Option<SshTarget> {
     matches!(program, "ssh" | "ssh.exe").then(|| parse_ssh(arguments.get(1..)?))?
 }
 
-/// What a title format can contain.
-#[derive(Debug, Default)]
-pub struct TitleValues {
-    pub directory: String,
-    pub full_directory: String,
-    pub process: String,
-    /// `#` while the program runs as root, else `$`.
-    pub prompt: String,
-    pub user: String,
-    pub host: String,
-    pub window_title: String,
+/// What a title can show of the programs of a terminal, each read when a format first asks
+/// for it.
+struct Look<'a> {
+    programs: &'a dyn Programs,
+    find_directory: &'a dyn Fn() -> Option<PathBuf>,
+    name: OnceCell<String>,
+    directory: OnceCell<Option<PathBuf>>,
+    home: OnceCell<Option<PathBuf>>,
+}
+
+impl<'a> Look<'a> {
+    fn new(programs: &'a dyn Programs, find_directory: &'a dyn Fn() -> Option<PathBuf>) -> Self {
+        Self {
+            programs,
+            find_directory,
+            name: OnceCell::new(),
+            directory: OnceCell::new(),
+            home: OnceCell::new(),
+        }
+    }
+
+    fn name(&self) -> &str {
+        self.name.get_or_init(|| self.programs.name().unwrap_or_default())
+    }
+
+    fn directory(&self) -> Option<&Path> {
+        self.directory.get_or_init(self.find_directory).as_deref()
+    }
+
+    fn home(&self) -> Option<&Path> {
+        self.home.get_or_init(process::home).as_deref()
+    }
 }
 
 /// Fills in a format string: `%` and a letter that `value` knows becomes its text, `%%`
@@ -110,20 +120,23 @@ fn fill_in(format: &str, value: impl Fn(char) -> Option<String>) -> String {
 /// `%d` directory (short), `%D` directory (full), `%n` program, `%u` user, `%h` host, `%B`
 /// `#` for root and else `$`, and `%w` the title set by the program; `%#`, the number of the
 /// session, comes in before with [`with_session`].
-#[must_use]
-pub fn format_title(format: &str, values: &TitleValues) -> String {
+fn fill_in_local(look: &Look<'_>, format: &str, window_title: &str) -> String {
     fill_in(format, |letter| {
-        let value = match letter {
-            'd' => &values.directory,
-            'D' => &values.full_directory,
-            'n' => &values.process,
-            'u' => &values.user,
-            'h' => &values.host,
-            'w' => &values.window_title,
-            'B' => &values.prompt,
+        Some(match letter {
+            'd' => look
+                .directory()
+                .map_or_else(String::new, |path| short_directory(path, look.home())),
+            'D' => look
+                .directory()
+                .map_or_else(String::new, |path| full_directory(path, look.home())),
+            'n' => look.name().to_string(),
+            'u' => process::user(),
+            'h' => process::host(),
+            'w' => window_title.to_string(),
+            'B' if look.programs.is_root() => "#".to_string(),
+            'B' => "$".to_string(),
             _ => return None,
-        };
-        Some(value.clone())
+        })
     })
 }
 
@@ -263,6 +276,8 @@ fn short_directory(path: &std::path::Path, home: Option<&std::path::Path>) -> St
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
     use crate::process::Signal;
 
@@ -338,13 +353,13 @@ mod tests {
         assert_eq!(with_session("%#:%#", 4), "5:5");
         assert_eq!(with_session("100%%# %", 0), "100%%# %");
         assert_eq!(
-            local_title(&Shell(false), None, &with_session("%# %n %B", 2), ""),
+            local_title(&Shell(false), &|| None, &with_session("%# %n %B", 2), ""),
             "3 bash $"
         );
-        assert_eq!(local_title(&Shell(true), None, "%n %B", ""), "bash #");
+        assert_eq!(local_title(&Shell(true), &|| None, "%n %B", ""), "bash #");
         // A placeholder escaped with %% stays text.
         assert_eq!(
-            local_title(&Shell(true), None, &with_session("%%# %%B", 0), ""),
+            local_title(&Shell(true), &|| None, &with_session("%%# %%B", 0), ""),
             "%# %B"
         );
     }
@@ -352,15 +367,18 @@ mod tests {
     #[test]
     fn ssh_gets_the_remote_title() {
         assert_eq!(
-            title(&ssh("/usr/bin/ssh -p 2222 ada@box"), None, "%d", "%U%h", ""),
+            title(&ssh("/usr/bin/ssh -p 2222 ada@box"), &|| None, "%d", "%U%h", ""),
             "ada@box"
         );
-        assert_eq!(title(&ssh("ssh.exe box uptime"), None, "%d", "%h %c", ""), "box uptime");
         assert_eq!(
-            title(&ssh("ssh box"), Some(PathBuf::from("/srv/src")), "%d : %n", "", ""),
+            title(&ssh("ssh.exe box uptime"), &|| None, "%d", "%h %c", ""),
+            "box uptime"
+        );
+        assert_eq!(
+            title(&ssh("ssh box"), &|| Some(PathBuf::from("/srv/src")), "%d : %n", "", ""),
             "src : ssh"
         );
-        assert_eq!(title(&ssh("sshd -D"), None, "%n %w", "%h", "notes"), "ssh notes");
+        assert_eq!(title(&ssh("sshd -D"), &|| None, "%n %w", "%h", "notes"), "ssh notes");
     }
 
     #[test]
@@ -411,20 +429,91 @@ mod tests {
         assert_eq!(format_remote_title("%U%h", &address, ""), "10.0.0.1");
     }
 
+    /// A program that counts what is read of it.
+    #[derive(Default)]
+    struct Counted {
+        ssh: bool,
+        names: AtomicUsize,
+        arguments: AtomicUsize,
+        roots: AtomicUsize,
+    }
+
+    impl Programs for Counted {
+        fn is_busy(&self) -> bool {
+            true
+        }
+
+        fn working_directory(&self) -> Option<PathBuf> {
+            None
+        }
+
+        fn name(&self) -> Option<String> {
+            self.names.fetch_add(1, Ordering::Relaxed);
+            Some(if self.ssh { "ssh" } else { "vim" }.into())
+        }
+
+        fn arguments(&self) -> Option<Vec<String>> {
+            self.arguments.fetch_add(1, Ordering::Relaxed);
+            Some(if self.ssh {
+                vec!["ssh".into(), "box".into()]
+            } else {
+                vec!["vim".into()]
+            })
+        }
+
+        fn signal(&self, _signal: Signal) {}
+
+        fn supports(&self, _signal: Signal) -> bool {
+            false
+        }
+
+        fn set_flow_control(&self, _enabled: bool) {}
+
+        fn is_root(&self) -> bool {
+            self.roots.fetch_add(1, Ordering::Relaxed);
+            false
+        }
+    }
+
     #[test]
     fn title_formats_use_konsoles_placeholders() {
-        let values = TitleValues {
-            directory: "src".into(),
-            full_directory: "~/x/src".into(),
-            process: "vim".into(),
-            prompt: "$".into(),
-            user: "ada".into(),
-            host: "box".into(),
-            window_title: "notes".into(),
+        let vim = Counted::default();
+        let src = || Some(PathBuf::from("/srv/x/src"));
+        assert_eq!(local_title(&vim, &src, "%d : %n", ""), "src : vim");
+        assert_eq!(local_title(&vim, &src, "%D %w", "notes"), "/srv/x/src notes");
+        assert_eq!(
+            local_title(&vim, &src, "%u@%h", ""),
+            format!("{}@{}", process::user(), process::host())
+        );
+        assert_eq!(local_title(&vim, &src, "100%% %x %", ""), "100% %x %");
+    }
+
+    #[test]
+    fn a_title_reads_only_what_its_format_shows() {
+        let looked = AtomicUsize::new(0);
+        let directory = || {
+            looked.fetch_add(1, Ordering::Relaxed);
+            Some(PathBuf::from("/srv/src"))
         };
-        assert_eq!(format_title("%d : %n", &values), "src : vim");
-        assert_eq!(format_title("%u@%h:%D %w", &values), "ada@box:~/x/src notes");
-        assert_eq!(format_title("100%% %x %", &values), "100% %x %");
+        // The formats of the settings, for a program that is no ssh: its name once, for the
+        // remote format and for %n both, and nothing else.
+        let vim = Counted::default();
+        assert_eq!(title(&vim, &directory, "%d : %n %n", "(%u) %H", ""), "src : vim vim");
+        let read = |counted: &Counted| {
+            [&counted.names, &counted.arguments, &counted.roots].map(|count| count.load(Ordering::Relaxed))
+        };
+        assert_eq!((read(&vim), looked.load(Ordering::Relaxed)), ([1, 0, 0], 1));
+        // A format without the directory does not look for it.
+        let vim = Counted::default();
+        assert_eq!(title(&vim, &directory, "%n %w", "", "notes"), "vim notes");
+        assert_eq!((read(&vim), looked.load(Ordering::Relaxed)), ([1, 0, 0], 1));
+        // An ssh has its command line read, and its title needs nothing local.
+        let ssh = Counted {
+            ssh: true,
+            ..Counted::default()
+        };
+        assert_eq!(title(&ssh, &directory, "%d %B", "%h", ""), "box");
+        assert_eq!((read(&ssh), looked.load(Ordering::Relaxed)), ([1, 1, 0], 1));
     }
 
     #[test]
@@ -461,14 +550,13 @@ mod tests {
             port: "22".into(),
             command: "ls".into(),
         };
-        let values = TitleValues::default();
         let samples = ["-p 22 ada@box.example.org ls -l", "%d : %n (%u) %H"];
         for input in crate::fuzz::inputs(&samples) {
             let words: Vec<String> = input.split(' ').map(str::to_string).collect();
             let _ = parse_ssh(&words);
-            let _ = format_title(&input, &values);
+            let _ = local_title(&Shell(false), &|| None, &input, "title");
             let _ = format_remote_title(&input, &target, "title");
-            let _ = title(&Ssh(words), None, &input, &input, &input);
+            let _ = title(&Ssh(words), &|| None, &input, &input, &input);
         }
     }
 }

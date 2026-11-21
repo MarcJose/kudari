@@ -313,32 +313,11 @@ end_input() { input key 28; sleep 0.2; input key 29 32; settle; }
 window toggleWindowState; sleep 1.5
 check "the window opens" visible=1 "$(state)"
 
-# Calls to Kudari while the window opens: it asks KWin for the screen under the pointer
-# over the same connection, and the calls still get their answers at once, not the empty
-# one that a timeout gives after a second.
-: > "$work/answers"
-ask_often() {
-    asked=0
-    while [ "$asked" -lt 60 ]; do
-        before=$(date +%s%N)
-        answer=$(sessions sessionIdList 2>&1) || answer=failed
-        took=$((($(date +%s%N) - before) / 1000000))
-        if [ "$took" -gt 500 ]; then answer="slow $took ms"; fi
-        echo "$answer" >> "$work/answers"
-        asked=$((asked + 1))
-    done
-}
-ask_often &
-first=$!
-ask_often &
-second=$!
-ask_often &
-third=$!
-for _ in 1 2 3 4 5 6 7 8; do window toggleWindowState; sleep 0.15; done
-wait "$first" "$second" "$third"
-check "calls while the window opens get their answers at once" "180 0" \
-    "$(wc -l < "$work/answers") $(grep -c -v '^[0-9][0-9,]*$' "$work/answers")"
-grep -v '^[0-9][0-9,]*$' "$work/answers" | sort | uniq -c | sed 's/^/Error in the answers: /'
+# With one screen, the window opens on it without asking KWin where the pointer is, which
+# takes a script in KWin and a wait for its answer.
+for _ in 1 2; do window toggleWindowState; sleep 0.5; done
+check "with one screen, the window opens without a script in KWin" no \
+    "$([ -e "$XDG_RUNTIME_DIR/kudari-pointer-output.js" ] && echo yes || echo no)"
 input click 600 150; sleep 0.5
 
 run_open "echo blocked > $work/blocked"
@@ -723,6 +702,37 @@ check "a search while typing finds the newest match" yes \
     "$(awk -v at="$newest" 'BEGIN { print (at != "" && at > 0.9) ? "yes" : "no: " at }')"
 check "a match far back is found after a pause, and not missed meanwhile" "false false yes" \
     "$(echo "$far" | awk '{ print $1, $2, ($3 != "" && $3 < 0.5) ? "yes" : "no: " $3 }')"
+# The marks on the scrollbar, in a tab of its own: a match on every line of a history longer
+# than the rail, but at most one mark for each pixel row of the rail, down to its end, and one
+# item draws them all, in yellow on the rail at the right edge of the window.
+hook SetSetting HistoryLines 10000; settle
+before_marks=$(sessions activeSessionId)
+mark; marked=$(sessions addSession); wait_shells
+run "seq 1 12000 | sed 's/^/x gefunden /'"
+hook Trigger edit_find; settle
+for code in 34 18 33; do input key "$code"; done
+sleep 1; settle
+spread=$(printf '%s\n%s\n' "$(hook Property terminal searchRows)" "$(hook Property terminal searchLines)" | python3 -c '
+import re, sys
+rows = max(int(row) for row in sys.stdin.readline().split(","))
+marks = [float(mark) for mark in re.findall(r"[0-9.]+", sys.stdin.read())]
+print("yes" if 0 < len(marks) <= rows and max(marks) > 0.95 else f"no: {len(marks)} marks for {rows} rows, last {max(marks, default=0)}")')
+hook Grab "$work/marks"; sleep 1
+drawn=$(cd "$work" && python3 -c '
+import glob
+from pngread import read
+width, height, channels, rows = read(sorted(glob.glob("marks-*.png"))[0])
+def yellow(row, x):
+    red, green, blue = row[x * channels:x * channels + 3]
+    return red > 200 and green > 200 and blue < 100
+lit = sum(1 for row in rows if any(yellow(row, x) for x in range(width - 20, width)))
+print("yes" if lit > 50 else f"no: {lit} rows")')
+input key 1; settle
+sessions removeSession "$marked" > /dev/null; settle
+sessions raiseSession "$before_marks" > /dev/null
+hook SetSetting HistoryLines 1000; settle
+check "the scrollbar shows the matches once a pixel row, to the end of the history" yes "$spread"
+check "the marks of the matches are drawn on the scrollbar" yes "$drawn"
 # A panic breaks only its terminal, in the thread of its PTY and while it is drawn: its tab
 # closes, Kudari goes on, and the terminal of the tab before still takes commands.
 for place in pty paint; do
@@ -849,6 +859,18 @@ run_in "$first_terminal" "seq 1 40"
 stale_hidden=$(stale)
 window toggleWindowState; sleep 1
 check "output nobody sees waits until the terminal shows" "1 0 1 0" "$stale_in_background $stale_shown $stale_hidden $(stale)"
+
+# Hidden, with no terminal watched or saved, the window looks at its terminals for titles only
+# every 4 s, which only D-Bus sees then; shown, it looks at once rather than after its timer.
+polls() { hook Stats | python3 -c 'import json, sys; print(json.load(sys.stdin)["polls"])'; }
+window toggleWindowState; sleep 1
+hook ResetStats; sleep 3
+polls_hidden=$(polls)
+hook ResetStats; window toggleWindowState; sleep 0.4
+polls_shown=$(polls)
+looked="hidden $polls_hidden, shown $polls_shown"
+[ "$polls_hidden" -le 1 ] && [ "$polls_shown" -ge 1 ] && looked=yes
+check "a hidden window looks at its terminals seldom, and at once when it shows" yes "$looked"
 
 # The counters of the test build: output, its refresh and paint, the lock of the terminal, the
 # queue of the Qt thread and the frame all count.
@@ -1640,6 +1662,34 @@ printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nKeepOpen=true\n'
 XDG_CONFIG_HOME="$work/screens" "$binary" > "$work/screens.log" 2>&1 &
 kudari=$!
 started
+# Calls to Kudari while the window opens: with two screens, it asks KWin for the screen
+# under the pointer over the same connection, and the calls still get their answers at once,
+# not the empty one that a timeout gives after a second.
+: > "$work/answers"
+ask_often() {
+    asked=0
+    while [ "$asked" -lt 60 ]; do
+        before=$(date +%s%N)
+        answer=$(sessions sessionIdList 2>&1) || answer=failed
+        took=$((($(date +%s%N) - before) / 1000000))
+        if [ "$took" -gt 500 ]; then answer="slow $took ms"; fi
+        echo "$answer" >> "$work/answers"
+        asked=$((asked + 1))
+    done
+}
+ask_often &
+first=$!
+ask_often &
+second=$!
+ask_often &
+third=$!
+for _ in 1 2 3 4 5 6 7 8; do window toggleWindowState; sleep 0.15; done
+wait "$first" "$second" "$third"
+check "calls while the window opens get their answers at once" "180 0" \
+    "$(wc -l < "$work/answers") $(grep -c -v '^[0-9][0-9,]*$' "$work/answers")"
+grep -v '^[0-9][0-9,]*$' "$work/answers" | sort | uniq -c | sed 's/^/Error in the answers: /'
+check "with two screens, the window asks KWin where the pointer is" yes \
+    "$([ -e "$XDG_RUNTIME_DIR/kudari-pointer-output.js" ] && echo yes || echo no)"
 window toggleWindowState; sleep 1.5
 shown=$(state)
 output=$(kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk '/^Output:/ { name = $3 } END { print name }')
