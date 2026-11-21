@@ -21,7 +21,7 @@ use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::{Config, Term, TermMode};
+use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
 use alacritty_terminal::vi_mode::ViMotion;
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
@@ -477,4 +477,137 @@ fn the_thread_of_the_pty_waits_for_the_terminal_without_spinning() {
         spent < started.elapsed() / 10,
         "the thread of the PTY took {spent:?} of a second"
     );
+}
+
+#[test]
+fn a_repeat_after_a_run_repeats_its_last_character() {
+    // The copy of vte in `third_party` hands a run of printable ASCII on at once; a repeat
+    // (REP) after it repeats the last character of the run, as after one character.
+    let term = term(10, 2, Config::default(), b"ab\x1b[3b");
+    assert_eq!(line_text(&term, 0), "abbbb");
+}
+
+/// Random output of every kind that meets runs of printable ASCII: words and lines longer than
+/// the screen, colours and links, the line-drawing charset, insert mode, lines that do not
+/// wrap, wide and combining characters, cursor moves, erasing, scroll regions, repeats, and
+/// inserted and deleted characters.
+fn output_around_runs(seed: &mut u64) -> Vec<u8> {
+    let mut next = |bound: u64| {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 7;
+        *seed ^= *seed << 17;
+        *seed % bound
+    };
+    let pieces: [&[u8]; 26] = [
+        b"word ",
+        b"a line longer than the screen is wide",
+        b"\x1b[31mred\x1b[0m",
+        b"\x1b[1;4;44m",
+        b"\x1b[0m",
+        // With an id of its own: alacritty numbers links without one across all terminals.
+        b"\x1b]8;id=a;https://a.org\x1b\\link\x1b]8;;\x1b\\",
+        b"\x1b(0lqqk\x1b(B",
+        b"\x0eabc\x0f",
+        b"\x1b[4h",
+        b"\x1b[4l",
+        b"\x1b[?7l",
+        b"\x1b[?7h",
+        "日本".as_bytes(),
+        "e\u{301}".as_bytes(),
+        "🙂".as_bytes(),
+        b"\r",
+        b"\n",
+        b"\x08",
+        b"\t",
+        b"\x1b[K",
+        b"\x1b[2J",
+        b"\x1b[2;4r",
+        b"\x1b[r",
+        b"\x1b[3b",
+        b"\x1b[2P",
+        b"\x1b[2@",
+    ];
+    let mut bytes = Vec::new();
+    for _ in 0..next(60) {
+        match next(30) {
+            found @ 0..=25 => bytes.extend_from_slice(pieces[found as usize]),
+            26 => bytes.extend_from_slice(format!("\x1b[{};{}H", 1 + next(6), 1 + next(11)).as_bytes()),
+            _ => (0..=next(30)).for_each(|_| bytes.push(b' ' + next(95) as u8)),
+        }
+    }
+    bytes
+}
+
+/// Where two terminals differ, from the top of the history, if they do: the size of their
+/// history, or the first cell. `Grid` compares only grids that never scrolled.
+fn first_difference(one: &Term<VoidListener>, other: &Term<VoidListener>) -> Option<String> {
+    let history = one.grid().history_size();
+    if history != other.grid().history_size() {
+        return Some(format!(
+            "histories of {history} and {} lines",
+            other.grid().history_size()
+        ));
+    }
+    for line in -(history as i32)..one.screen_lines() as i32 {
+        for column in 0..one.columns() {
+            let point = Point::new(Line(line), Column(column));
+            if one.grid()[point] != other.grid()[point] {
+                return Some(format!(
+                    "{point:?}: {:?} against {:?}",
+                    one.grid()[point],
+                    other.grid()[point]
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// The damage of a terminal since the last time, as lines with the columns that changed.
+fn damage_of(term: &mut Term<VoidListener>) -> Option<Vec<(usize, usize, usize)>> {
+    let found = match term.damage() {
+        TermDamage::Full => None,
+        TermDamage::Partial(lines) => Some(lines.map(|line| (line.line, line.left, line.right)).collect()),
+    };
+    term.reset_damage();
+    found
+}
+
+#[test]
+fn printable_runs_leave_the_terminal_as_characters_one_by_one() {
+    // `alacritty_terminal` 0.26 took each character of a run on its own; the copy in
+    // `third_party` writes a run a line at a time where nothing but the characters changes.
+    let mut seed = 0x9E37_79B9_7F4A_7C15_u64;
+    for _ in 0..2000 {
+        let bytes = output_around_runs(&mut seed);
+        let config = || Config {
+            scrolling_history: 20,
+            ..Config::default()
+        };
+        let mut runs = Term::new(config(), &TermSize::new(10, 5), VoidListener);
+        let mut single = Term::new(config(), &TermSize::new(10, 5), VoidListener);
+        single.input_by_character(true);
+        let (mut by_runs, mut by_characters) = (Processor::<StdSyncHandler>::new(), Processor::<StdSyncHandler>::new());
+        let mut at = 0;
+        while at < bytes.len() {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let end = (at + 1 + (seed % 40) as usize).min(bytes.len());
+            by_runs.advance(&mut runs, &bytes[at..end]);
+            by_characters.advance(&mut single, &bytes[at..end]);
+            at = end;
+            let shown = String::from_utf8_lossy(&bytes[..at]);
+            if let Some(difference) = first_difference(&runs, &single) {
+                panic!("{difference} after {shown:?}");
+            }
+            assert_eq!(runs.grid().cursor, single.grid().cursor, "the cursor after {shown:?}");
+            assert_eq!(runs.mode(), single.mode(), "the modes after {shown:?}");
+            assert_eq!(
+                damage_of(&mut runs),
+                damage_of(&mut single),
+                "the damage after {shown:?}"
+            );
+        }
+    }
 }
