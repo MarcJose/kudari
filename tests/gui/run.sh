@@ -313,32 +313,11 @@ end_input() { input key 28; sleep 0.2; input key 29 32; settle; }
 window toggleWindowState; sleep 1.5
 check "the window opens" visible=1 "$(state)"
 
-# Calls to Kudari while the window opens: it asks KWin for the screen under the pointer
-# over the same connection, and the calls still get their answers at once, not the empty
-# one that a timeout gives after a second.
-: > "$work/answers"
-ask_often() {
-    asked=0
-    while [ "$asked" -lt 60 ]; do
-        before=$(date +%s%N)
-        answer=$(sessions sessionIdList 2>&1) || answer=failed
-        took=$((($(date +%s%N) - before) / 1000000))
-        if [ "$took" -gt 500 ]; then answer="slow $took ms"; fi
-        echo "$answer" >> "$work/answers"
-        asked=$((asked + 1))
-    done
-}
-ask_often &
-first=$!
-ask_often &
-second=$!
-ask_often &
-third=$!
-for _ in 1 2 3 4 5 6 7 8; do window toggleWindowState; sleep 0.15; done
-wait "$first" "$second" "$third"
-check "calls while the window opens get their answers at once" "180 0" \
-    "$(wc -l < "$work/answers") $(grep -c -v '^[0-9][0-9,]*$' "$work/answers")"
-grep -v '^[0-9][0-9,]*$' "$work/answers" | sort | uniq -c | sed 's/^/Error in the answers: /'
+# With one screen, the window opens on it without asking KWin where the pointer is, which
+# takes a script in KWin and a wait for its answer.
+for _ in 1 2; do window toggleWindowState; sleep 0.5; done
+check "with one screen, the window opens without a script in KWin" no \
+    "$([ -e "$XDG_RUNTIME_DIR/kudari-pointer-output.js" ] && echo yes || echo no)"
 input click 600 150; sleep 0.5
 
 run_open "echo blocked > $work/blocked"
@@ -1616,6 +1595,34 @@ printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nKeepOpen=true\n'
 XDG_CONFIG_HOME="$work/screens" "$binary" > "$work/screens.log" 2>&1 &
 kudari=$!
 started
+# Calls to Kudari while the window opens: with two screens, it asks KWin for the screen
+# under the pointer over the same connection, and the calls still get their answers at once,
+# not the empty one that a timeout gives after a second.
+: > "$work/answers"
+ask_often() {
+    asked=0
+    while [ "$asked" -lt 60 ]; do
+        before=$(date +%s%N)
+        answer=$(sessions sessionIdList 2>&1) || answer=failed
+        took=$((($(date +%s%N) - before) / 1000000))
+        if [ "$took" -gt 500 ]; then answer="slow $took ms"; fi
+        echo "$answer" >> "$work/answers"
+        asked=$((asked + 1))
+    done
+}
+ask_often &
+first=$!
+ask_often &
+second=$!
+ask_often &
+third=$!
+for _ in 1 2 3 4 5 6 7 8; do window toggleWindowState; sleep 0.15; done
+wait "$first" "$second" "$third"
+check "calls while the window opens get their answers at once" "180 0" \
+    "$(wc -l < "$work/answers") $(grep -c -v '^[0-9][0-9,]*$' "$work/answers")"
+grep -v '^[0-9][0-9,]*$' "$work/answers" | sort | uniq -c | sed 's/^/Error in the answers: /'
+check "with two screens, the window asks KWin where the pointer is" yes \
+    "$([ -e "$XDG_RUNTIME_DIR/kudari-pointer-output.js" ] && echo yes || echo no)"
 window toggleWindowState; sleep 1.5
 shown=$(state)
 output=$(kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk '/^Output:/ { name = $3 } END { print name }')
