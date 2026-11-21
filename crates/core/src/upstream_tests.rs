@@ -218,8 +218,10 @@ fn input_reaches_the_program_while_its_costly_output_is_parsed() {
     let _ = channel.send(Msg::Shutdown);
     let _ = thread.join();
     let _ = std::fs::remove_file(&marks);
+    // Before the fix it took 4 s in a release build and more than 20 s in a debug one; with
+    // it, well under one, also in the slower builds of the CI that measure coverage.
     assert!(
-        taken < Duration::from_millis(300),
+        taken < Duration::from_millis(1500),
         "Ctrl+C took {taken:?} to reach the program"
     );
 }
