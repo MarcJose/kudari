@@ -885,7 +885,11 @@ some() {
     tries=0
     while [ "$(paints all)" = 0 ] && [ "$tries" -lt 20 ]; do sleep 0.1; tries=$((tries + 1)); done
     count=$(paints all)
-    [ "$count" -gt 0 ] && echo yes || echo "no: $count"
+    # Where it fails, how far it came: refreshes, paints of lines, and frames drawn.
+    [ "$count" -gt 0 ] && echo yes || echo "no: $count $(hook Stats | python3 -c '
+import json, sys
+stats = json.load(sys.stdin)
+print("refreshes", stats["refreshes"], "line_paints", stats["line_paints"], "draws", stats["frame_draw"]["count"])')"
 }
 hook ResetStats; hook SetSetting ToggleToFocus true; settle; sleep 0.5
 by_window=$(paints all)
