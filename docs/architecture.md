@@ -51,8 +51,10 @@ order the frame paints them, with a material and shaders of Kudari's own.
 - A fill takes a white pixel of the atlas, so that fills and glyphs keep their order.
 - The badge lies between the background and the cells as an image of its own, drawn
   anew only when it changes; the geometry has a layer under it and one over it.
-- The corners go straight into the geometry of the node, which keeps its memory from frame
-  to frame. Each frame is built whole; the item keeps no image of it.
+- The corners of each line are kept apart, in what lies under its glyphs, its glyphs and
+  what lies over them, and the geometry is put together from them in the order a whole
+  frame paints them. A frame of lines that changed builds only theirs; scrolling, a
+  selection or a new size build all. The item keeps no image of its frames.
 - A frame that does not fit in the atlas is painted instead, and the atlas starts again.
 
 The shaders are in `crates/qt/shaders`, baked by `tools/shaders.sh` into `.qsb` files with
