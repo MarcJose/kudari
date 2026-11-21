@@ -240,6 +240,16 @@ single languages.
 with real input. It touches neither the desktop nor your configuration. The `test-hooks`
 feature adds the D-Bus object it needs and must stay off in normal builds.
 
+`tests/check.sh` builds the lints and the unit tests with the feature `test-hooks`, as the
+GUI test does, so that the build scripts of cxx-qt run once for all three; the CI job
+`build` builds without it, as the release does. After the Rust checks, those of the C++,
+the QML, the prose and the man page run side by side.
+
+A cache of compiled crates saves time after `cargo clean` or in a new target directory:
+with `sccache` installed, `export RUSTC_WRAPPER=sccache` uses it for Rust and the `cc`
+crate for the C++. Keep its cache on your own disk; a cache shared with others could hand
+you object files that someone else compiled.
+
 `tools/coverage.sh` measures with `cargo-llvm-cov` which lines of the Rust code the unit tests
 and the GUI test run, taken together. It does not measure the C++ bridge and QML. The CI
 shows the table in the summary of the run, attaches the HTML report, and fails if the
