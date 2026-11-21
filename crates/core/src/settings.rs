@@ -56,7 +56,7 @@ impl Source<'_> {
 }
 
 /// Settings that can be changed at runtime, with their configuration group.
-const KEYS: [(&str, &str); 109] = [
+const KEYS: [(&str, &str); 110] = [
     ("Screen", "Window"),
     ("Width", "Window"),
     ("Height", "Window"),
@@ -81,6 +81,7 @@ const KEYS: [(&str, &str); 109] = [
     ("ColorScheme", "Appearance"),
     ("ConfirmQuit", "Dialogs"),
     ("AllowRemoteCommands", "Security"),
+    ("ProgramsCopyOnlyWithFocus", "Security"),
     ("AllowAgentReading", "Security"),
     ("AllowAgentControl", "Security"),
     ("ConfirmAgentCommands", "Security"),
@@ -217,6 +218,10 @@ pub struct Settings {
     /// Lets the D-Bus method `runCommand` type into terminals. Any program of the
     /// same user could use it to run commands, so it stays off unless enabled.
     pub allow_remote_commands: bool,
+    /// Lets programs copy to the clipboard with OSC 52 only from the active terminal of the
+    /// window while it has the focus, so that one in the background cannot slip a command
+    /// in. Off by default, as tmux and Neovim in other tabs copy that way.
+    pub programs_copy_only_with_focus: bool,
     /// Lets AI agents read the text of the terminals through `kudari mcp`. Off by default:
     /// any program of the same user can reach the interface.
     pub allow_agent_reading: bool,
@@ -431,6 +436,7 @@ impl Settings {
             ),
             confirm_quit: source.boolean("Dialogs", "ConfirmQuit", true),
             allow_remote_commands: source.boolean("Security", "AllowRemoteCommands", false),
+            programs_copy_only_with_focus: source.boolean("Security", "ProgramsCopyOnlyWithFocus", false),
             allow_agent_reading: source.boolean("Security", "AllowAgentReading", false),
             allow_agent_control: source.boolean("Security", "AllowAgentControl", false),
             confirm_agent_commands: source.boolean("Security", "ConfirmAgentCommands", true),
@@ -548,6 +554,7 @@ impl Settings {
             "ColorScheme": self.color_scheme,
             "ConfirmQuit": self.confirm_quit,
             "AllowRemoteCommands": self.allow_remote_commands,
+            "ProgramsCopyOnlyWithFocus": self.programs_copy_only_with_focus,
             "AllowAgentReading": self.allow_agent_reading,
             "AllowAgentControl": self.allow_agent_control,
             "ConfirmAgentCommands": self.confirm_agent_commands,

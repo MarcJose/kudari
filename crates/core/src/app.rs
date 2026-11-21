@@ -19,6 +19,9 @@ use crate::settings::{Settings, Store};
 
 /// Bell notifications are at most this frequent, so that a burst of bells is one notification.
 const BELL_INTERVAL: Duration = Duration::from_millis(500);
+/// The notification that a copy from the background was refused comes at most this often for
+/// a terminal.
+const REFUSED_COPY_INTERVAL: Duration = Duration::from_secs(10);
 
 /// How often the front end calls [`App::poll`] per second, for the auto save interval.
 pub const POLLS_PER_SECOND: u32 = 2;
@@ -259,6 +262,8 @@ pub struct App {
     /// The window is only being shown again to get the focus, without animation.
     refocusing: bool,
     polls: u32,
+    /// When the user last heard that a copy of each terminal was refused.
+    copies_refused: BTreeMap<TerminalId, Instant>,
     /// Sessions an AI agent opened, the only ones it may close.
     /// The sessions agents opened, with the name of the agent that opened each.
     agent_sessions: BTreeMap<SessionId, String>,
@@ -295,6 +300,7 @@ impl App {
             focus_toggle_lock: false,
             refocusing: false,
             polls: 0,
+            copies_refused: BTreeMap::new(),
             agent_sessions: BTreeMap::new(),
             agents: Access::default(),
             window_visible: false,
@@ -810,6 +816,39 @@ impl App {
         } else {
             Vec::new()
         }
+    }
+
+    /// Whether a program in `terminal` may copy to the clipboard now: always, unless the
+    /// setting lets only the terminal in front copy, the active one of the shown window while
+    /// it has the focus (`has_focus`).
+    #[must_use]
+    pub fn may_copy(&self, terminal: TerminalId, has_focus: bool) -> bool {
+        !self.settings.programs_copy_only_with_focus
+            || (self.window_visible && has_focus && self.active_terminal() == Some(terminal))
+    }
+
+    /// A program in the background tried to copy: the user hears of it, at most every
+    /// [`REFUSED_COPY_INTERVAL`] for each terminal, as a program can try it in a loop.
+    pub fn copy_refused(&mut self, terminal: TerminalId, now: Instant) -> Vec<Effect> {
+        if self
+            .copies_refused
+            .get(&terminal)
+            .is_some_and(|told| now.saturating_duration_since(*told) < REFUSED_COPY_INTERVAL)
+        {
+            return Vec::new();
+        }
+        self.copies_refused.insert(terminal, now);
+        vec![self.notify(
+            "copyRefused",
+            &|title| {
+                tr_arg(
+                    "@info",
+                    "A program in session \"%1\" tried to copy to the clipboard from the background. Only the terminal in front may, as set under Security.",
+                    title,
+                )
+            },
+            terminal,
+        )]
     }
 
     /// A terminal broke on a panic: it closes as if its shell had ended, and the user is told
@@ -1968,6 +2007,36 @@ mod tests {
         assert_eq!(
             fixed.stack().tab_title(fixed.stack().active_id().unwrap()),
             Some("Shell")
+        );
+    }
+
+    #[test]
+    fn with_the_setting_only_the_terminal_in_front_copies() {
+        let free = app_with(&[]);
+        let terminal = free.active_terminal().unwrap();
+        assert!(free.may_copy(terminal, false), "by default, any terminal at any time");
+        let mut app = app_with(&[("ProgramsCopyOnlyWithFocus", "true")]);
+        let first = app.active_terminal().unwrap();
+        assert!(!app.may_copy(first, true), "the window is hidden");
+        app.toggle_window(true);
+        assert!(app.may_copy(first, true));
+        assert!(!app.may_copy(first, false), "another program has the focus");
+        let session = app.stack().active_id().unwrap();
+        let _ = app.split(session, None, &Here);
+        let second = app.active_terminal().unwrap();
+        assert_ne!(first, second);
+        assert!(!app.may_copy(first, true), "a terminal beside the active one");
+        assert!(app.may_copy(second, true));
+        // The user hears of a refused copy, at most every 10 s for a terminal.
+        let start = Instant::now();
+        let told = notified(&app.copy_refused(first, start));
+        assert_eq!(told.len(), 1);
+        assert_eq!(told[0].0, "copyRefused");
+        assert!(app.copy_refused(first, start + Duration::from_secs(9)).is_empty());
+        assert_eq!(notified(&app.copy_refused(second, start)).len(), 1, "another terminal");
+        assert_eq!(
+            notified(&app.copy_refused(first, start + Duration::from_secs(10))).len(),
+            1
         );
     }
 

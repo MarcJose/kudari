@@ -1528,3 +1528,19 @@ msgstr "Free graphics memory when hidden for:"
 msgctxt "@item:inrange free graphics memory"
 msgid "Never"
 msgstr "Never"
+
+msgctxt "@title:group"
+msgid "Clipboard"
+msgstr "Clipboard"
+
+msgctxt "@option:check"
+msgid "Let only the terminal in front copy"
+msgstr "Let only the terminal in front copy"
+
+msgctxt "@info"
+msgid "Programs can copy to the clipboard with an escape sequence, as tmux, Neovim and programs over SSH do. With this on, only the active terminal of the window can, while the window has the focus; a copy from the background is dropped, and a notification says so."
+msgstr "Programs can copy to the clipboard with an escape sequence, as tmux, Neovim and programs over SSH do. With this on, only the active terminal of the window can, while the window has the focus; a copy from the background is dropped, and a notification says so."
+
+msgctxt "@info"
+msgid "A program in session \"%1\" tried to copy to the clipboard from the background. Only the terminal in front may, as set under Security."
+msgstr "A program in session \"%1\" tried to copy to the clipboard from the background. Only the terminal in front may, as set under Security."

@@ -59,6 +59,7 @@ impl Listener for Qt {
             }
             Report::Exited => controller.terminal_exited(terminal),
             Report::Failed => controller.terminal_failed(terminal),
+            Report::Copied(copied) => controller.terminal_copied(terminal, copied),
         });
     }
 

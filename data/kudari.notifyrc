@@ -49,6 +49,15 @@ Comment[de]=Ein Terminal wurde nach einem internen Fehler angehalten
 Comment[en_GB]=A terminal stopped after an internal error
 Action=Popup
 
+[Event/copyRefused]
+Name=Copy refused
+Name[de]=Kopieren abgelehnt
+Name[en_GB]=Copy refused
+Comment=A program in the background tried to copy to the clipboard
+Comment[de]=Ein Programm im Hintergrund wollte in die Zwischenablage kopieren
+Comment[en_GB]=A program in the background tried to copy to the clipboard
+Action=Popup
+
 [Event/processFinished]
 Name=Program finished
 Name[de]=Programm beendet

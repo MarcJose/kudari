@@ -1074,6 +1074,25 @@ run "clear; printf '\033]52;c;%s\a' \$(printf osc | base64)"
 run_open "clear; cat > $work/osc"
 hook Trigger edit_paste; settle; end_input
 check "programs can copy to the clipboard" "osc|" "$(content "$work/osc")"
+# With the setting on, only the terminal in front copies: a program in a tab behind copies a
+# moment after another tab came to the front, and the clipboard keeps what it had; the
+# program of the tab in front copies.
+hook SetSetting ProgramsCopyOnlyWithFocus true; settle
+copying=$(active)
+run_open "clear; sleep 2; printf '\033]52;c;%s\a' \$(printf behind | base64)"
+mark; hook Trigger new-session; wait_shells
+in_front=$(active)
+sleep 2.5
+run_open "clear; cat > $work/osc-behind"
+hook Trigger edit_paste; settle; end_input
+run "clear; printf '\033]52;c;%s\a' \$(printf front | base64)"
+run_open "clear; cat > $work/osc-front"
+hook Trigger edit_paste; settle; end_input
+sessions removeSession "$in_front" > /dev/null; settle
+sessions raiseSession "$copying" > /dev/null; settle
+hook SetSetting ProgramsCopyOnlyWithFocus false; settle
+check "with the setting, only the terminal in front copies" "osc| front|" \
+    "$(content "$work/osc-behind") $(content "$work/osc-front")"
 # A blocked keyboard: the wheel sends no arrow keys to a program on the alternate screen.
 before_wheel=$(active)
 mark; hook Trigger new-session; wait_shells

@@ -733,6 +733,20 @@ impl qobject::Controller {
         self.update(|app| app.terminal_failed(terminal));
     }
 
+    /// A program copied text with OSC 52: it goes to the clipboard, unless the settings let
+    /// only the terminal in front copy and this one is not.
+    pub fn terminal_copied(self: Pin<&mut Self>, terminal: TerminalId, copied: terminal::Copied) {
+        let target = copied.target;
+        let Some(text) = copied.take() else {
+            return;
+        };
+        if self.app.may_copy(terminal, qt::rk_application_has_focus()) {
+            frontend().copy(&text, target);
+        } else {
+            self.update(|app| app.copy_refused(terminal, Instant::now()));
+        }
+    }
+
     pub fn terminal_output(self: Pin<&mut Self>, terminal: TerminalId) {
         if let Some(backend) = terminal::backend(terminal) {
             *backend
