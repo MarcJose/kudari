@@ -330,6 +330,10 @@ pub struct Term<T> {
 
     /// Config directly for the terminal.
     config: Config,
+
+    /// Whether runs of printable ASCII go in one character at a time, as before
+    /// [`Handler::input_str`] wrote them at once; for tests that compare the two.
+    by_character: bool,
 }
 
 /// Configuration options for the [`Term`].
@@ -444,7 +448,15 @@ impl<T> Term<T> {
             selection: Default::default(),
             title: Default::default(),
             mode: Default::default(),
+            by_character: false,
         }
+    }
+
+    /// Takes runs of printable ASCII one character at a time, as [`Handler::input`] does,
+    /// rather than at once; for tests that compare the two ways.
+    #[doc(hidden)]
+    pub fn input_by_character(&mut self, by_character: bool) {
+        self.by_character = by_character;
     }
 
     /// Collect the information about the changes in the lines, which
@@ -1073,6 +1085,72 @@ impl<T> Dimensions for Term<T> {
 }
 
 impl<T: EventListener> Handler for Term<T> {
+    /// A run of printable ASCII, each character one cell wide: written a line at a time where
+    /// nothing but the characters themselves changes, character by character elsewhere. The
+    /// cursor and the wrapping end as after writing them one by one, and so does the damage,
+    /// which follows the cursor.
+    #[inline(never)]
+    fn input_str(&mut self, text: &str) {
+        let mut rest = text.as_bytes();
+        while !rest.is_empty() {
+            // Where the characters map to themselves, nothing shifts and lines wrap.
+            let plain = !self.by_character
+                && self.grid.cursor.charsets[self.active_charset] == StandardCharset::Ascii
+                && !self.mode.contains(TermMode::INSERT)
+                && self.mode.contains(TermMode::LINE_WRAP)
+                && rest.is_ascii();
+            if !plain {
+                for &byte in rest {
+                    self.input(char::from(byte));
+                }
+                return;
+            }
+
+            // As `input` starts.
+            if self.grid.cursor.input_needs_wrap {
+                self.wrapline();
+            }
+
+            let columns = self.columns();
+            let point = self.grid.cursor.point;
+            let start = point.column.0;
+            let count = rest.len().min(columns.saturating_sub(start));
+            let end = start + count;
+            // A wide character or its spacer there takes clearing around it, as
+            // `write_at_cursor` does: one character the usual way.
+            let wide = Flags::WIDE_CHAR | Flags::WIDE_CHAR_SPACER;
+            let touches_wide = count == 0
+                || self.grid[point.line][Column(start)..Column(end)].iter().any(|cell| cell.flags.intersects(wide));
+            if touches_wide {
+                if let Some((&byte, after)) = rest.split_first() {
+                    self.input(char::from(byte));
+                    rest = after;
+                }
+                continue;
+            }
+
+            let template = &self.grid.cursor.template;
+            let (fg, bg, flags, extra) = (template.fg, template.bg, template.flags, template.extra.clone());
+            let cells = &mut self.grid[point.line][Column(start)..Column(end)];
+            for (cell, &byte) in cells.iter_mut().zip(rest) {
+                cell.c = char::from(byte);
+                cell.fg = fg;
+                cell.bg = bg;
+                cell.flags = flags;
+                cell.extra = extra.clone();
+            }
+
+            // Where the last of them leaves the cursor, as `input` moves it for each.
+            if end < columns {
+                self.grid.cursor.point.column = Column(end);
+            } else {
+                self.grid.cursor.point.column = Column(columns - 1);
+                self.grid.cursor.input_needs_wrap = true;
+            }
+            rest = &rest[count..];
+        }
+    }
+
     /// The character before, `count` more times (REP), as far as that changes what the screen
     /// shows. Beyond a screen and a line, each line more holds the same characters again and
     /// only pushes another line of them into the history: the screen and the cursor end the

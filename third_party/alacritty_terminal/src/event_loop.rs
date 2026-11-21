@@ -122,8 +122,12 @@ where
         let mut unprocessed = 0;
         let mut processed = 0;
 
+        // The terminal through a handle of its own, so that its locks leave `self` free for
+        // the channel and the PTY meanwhile.
+        let shared = Arc::clone(&self.terminal);
+
         // Reserve the next terminal lock for PTY reading.
-        let mut terminal_lease = Some(self.terminal.lease());
+        let mut terminal_lease = Some(shared.lease());
         let mut terminal = None;
         let mut locked_since = Instant::now();
 
@@ -149,10 +153,10 @@ where
 
             // Attempt to lock the terminal.
             if terminal.is_none() {
-                terminal = Some(match self.terminal.try_lock_unfair() {
+                terminal = Some(match shared.try_lock_unfair() {
                     // Force block if we are at the buffer size limit, and where the PTY has
                     // nothing more to read: reading again at once would only spin.
-                    None if unprocessed >= READ_BUFFER_SIZE || nothing_new => self.terminal.lock_unfair(),
+                    None if unprocessed >= READ_BUFFER_SIZE || nothing_new => shared.lock_unfair(),
                     None => continue,
                     Some(terminal) => terminal,
                 });
@@ -183,8 +187,18 @@ where
                         MutexGuard::unlock_fair(lease);
                     }
                     self.event_proxy.send_event(Event::Wakeup);
-                    terminal_lease = Some(self.terminal.lease());
-                    terminal = Some(self.terminal.lock_unfair());
+                    // What came meanwhile goes now, not after all output is parsed: what the
+                    // user typed, as Ctrl+C, which stops a program that floods it, and a new
+                    // size. Shutting down needs nothing more parsed.
+                    if !self.drain_recv_channel(state) {
+                        state.shut_down = true;
+                        return Ok(());
+                    }
+                    if state.needs_write() {
+                        self.pty_write(state)?;
+                    }
+                    terminal_lease = Some(shared.lease());
+                    terminal = Some(shared.lock_unfair());
                     locked_since = Instant::now();
                 }
             }
@@ -329,6 +343,10 @@ where
                                     error!("Error reading from PTY in event loop: {err}");
                                     break 'event_loop;
                                 }
+                                // A shutdown that came while the output was parsed.
+                                if state.shut_down {
+                                    break 'event_loop;
+                                }
                             }
 
                             if event.writable {
@@ -438,6 +456,8 @@ pub struct State {
     write_list: VecDeque<Cow<'static, [u8]>>,
     writing: Option<Writing>,
     parser: ansi::Processor,
+    /// A shutdown came while output was parsed.
+    shut_down: bool,
 }
 
 impl State {
