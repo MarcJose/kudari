@@ -914,9 +914,10 @@ impl Backend {
         crate::view::text_between(&term, start, end)
     }
 
-    /// The last `lines` lines of scrollback and screen, or the screen when `lines` is zero.
-    pub fn recent_text(&self, lines: usize) -> String {
-        last_lines(&self.lock(), lines)
+    /// The last `lines` lines of scrollback and screen, or the screen when `lines` is zero, in
+    /// about `most` bytes; see [`last_lines`].
+    pub fn recent_text(&self, lines: usize, most: usize) -> (String, usize) {
+        last_lines(&self.lock(), lines, most)
     }
 
     /// Columns and lines of the screen.
@@ -999,8 +1000,8 @@ impl crate::agent::Terminal for Backend {
         Backend::app_cursor(self)
     }
 
-    fn recent_text(&self, lines: usize) -> String {
-        Backend::recent_text(self, lines)
+    fn recent_text(&self, lines: usize, most: usize) -> (String, usize) {
+        Backend::recent_text(self, lines, most)
     }
 
     fn write_user_input(&self, bytes: Vec<u8>) {
@@ -1009,8 +1010,10 @@ impl crate::agent::Terminal for Backend {
 }
 
 /// The text of the last `lines` lines that have any, up to the end of the screen; all of the
-/// screen when `lines` is zero. The empty lines below the text do not count.
-fn last_lines<T: EventListener>(term: &Term<T>, lines: usize) -> String {
+/// screen when `lines` is zero. The empty lines below the text do not count. The text has
+/// about `most` bytes at most, and the number after it tells how many of the lines asked for
+/// it left out for that.
+fn last_lines<T: EventListener>(term: &Term<T>, lines: usize, most: usize) -> (String, usize) {
     let grid = term.grid();
     let screen = term.screen_lines();
     // The screen comes along, since the text can end anywhere on it.
@@ -1023,7 +1026,29 @@ fn last_lines<T: EventListener>(term: &Term<T>, lines: usize) -> String {
     // Line numbers run from minus the scrollback up to the last line of the screen.
     let count = i32::try_from(span).unwrap_or(i32::MAX).saturating_sub(1);
     let top = Line(bottom.0.saturating_sub(count)).max(grid.topmost_line());
-    let text = crate::view::text_between(term, Point::new(top, Column(0)), Point::new(bottom, grid.last_column()));
+    // From the bottom up, as far as `most` bytes reach: lines can be long, a terminal wide, and
+    // the text of all of them only to be cut afterwards took long under the lock. The last
+    // line comes along whatever its length.
+    let length = |line: Line| {
+        crate::view::text_between(term, Point::new(line, Column(0)), Point::new(line, grid.last_column()))
+            .trim_end()
+            .len()
+    };
+    let mut first = bottom;
+    let mut size = length(bottom);
+    while first > top {
+        let above = Line(first.0 - 1);
+        size += length(above) + 1;
+        if size > most {
+            break;
+        }
+        first = above;
+    }
+    let text = crate::view::text_between(
+        term,
+        Point::new(first, Column(0)),
+        Point::new(bottom, grid.last_column()),
+    );
     let mut found: Vec<&str> = text.lines().map(str::trim_end).collect();
     let used = found
         .iter()
@@ -1031,7 +1056,12 @@ fn last_lines<T: EventListener>(term: &Term<T>, lines: usize) -> String {
         .map_or(0, |last| last + 1);
     found.truncate(used);
     let wanted = if lines == 0 { screen } else { lines };
-    found.split_off(found.len().saturating_sub(wanted)).join("\n")
+    let left_out = if first > top {
+        wanted.saturating_sub(found.len())
+    } else {
+        0
+    };
+    (found.split_off(found.len().saturating_sub(wanted)).join("\n"), left_out)
 }
 
 /// Types paths into a terminal, quoted for its shell, or a command that changes into a
@@ -1376,14 +1406,39 @@ mod tests {
     #[test]
     fn recent_text_ends_with_the_screen() {
         let term = term_with("one\ntwo\nthree\nfour\nfive\n$ ", 20, 3, 100);
-        assert_eq!(last_lines(&term, 0), "four\nfive\n$");
-        assert_eq!(last_lines(&term, 2), "five\n$");
-        assert_eq!(last_lines(&term, 5), "two\nthree\nfour\nfive\n$");
-        assert_eq!(last_lines(&term, 100), "one\ntwo\nthree\nfour\nfive\n$");
+        let text = |lines| last_lines(&term, lines, usize::MAX).0;
+        assert_eq!(text(0), "four\nfive\n$");
+        assert_eq!(text(2), "five\n$");
+        assert_eq!(text(5), "two\nthree\nfour\nfive\n$");
+        assert_eq!(text(100), "one\ntwo\nthree\nfour\nfive\n$");
         // The lines below the prompt are left out, and do not count.
-        assert_eq!(last_lines(&term_with("$ ls", 20, 5, 0), 0), "$ ls");
-        assert_eq!(last_lines(&term_with("a\nb\n$ ls", 20, 5, 0), 2), "b\n$ ls");
-        assert_eq!(last_lines(&term_with("", 20, 5, 0), 0), "");
+        let all = |output, lines| last_lines(&term_with(output, 20, 5, 0), lines, usize::MAX);
+        assert_eq!(all("$ ls", 0), ("$ ls".to_string(), 0));
+        assert_eq!(all("a\nb\n$ ls", 2), ("b\n$ ls".to_string(), 0));
+        assert_eq!(all("", 0), (String::new(), 0));
+    }
+
+    #[test]
+    fn recent_text_reads_from_the_bottom_as_far_as_its_bytes_reach() {
+        use std::fmt::Write as _;
+
+        let output: String = (0..1000).fold(String::new(), |mut output, line| {
+            let _ = writeln!(output, "line {line:04}");
+            output
+        });
+        let term = term_with(&format!("{output}$ "), 20, 5, 2000);
+        // All of it, with room.
+        let (text, left_out) = last_lines(&term, 1000, usize::MAX);
+        assert_eq!((text.lines().count(), left_out), (1000, 0));
+        // 100 bytes: the newest lines that fit, each of 9 bytes and a line break, and the
+        // number of those asked for that are left out.
+        let (text, left_out) = last_lines(&term, 1000, 100);
+        assert!(text.ends_with("line 0999\n$"), "{text}");
+        assert!(text.len() <= 100, "{} bytes", text.len());
+        assert_eq!(left_out, 1000 - text.lines().count());
+        // The last line comes along whatever its length.
+        let (text, _) = last_lines(&term, 10, 0);
+        assert_eq!(text, "$");
     }
 
     #[test]
