@@ -154,6 +154,15 @@ pub fn options() -> Option<Options> {
         .clone()
 }
 
+/// The title format while `ssh` runs, without a copy of all the options for it.
+fn remote_title_format() -> String {
+    OPTIONS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .map_or_else(String::new, |options| options.remote_title_format.clone())
+}
+
 fn config() -> Config {
     let mut config = Config::default();
     if let Some(options) = options() {
@@ -806,7 +815,12 @@ impl Backend {
     /// The directory of the program in the foreground, or else the one the shell reported,
     /// if it is a directory still.
     pub fn working_directory(&self) -> Option<PathBuf> {
-        self.programs.working_directory().or_else(|| {
+        self.directory_of(&*self.programs)
+    }
+
+    /// The working directory of `programs`, or else the one the shell marked.
+    fn directory_of(&self, programs: &dyn Programs) -> Option<PathBuf> {
+        programs.working_directory().or_else(|| {
             let marks = self.marks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             marks.directory.clone().filter(|directory| directory.is_dir())
         })
@@ -839,19 +853,35 @@ impl Backend {
     /// The title of the terminal in `session`: the remote format while `ssh` runs, else
     /// `format`.
     pub fn title(&self, format: &str, session: SessionId) -> String {
-        let remote = options().map_or_default(|options| options.remote_title_format);
+        self.title_of(&*self.programs.now(), format, session)
+    }
+
+    fn title_of(&self, programs: &dyn Programs, format: &str, session: SessionId) -> String {
         title::title(
-            &*self.programs,
-            self.working_directory(),
+            programs,
+            &|| self.directory_of(programs),
             &title::with_session(format, session),
-            &title::with_session(&remote, session),
+            &title::with_session(&remote_title_format(), session),
             &self.program_title(),
         )
     }
 
-    /// The text of a format string; see [`title::format_title`].
+    /// The title of [`Backend::title`] and whether a program runs, as [`Backend::is_busy_recent`]
+    /// tells it, from one look at the programs.
+    pub fn status(&self, format: &str, session: SessionId) -> (String, bool) {
+        let programs = self.programs.now();
+        (self.title_of(&*programs, format, session), programs.is_busy_recent())
+    }
+
+    /// The text of a format string; see [`title::local_title`].
     pub fn local_title(&self, format: &str) -> String {
-        title::local_title(&*self.programs, self.working_directory(), format, &self.program_title())
+        let programs = self.programs.now();
+        title::local_title(
+            &*programs,
+            &|| self.directory_of(&*programs),
+            format,
+            &self.program_title(),
+        )
     }
 
     /// The text of the badge for `format`, as [`Backend::refresh_badge`] last made it; made
