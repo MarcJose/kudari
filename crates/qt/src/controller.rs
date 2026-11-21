@@ -520,9 +520,10 @@ const AUTO_SAVE: i32 = 1;
 impl qobject::Controller {
     /// Carries out what the app asks for, in order.
     fn apply(mut self: Pin<&mut Self>, effects: Vec<Effect>) {
+        crate::reentry::reentry!("Controller::apply");
         for effect in effects {
             match effect {
-                Effect::Publish => self.as_mut().sync(),
+                Effect::Publish => self.as_mut().sync_now(),
                 Effect::PublishSettings => self.as_mut().publish_settings(),
                 Effect::UpdateActions => self.as_mut().update_session_actions(),
                 Effect::Stop(terminal) => terminal::stop(terminal),
@@ -621,7 +622,13 @@ impl qobject::Controller {
     }
 
     /// Starts shells for new terminals and publishes the model to QML.
-    fn sync(mut self: Pin<&mut Self>) {
+    fn sync(self: Pin<&mut Self>) {
+        crate::reentry::reentry!("Controller::sync");
+        self.sync_now();
+    }
+
+    /// [`Self::sync`] where another guarded method calls it itself.
+    fn sync_now(mut self: Pin<&mut Self>) {
         let (cell_width, cell_height) = self.app.cell();
         let mut started = Vec::new();
         for start in self.app.pending_starts() {

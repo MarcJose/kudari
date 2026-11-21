@@ -371,6 +371,18 @@ hook SetSetting EditorCommand "$work/editor PATH:LINE"; hook SetSetting OpenLink
 run "clear; printf 'see notes.txt:12:3 end\n'"
 input click 130 8
 check "a plain click opens a file link in the editor" "$work/home/notes.txt:12|" "$(content "$work/edited")"
+# A look at a slow or hanging drive holds up neither the window nor the terminal: the click
+# opens nothing, and a command goes through at once.
+rm -f "$work/edited"
+hook SlowFileLooks 3000
+input click 130 8
+started=$(date +%s%N)
+run "echo still-here"
+taken=$((($(date +%s%N) - started) / 1000000))
+sleep 3
+hook SlowFileLooks 0; settle
+check "a slow look at a file holds up neither the window nor the terminal" "yes nothing opened" \
+    "$([ "$taken" -lt 1500 ] && echo yes || echo "no: $taken ms") $([ -e "$work/edited" ] && echo opened || echo nothing opened)"
 # The link numbers find the file on a thread of their own, and a number opens it.
 rm -f "$work/edited"
 hook SetSetting UrlHintsModifier ctrl+alt; settle
@@ -1598,6 +1610,15 @@ check "the shortcut shows the window again after a screen went away" "visible=1 
 hook Trigger file_quit
 wait_quit "$kudari"
 check "quitting after a screen went away ends the program" no "$(kill -0 "$kudari" 2>/dev/null && echo yes || echo no)"
+
+# Calls back into the controller or a terminal item while one of their methods still runs:
+# each pair is in reentry.txt, and one more fails, so that a change in the order of the work
+# cannot add one unnoticed. A pair no longer seen is told, to take it out there.
+sed -n 's/^kudari: reentrant //p' "$work/log" "$work"/*.log 2>/dev/null | LC_ALL=C sort -u > "$work/reentries"
+grep -v -e '^#' -e '^$' "$here/reentry.txt" | LC_ALL=C sort -u > "$work/reentries-known"
+check "Qt calls back into Kudari only where it is known to" "" \
+    "$(LC_ALL=C comm -23 "$work/reentries" "$work/reentries-known" | paste -sd ';' -)"
+LC_ALL=C comm -13 "$work/reentries" "$work/reentries-known" | sed 's/^/Reentry no longer seen: /'
 
 echo "$checks checks, $failures failed"
 if [ "$failures" != 0 ]; then

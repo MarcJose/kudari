@@ -36,6 +36,7 @@ use crate::sessions::TerminalId;
 use crate::stats;
 use crate::terminal;
 use crate::view::{self, Context, Effect, View};
+use kudari_core::file_looks;
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -647,7 +648,13 @@ impl qobject::TerminalItem {
         self.refresh();
     }
 
-    fn refresh(mut self: Pin<&mut Self>) {
+    fn refresh(self: Pin<&mut Self>) {
+        crate::reentry::reentry!("TerminalItem::refresh");
+        self.refresh_now();
+    }
+
+    /// [`Self::refresh`] where another guarded method calls it itself.
+    fn refresh_now(mut self: Pin<&mut Self>) {
         stats::count(stats::Count::Refreshes);
         terminal::frame_asked(*self.terminal_id());
         self.as_mut().refresh_properties();
@@ -733,6 +740,7 @@ impl qobject::TerminalItem {
             tracks_mouse: backend.tracks_mouse() && *self.keyboard_enabled(),
             directory: &directory,
         };
+        crate::reentry::reentry!("TerminalItem::handle");
         let effects = {
             let mut term = backend.lock();
             action(&mut self.as_mut().rust_mut().view, &mut term, &context)
@@ -754,13 +762,18 @@ impl qobject::TerminalItem {
                     }
                 }
                 Effect::OpenLink(link) => terminal::open_link(&link),
+                Effect::OpenLook(look) => {
+                    if let Some(link) = self.as_ref().look(look) {
+                        terminal::open_link(&link.target);
+                    }
+                }
                 Effect::Copy(text) => frontend().copy(&text, Selection::Clipboard),
                 Effect::CopyPrimary(text) => frontend().copy(&text, Selection::Primary),
                 Effect::Paste { selection } => self.as_mut().paste(selection),
                 Effect::Scroll(lines) => self.as_mut().scroll_lines(lines),
                 Effect::SelectionMode(active) => self.as_mut().set_selection_mode(active),
                 Effect::Hints(shown) => self.as_mut().set_url_hints(shown),
-                Effect::Refresh => self.as_mut().refresh(),
+                Effect::Refresh => self.as_mut().refresh_now(),
                 Effect::Repaint => self.as_mut().update(),
             }
         }
@@ -804,6 +817,7 @@ impl qobject::TerminalItem {
     }
 
     fn input_method_query(&self, query: qobject::InputMethodQuery) -> QVariant {
+        crate::reentry::reentry!("TerminalItem::input_method_query");
         match query {
             qobject::InputMethodQuery::ImEnabled => QVariant::from(&true),
             qobject::InputMethodQuery::ImCursorRectangle => QVariant::from(&QRectF::new(
@@ -950,7 +964,7 @@ impl qobject::TerminalItem {
             let serial = self.scroll_mark_serial().wrapping_add(1);
             self.as_mut().set_scroll_mark_serial(serial);
         }
-        self.as_mut().refresh();
+        self.as_mut().refresh_now();
     }
 
     fn scroll_to_position(mut self: Pin<&mut Self>, position: f64) {
@@ -1119,18 +1133,32 @@ impl qobject::TerminalItem {
     }
 
     /// The link under a point of the item.
+    /// The link at `x`, `y`. Only finding it locks the terminal; the look for a file comes
+    /// after, see [`Self::look`].
     fn link(&self, x: f64, y: f64, files: bool) -> Option<view::Link> {
         let backend = self.backend()?;
         let options = terminal::options().unwrap_or_default();
-        let directory = || backend.working_directory();
-        let context = Context {
-            options: &options,
-            tracks_mouse: backend.tracks_mouse(),
-            directory: &directory,
+        let found = {
+            let term = backend.lock();
+            let (point, _) = self.cells().at(&term, x, y);
+            view::find_link(&term, point, files, &options)
         };
-        let term = backend.lock();
-        let (point, _) = self.cells().at(&term, x, y);
-        view::link_at(&term, point, files, &context)
+        match found? {
+            view::Found::Link(link) => Some(link),
+            view::Found::Look(look) => self.look(look),
+        }
+    }
+
+    /// Looks for the file of a link on the thread for looks at the file system, for at most
+    /// [`file_looks::TIME`]: a slow or hanging drive leaves the link out instead of holding up
+    /// the window. The working directory is asked there as well, as it takes system calls.
+    fn look(&self, look: view::Look) -> Option<view::Link> {
+        let backend = self.backend()?;
+        let schemes = terminal::options().unwrap_or_default().link_schemes;
+        file_looks::within(file_looks::TIME, move || {
+            look.resolve(&|| backend.working_directory(), &schemes)
+        })
+        .flatten()
     }
 
     fn color_at(&self, x: f64, y: f64) -> QString {

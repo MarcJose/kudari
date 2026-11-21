@@ -12,6 +12,7 @@ pub mod agent;
 pub mod app;
 pub mod colors;
 pub mod command;
+pub mod file_looks;
 #[cfg(any(test, feature = "fuzz"))]
 pub mod fuzz;
 pub mod gettext;
@@ -26,6 +27,7 @@ pub mod marks;
 pub mod mcp;
 pub mod memory;
 pub mod menus;
+pub mod mounts;
 pub mod options;
 pub mod pipe;
 pub mod process;
