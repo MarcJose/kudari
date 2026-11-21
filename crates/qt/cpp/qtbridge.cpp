@@ -1117,6 +1117,11 @@ static void showChunks(RkGeometryNode *node, const std::vector<RkChunk *> &chunk
             }
         }
         chunk->atlasSize = size;
+        // An empty piece may have no memory at all, and `memcpy` takes no null pointer, also
+        // not for nothing to copy.
+        if (chunk->used == 0) {
+            continue;
+        }
         std::memcpy(static_cast<void *>(vertex), chunk->vertices.data(), chunk->used * sizeof(RkVertex));
         vertex += chunk->used;
     }

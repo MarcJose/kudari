@@ -84,6 +84,7 @@ git config core.hooksPath .githooks
 tests/check.sh                                   # translations, formatting, lints, prose, unit tests
 cargo build --features test-hooks && tests/gui/run.sh
 tools/coverage.sh --html                         # coverage of unit and GUI test together
+tools/sanitize.sh                                # the GUI test with the C++ under ASan and UBSan
 cargo clippy -p kudari-core --all-targets --target x86_64-pc-windows-gnu  # the core on Windows
 cargo build -p kudari-windows && tests/windows/run.sh  # the Windows front end, on Linux
 tools/windows-package.ps1 -Out dist && tests/windows/package.ps1 dist  # the packages, on Windows
@@ -244,6 +245,14 @@ feature adds the D-Bus object it needs and must stay off in normal builds.
 and the GUI test run, taken together. It does not measure the C++ bridge and QML. The CI
 shows the table in the summary of the run, attaches the HTML report, and fails if the
 coverage drops below 90 %.
+
+`tools/sanitize.sh` builds Kudari with AddressSanitizer and UndefinedBehaviorSanitizer for
+its C++, the bridges to Qt and KDE and the code that cxx-qt makes, and runs the GUI test
+with it. An access outside of memory, a use after free or undefined behaviour ends Kudari
+with a report of where it happened, which fails the test; the report is in the log of the
+instance that ended. Run it before you change the C++ of drawing (images, textures, the
+pieces for the graphics card) and before a release. The Rust code is not instrumented, the
+build has a directory of its own and is never one to hand out.
 
 `tools/security.sh` runs the checks of the security workflow: `gitleaks` and `trufflehog`
 look for secrets in the whole history, `cargo-deny` and `osv-scanner` for vulnerable or
