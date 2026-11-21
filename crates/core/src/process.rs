@@ -196,6 +196,8 @@ pub fn write_private(path: &Path, content: &[u8]) -> std::io::Result<()> {
         // On the disk before it takes the place of the old file, or a crash just after can
         // leave an empty file where the old one was.
         file.sync_all()?;
+        // Closed before it takes the place of the old file: Windows replaces no open file.
+        drop(file);
         replace(&partial, &target)
     })();
     if written.is_err() {
