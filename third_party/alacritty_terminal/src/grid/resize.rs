@@ -351,6 +351,7 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
                     // Make sure new row is at least as long as new width.
                     let occ = wrapped.len();
                     if occ < columns {
+                        wrapped.reserve_exact(columns - occ);
                         wrapped.resize_with(columns, T::default);
                     }
                     row = Row::from_vec(wrapped, occ);

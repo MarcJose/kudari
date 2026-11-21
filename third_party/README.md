@@ -38,6 +38,7 @@ for each, which runs against these copies.
 | `alacritty_terminal` | A copy to the end of a line takes the wide character that wrapped from the line after, not the first cell of the line before. | `copying_to_the_end_of_a_line_takes_the_wide_character_that_wrapped` |
 | `alacritty_terminal` | A narrower grid keeps as many lines of output as before, counting a line that wraps into more rows once, so that a wider one gets the history back. | `a_narrower_and_wider_grid_keeps_a_full_history` |
 | `alacritty_terminal` | Waits for the terminal where the PTY has nothing new to read, instead of reading again at once while others hold it. | `the_thread_of_the_pty_waits_for_the_terminal_without_spinning` |
+| `alacritty_terminal` | A wider grid gives each row room for its new columns only, where `resize_with` doubled it for every row of the history and the rows kept it; a narrower one cuts off empty cells without a new row for them, and gives back room beyond a quarter more than the new width. | `three_columns_more_take_little_more_memory`, `a_terminal_as_narrow_as_before_gives_the_memory_back` in `crates/core/tests/reflow_memory.rs` |
 
 Once releases of both carry a fix, delete it here; once they carry all of them, delete both
 directories and their lines in `[patch.crates-io]`, update the versions in `Cargo.toml`, and
