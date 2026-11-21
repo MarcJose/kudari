@@ -1502,6 +1502,14 @@ hook SetSetting BadgeEnabled false; settle
 # that the fonts of a computer lack: no frame is painted instead.
 check "on the graphics card, the fills, glyphs and texts of a frame go there and not with the setting cpu" "0 0 0 0 yes" \
     "$on_cpu $(gpu_drawn | awk '{ print ($1 > 0 && $2 > 0 && $3 > 0 && $4 == 0) ? "yes" : "no: " $0 }')"
+# A typed key builds only the lines that changed there, into their pieces of the frame; the
+# frames of lines in the checks above show what the frame painted whole shows.
+run "clear"
+hook ResetStats
+input key 30; settle
+gpu_lines=$(hook Stats | python3 -c 'import json, sys; s = json.load(sys.stdin); print(s["line_paints"], s["gpu_fallbacks"])')
+input key 14; settle
+check "on the graphics card, a typed key builds only the lines that changed" "1 0" "$gpu_lines"
 # Translucent, the window shows through the terminal what lies behind it: on the graphics card
 # what it shows with the frame painted, but for a step of a color value.
 hook SetSetting Translucency true; hook SetSetting BackgroundColorOpacity 60

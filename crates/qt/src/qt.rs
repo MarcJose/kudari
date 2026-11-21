@@ -88,6 +88,14 @@ pub mod ffi {
         /// `0xAARRGGBB`, as the colors of the others; false otherwise, and the painter has to
         /// fill it.
         fn rk_collect_fill(rect: &QRectF, argb: u32) -> bool;
+        /// Whether a frame for the graphics card is collected now.
+        fn rk_collecting() -> bool;
+        /// The frame collected now is a whole one: it builds the pieces of every line.
+        fn rk_collect_whole();
+        /// What is collected from now on goes to the piece `part` of the line `line`: what
+        /// lies under its glyphs (0), its glyphs (1) or what lies over them (2); nowhere for a
+        /// line below 0.
+        fn rk_collect_line(line: i32, part: u8);
         /// Takes a text for the graphics card while a frame is drawn there, as `rk_draw_text`
         /// draws it; false otherwise. `key` tells the font apart from the others of the item.
         fn rk_collect_text(key: u64, font: &QFont, text: &QString, position: &QPointF, argb: u32) -> bool;

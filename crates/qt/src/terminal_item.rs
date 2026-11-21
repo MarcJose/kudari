@@ -1264,7 +1264,6 @@ impl qobject::TerminalItem {
             if changed.is_empty() {
                 return NOTHING;
             }
-            let bands = bands_of(&changed, term.screen_lines() as i32);
             let (origin_x, origin_y) = self.as_ref().text_origin(term.columns(), term.screen_lines());
             let scene = render::Scene {
                 geometry: render::Geometry {
@@ -1284,8 +1283,30 @@ impl qobject::TerminalItem {
                 hints: self.view.hints(),
                 matches: self.view.matches(),
             };
-            let mut built = Vec::new();
             let screen = term.screen_lines() as i32;
+            if kde::rk_collecting() {
+                // On the graphics card, the pieces of the lines that changed, and only those:
+                // the other lines keep theirs, and nothing there is cleared that a neighbour
+                // would have to draw again.
+                let mut lines: Vec<i32> = changed.into_iter().filter(|line| (0..screen).contains(line)).collect();
+                lines.sort_unstable();
+                lines.dedup();
+                let (mut paints, mut parts) = (Vec::new(), Vec::new());
+                lines_apart(&term, &options, &scene, lines, &mut paints, &mut parts);
+                drop(term);
+                clock.lap(stats::Time::FrameBuild);
+                stats::paint(*self.terminal_id());
+                stats::count(stats::Count::LinePaints);
+                let dpi = kde::rk_painter_dpi(&painter);
+                Glyphs::with(dpi, self.term_font(), &options, |glyphs| {
+                    draw_lines(painter.as_mut(), glyphs, &paints, &parts);
+                });
+                clock.stop(stats::Time::FrameDraw);
+                stats::key(*self.terminal_id(), stats::Step::Painted);
+                return PAINTED;
+            }
+            let bands = bands_of(&changed, screen);
+            let mut built = Vec::new();
             for band in &bands {
                 // With the lines just outside it as well: their glyphs can reach into the band,
                 // which is cleared first, and the clip keeps the rest of them out.
@@ -1532,6 +1553,11 @@ impl qobject::TerminalItem {
         mut clock: stats::Stopwatch,
     ) {
         let scheme = colors::active();
+        // On the graphics card, a whole frame builds the pieces of every line.
+        let apart = kde::rk_collecting();
+        if apart {
+            kde::rk_collect_whole();
+        }
         // A translucent background comes from the pane behind this item.
         if *self.opaque() {
             let size = self.size();
@@ -1544,6 +1570,7 @@ impl qobject::TerminalItem {
         }
         let options = options.clone();
         let mut paints = PAINTS.take();
+        let mut line_parts = Vec::new();
         let fresh_words = {
             let term: &Term<terminal::Proxy> = &term;
             // Only the words under the lock; whether they name files is looked up later.
@@ -1591,7 +1618,18 @@ impl qobject::TerminalItem {
                 hints: self.view.hints(),
                 matches: self.view.matches(),
             };
-            render::frame_into(term, &options, &scene, &mut paints);
+            if apart {
+                lines_apart(
+                    term,
+                    &options,
+                    &scene,
+                    0..term.screen_lines() as i32,
+                    &mut paints,
+                    &mut line_parts,
+                );
+            } else {
+                render::frame_into(term, &options, &scene, &mut paints);
+            }
             #[cfg(feature = "test-hooks")]
             note_matches(*self.terminal_id(), term, self.view.matches());
             fresh_words
@@ -1620,7 +1658,13 @@ impl qobject::TerminalItem {
                 *self.cell_height() as i32,
             );
         }
-        Glyphs::with(dpi, &base, &options, |glyphs| draw(painter.as_mut(), glyphs, &paints));
+        Glyphs::with(dpi, &base, &options, |glyphs| {
+            if apart {
+                draw_lines(painter.as_mut(), glyphs, &paints, &line_parts);
+            } else {
+                draw(painter.as_mut(), glyphs, &paints);
+            }
+        });
         clock.stop(stats::Time::FrameDraw);
         stats::key(*self.terminal_id(), stats::Step::Painted);
         paints.clear();
@@ -2116,6 +2160,60 @@ fn fill(mut painter: Pin<&mut qobject::QPainter>, rect: &QRectF, color: Rgb, alp
 /// A color as `0xAARRGGBB`, as the graphics card takes it.
 fn argb(color: Rgb, alpha: u8) -> u32 {
     u32::from_be_bytes([alpha, color.r, color.g, color.b])
+}
+
+/// Where the paints of a line of the screen lie among those of a frame on the graphics card,
+/// and its parts: what lies under its glyphs, its glyphs, and what lies over them.
+struct LinePaints {
+    line: i32,
+    start: usize,
+    glyphs: usize,
+    over: usize,
+    end: usize,
+}
+
+/// The paints of each of `lines`, each line on its own and one after the other in `out`, for a
+/// frame on the graphics card that keeps the pieces of each line.
+fn lines_apart(
+    term: &Term<terminal::Proxy>,
+    options: &terminal::Options,
+    scene: &render::Scene,
+    lines: impl IntoIterator<Item = i32>,
+    out: &mut Vec<Paint>,
+    parts: &mut Vec<LinePaints>,
+) {
+    out.clear();
+    parts.clear();
+    let mut line_paints = Vec::new();
+    for line in lines {
+        let found = render::lines_into(term, options, scene, Some(line..line + 1), &mut line_paints);
+        let start = out.len();
+        out.append(&mut line_paints);
+        parts.push(LinePaints {
+            line,
+            start,
+            glyphs: start + found.glyphs,
+            over: start + found.over,
+            end: out.len(),
+        });
+    }
+}
+
+/// Draws the paints of each line into its pieces of the frame on the graphics card.
+fn draw_lines(mut painter: Pin<&mut qobject::QPainter>, glyphs: &mut Glyphs, paints: &[Paint], parts: &[LinePaints]) {
+    for part in parts {
+        for (piece, range) in [
+            (0, part.start..part.glyphs),
+            (1, part.glyphs..part.over),
+            (2, part.over..part.end),
+        ] {
+            kde::rk_collect_line(part.line, piece);
+            if let Some(paints) = paints.get(range) {
+                draw(painter.as_mut(), glyphs, paints);
+            }
+        }
+    }
+    kde::rk_collect_line(-1, 0);
 }
 
 /// Draws the paints of a frame or of the cursor with the fonts of the terminal.

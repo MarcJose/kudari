@@ -52,6 +52,13 @@ void rk_font_rendering(QFont &font, bool antiAlias, bool hinting);
 /// Takes a fill while a frame is drawn on the graphics card, in a color as `0xAARRGGBB`, as the
 /// colors of the others; false otherwise, and the painter has to fill it.
 bool rk_collect_fill(const QRectF &rect, std::uint32_t argb);
+/// Whether a frame for the graphics card is collected now.
+bool rk_collecting();
+/// The frame collected now is a whole one: it builds the pieces of every line.
+void rk_collect_whole();
+/// What is collected from now on goes to the piece `part` of the line `line`: what lies under
+/// its glyphs (0), its glyphs (1) or what lies over them (2); nowhere for a line below 0.
+void rk_collect_line(std::int32_t line, std::uint8_t part);
 /// Takes glyphs while a frame is drawn on the graphics card, as `rk_draw_glyphs` draws them;
 /// false otherwise, and the painter has to draw them. `key` tells the font apart from the
 /// other fonts the item draws with.

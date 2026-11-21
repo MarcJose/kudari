@@ -457,17 +457,26 @@ pub fn frame_into<T: EventListener>(term: &Term<T>, options: &Options, scene: &S
     lines_into(term, options, scene, None, out);
 }
 
+/// Where the parts of the paints of [`lines_into`] begin: the glyphs after the backgrounds and
+/// the lines of the cells, then what lies over them, as the cursor, the numbers of links, the
+/// line at a column and the line numbers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Parts {
+    pub glyphs: usize,
+    pub over: usize,
+}
+
 /// The paints of only the lines of the screen in `lines`, as [`frame_into`] gives them, for a
 /// frame that paints the lines that changed into the image it had; all lines without them.
-/// A paint that reaches past them, as a glyph or the line at a column does, may: the frame
-/// paints them under a clip.
+/// A paint that reaches past them, as a glyph does, may: the frame paints them under a clip.
+/// Gives where its parts begin, for a frame that keeps the paints of each line apart.
 pub fn lines_into<T: EventListener>(
     term: &Term<T>,
     options: &Options,
     scene: &Scene,
     lines: Option<std::ops::Range<i32>>,
     out: &mut Vec<Paint>,
-) {
+) -> Parts {
     out.clear();
     let scheme = scene.scheme;
     let geometry = &scene.geometry;
@@ -629,7 +638,9 @@ pub fn lines_into<T: EventListener>(
     }
     backgrounds.append(&mut paints);
     let paints = backgrounds;
+    let glyphs_at = paints.len();
     paints.append(&mut glyphs);
+    let over_at = paints.len();
 
     // While the view is scrolled back, the cursor can be below the last line: it is not on
     // screen then, and the space below the grid shows nothing of it.
@@ -695,12 +706,13 @@ pub fn lines_into<T: EventListener>(
         });
     }
 
-    if options.vertical_line > 0 {
+    // Over the lines asked for, so that the paints of each line can stand on their own.
+    if options.vertical_line > 0 && !shown.is_empty() {
         let rect = Rect {
             x: geometry.origin_x + f64::from(options.vertical_line) * geometry.cell_width,
-            y: geometry.origin_y,
+            y: geometry.origin_y + f64::from(shown.start) * geometry.cell_height,
             width: 1.0,
-            height: f64::from(grid_lines) * geometry.cell_height,
+            height: f64::from(shown.end - shown.start) * geometry.cell_height,
         };
         fill(rect, blend(scheme.foreground, scheme.background, 96), paints);
     }
@@ -719,6 +731,10 @@ pub fn lines_into<T: EventListener>(
                 font: FontStyle::default(),
             });
         }
+    }
+    Parts {
+        glyphs: glyphs_at,
+        over: over_at,
     }
 }
 
@@ -1523,5 +1539,69 @@ mod tests {
             .filter(|text| text.len() == 1)
             .collect();
         assert!(numbers.contains(&"2") && numbers.contains(&"3"), "{numbers:?}");
+    }
+
+    /// The paints of each line on their own, part by part, are those of the whole frame: the
+    /// glyphs in the same order, the backgrounds and what lies over them the same, the line at
+    /// a column in a piece for each line.
+    #[test]
+    fn the_paints_of_each_line_make_up_the_frame() {
+        let scheme = colors::active();
+        let term = term_with("\x1b[41mred\x1b[0m \x1b[4munder\x1b[0m\r\nb\x1b[1mold\r\n\x1b[44m   \x1b[0mz");
+        let hints = vec![("https://a.org".to_string(), 1, 2)];
+        let options = Options {
+            vertical_line: 5,
+            line_numbers: true,
+            ..Options::default()
+        };
+        let mut apart = scene(&scheme, &hints, &[]);
+        apart.cursor_apart = true;
+        let mut whole = Vec::new();
+        let parts = lines_into(&term, &options, &apart, None, &mut whole);
+        let (mut under, mut glyphs, mut over) = (Vec::new(), Vec::new(), Vec::new());
+        let mut line_paints = Vec::new();
+        for line in 0..3 {
+            let line_parts = lines_into(&term, &options, &apart, Some(line..line + 1), &mut line_paints);
+            assert!(line_parts.glyphs <= line_parts.over && line_parts.over <= line_paints.len());
+            under.extend_from_slice(&line_paints[..line_parts.glyphs]);
+            glyphs.extend_from_slice(&line_paints[line_parts.glyphs..line_parts.over]);
+            over.extend_from_slice(&line_paints[line_parts.over..]);
+        }
+        assert_eq!(glyphs, whole[parts.glyphs..parts.over]);
+        let sorted = |paints: &[Paint]| {
+            let mut found: Vec<String> = paints.iter().map(|paint| format!("{paint:?}")).collect();
+            found.sort();
+            found
+        };
+        assert_eq!(sorted(&under), sorted(&whole[..parts.glyphs]));
+        // The line at a column comes once for each line, each as high as the line.
+        let column = |paints: &[Paint]| {
+            paints
+                .iter()
+                .filter_map(|paint| match paint {
+                    Paint::Fill(rect, _) if rect.width < 2.0 => Some(*rect),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(column(&whole[parts.over..]), vec![rect(54.0, 2.0, 1.0, 60.0)]);
+        assert_eq!(
+            column(&over),
+            vec![
+                rect(54.0, 2.0, 1.0, 20.0),
+                rect(54.0, 22.0, 1.0, 20.0),
+                rect(54.0, 42.0, 1.0, 20.0)
+            ]
+        );
+        let without_column = |paints: &[Paint]| {
+            sorted(
+                &paints
+                    .iter()
+                    .filter(|paint| !matches!(paint, Paint::Fill(rect, _) if rect.width < 2.0))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(without_column(&over), without_column(&whole[parts.over..]));
     }
 }
