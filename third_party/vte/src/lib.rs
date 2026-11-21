@@ -45,6 +45,10 @@ const MAX_INTERMEDIATES: usize = 2;
 const MAX_OSC_PARAMS: usize = 16;
 const MAX_OSC_RAW: usize = 1024;
 
+/// Runs of printable ASCII up to this long go to [`Perform::print`] one character at a
+/// time rather than at once to [`Perform::print_str`].
+const SHORT_RUN: usize = 1;
+
 /// Parser for raw _VTE_ protocol which delegates actions to a [`Perform`]
 ///
 /// [`Perform`]: trait.Perform.html
@@ -679,11 +683,33 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
         if ascii_way {
             let ascii = bytes[..plain_chars].iter().position(|byte| !byte.is_ascii()).unwrap_or(plain_chars);
             if ascii > 0 {
-                for &byte in &bytes[..ascii] {
+                let mut index = 0;
+                while index < ascii {
+                    let byte = bytes[index];
                     if byte <= 0x1F {
                         performer.execute(byte);
-                    } else {
+                        index += 1;
+                    } else if byte == 0x7F {
                         performer.print(char::from(byte));
+                        index += 1;
+                    } else {
+                        // A run of printable characters: at once, but for a few, as between two
+                        // colours of a cell each, which cost more to set up as a run than they
+                        // take one by one.
+                        let end = bytes[index..ascii]
+                            .iter()
+                            .position(|&next| !(0x20..=0x7E).contains(&next))
+                            .map_or(ascii, |length| index + length);
+                        let run = &bytes[index..end];
+                        if run.len() > SHORT_RUN {
+                            match str::from_utf8(run) {
+                                Ok(run) => performer.print_str(run),
+                                Err(_) => run.iter().for_each(|&byte| performer.print(char::from(byte))),
+                            }
+                        } else {
+                            run.iter().for_each(|&byte| performer.print(char::from(byte)));
+                        }
+                        index = end;
                     }
                 }
 
@@ -858,6 +884,14 @@ enum State {
 pub trait Perform {
     /// Draw a character to the screen and update states.
     fn print(&mut self, _c: char) {}
+
+    /// Draw a run of printable ASCII characters, each as [`Self::print`] would. A performer
+    /// that can write such a run at once does so here.
+    fn print_str(&mut self, text: &str) {
+        for c in text.chars() {
+            self.print(c);
+        }
+    }
 
     /// Execute a C0 or C1 control function.
     fn execute(&mut self, _byte: u8) {}
