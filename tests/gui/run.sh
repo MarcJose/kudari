@@ -890,11 +890,11 @@ some() {
 hook ResetStats; hook SetSetting ToggleToFocus true; settle; sleep 0.5
 by_window=$(paints all)
 hook ResetStats; hook SetSetting BoldIntense false; settle
-by_bold=$(some)
+by_bold="$(pane_value terminal boldIntense) $(some)"
 hook ResetStats; hook SetSetting Skin theme:kudari.test.dark; settle
 by_skin=$(some)
 hook SetSetting Skin system; hook SetSetting BoldIntense true; hook SetSetting ToggleToFocus false; settle
-check "a setting paints the terminals anew only where they show it" "0 yes yes" "$by_window $by_bold $by_skin"
+check "a setting paints the terminals anew only where they show it" "0 false yes yes" "$by_window $by_bold $by_skin"
 # A key that the shell echoes paints the terminal once.
 run "clear"
 hook ResetStats
