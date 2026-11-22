@@ -41,6 +41,16 @@ fn bounded_text(text: String) -> String {
     let start = text[start..].find('\n').map_or(start, |line| start + line + 1);
     text[start..].to_string()
 }
+/// `text` with a note on top of the lines that a reading left out, so that the agent does not
+/// take what it got for all there is.
+fn with_left_out(text: String, left_out: usize) -> String {
+    if left_out == 0 {
+        return text;
+    }
+    let most = MAX_READ / (1024 * 1024);
+    format!("[{left_out} lines before these are left out: a reading gives at most {most} MiB]\n{text}")
+}
+
 /// The longest tab title an agent can set.
 pub const MAX_TITLE: usize = 200;
 
@@ -359,8 +369,9 @@ pub trait Terminal {
     fn at_command_line(&self) -> bool;
     /// The program asked for the cursor keys of applications.
     fn app_cursor(&self) -> bool;
-    /// The last `lines` lines, or the screen for zero.
-    fn recent_text(&self, lines: usize) -> String;
+    /// The last `lines` lines, or the screen for zero, in about `most` bytes, and how many of
+    /// the lines asked for it left out for that.
+    fn recent_text(&self, lines: usize, most: usize) -> (String, usize);
     /// Writes as if the user typed, which scrolls to the bottom.
     fn write_user_input(&self, bytes: Vec<u8>);
 }
@@ -465,7 +476,8 @@ impl App {
             Request::Terminals => Ok(self.terminals_json(host).to_string()),
             Request::Read { terminal, lines } => {
                 let (_, running) = self.running(terminal, host)?;
-                Ok(bounded_text(running.recent_text(lines.min(MAX_LINES) as usize)))
+                let (text, left_out) = running.recent_text(lines.min(MAX_LINES) as usize, MAX_READ);
+                Ok(bounded_text(with_left_out(text, left_out)))
             }
             Request::Type {
                 terminal,
@@ -675,6 +687,15 @@ mod tests {
         // From the start of a line.
         assert!(bounded.starts_with('ä'));
         assert_eq!(bounded_text("short".to_string()), "short");
+    }
+
+    #[test]
+    fn a_reading_that_left_lines_out_says_so_on_top() {
+        assert_eq!(with_left_out("text".into(), 0), "text");
+        assert_eq!(
+            with_left_out("text".into(), 5),
+            "[5 lines before these are left out: a reading gives at most 4 MiB]\ntext"
+        );
     }
 
     #[test]
@@ -919,8 +940,9 @@ mod tests {
                 false
             }
 
-            fn recent_text(&self, lines: usize) -> String {
-                format!("{lines} lines")
+            fn recent_text(&self, lines: usize, most: usize) -> (String, usize) {
+                assert_eq!(most, MAX_READ);
+                (format!("{lines} lines"), 0)
             }
 
             fn write_user_input(&self, bytes: Vec<u8>) {
