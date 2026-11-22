@@ -1351,6 +1351,33 @@ receive() {
 }
 agent() { send "$1" "$2"; receive; }
 agent_once() { request 1 "$1" "$2" | "$binary" mcp 2>> "$work/mcp.log" | result; }
+# A call of an agent starts no Kudari: on a bus of its own with a service file for Kudari,
+# whose program only notes that it was started, `kudari mcp` says that Kudari does not run.
+mkdir -p "$work/bus/services"
+printf '#!/bin/sh\necho started >> %s\n' "$work/bus/started" > "$work/bus/kudari"
+chmod +x "$work/bus/kudari"
+printf '[D-BUS Service]\nName=io.github.marcjose.kudari\nExec=%s\n' "$work/bus/kudari" \
+    > "$work/bus/services/io.github.marcjose.kudari.service"
+cat > "$work/bus/session.conf" <<BUS
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:path=$work/bus/socket</listen>
+  <servicedir>$work/bus/services</servicedir>
+  <policy context="default"><allow send_destination="*"/><allow receive_sender="*"/><allow own="*"/></policy>
+</busconfig>
+BUS
+dbus-daemon --config-file="$work/bus/session.conf" --nofork > "$work/bus/log" 2>&1 &
+own_bus=$!
+tries=0
+until [ -S "$work/bus/socket" ] || [ "$tries" -gt 50 ]; do sleep 0.1; tries=$((tries + 1)); done
+not_running=$(request 1 list_terminals '{}' | DBUS_SESSION_BUS_ADDRESS="unix:path=$work/bus/socket" timeout 30 "$binary" mcp 2>> "$work/mcp.log" | result)
+sleep 1
+kill "$own_bus" 2>/dev/null
+check "a call of an agent starts no Kudari" \
+    "error: Kudari is not running. The user can start it from the application menu or with the command kudari. started: no" \
+    "$not_running started: $([ -e "$work/bus/started" ] && echo yes || echo no)"
 question() {
     for _ in $(seq 50); do
         question_text=$(hook AgentQuestion)
