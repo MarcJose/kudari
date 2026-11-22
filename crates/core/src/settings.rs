@@ -56,7 +56,7 @@ impl Source<'_> {
 }
 
 /// Settings that can be changed at runtime, with their configuration group.
-const KEYS: [(&str, &str); 110] = [
+const KEYS: [(&str, &str); 111] = [
     ("Screen", "Window"),
     ("Width", "Window"),
     ("Height", "Window"),
@@ -110,6 +110,7 @@ const KEYS: [(&str, &str); 110] = [
     ("BoldIntense", "Terminal"),
     ("BlinkingCursor", "Terminal"),
     ("CursorBlinkTimeout", "Terminal"),
+    ("OutputFrameRate", "Terminal"),
     ("KittyKeyboard", "Terminal"),
     ("Margin", "Terminal"),
     ("CenterContent", "Terminal"),
@@ -271,6 +272,10 @@ pub struct Settings {
     /// Seconds without input or output after which the cursor stops blinking and stays
     /// shown; 0 never stops it.
     pub cursor_blink_timeout: i32,
+    /// The most frames a second that output alone gets, as on screens faster than 60 Hz a
+    /// frame for each refresh of a terminal that only shows output costs much; 0 for as many as
+    /// the screen shows. Input always gets its frame at once.
+    pub output_frame_rate: i32,
     pub kitty_keyboard: bool,
     pub margin: i32,
     pub center_content: bool,
@@ -465,6 +470,7 @@ impl Settings {
             bold_intense: source.boolean("Terminal", "BoldIntense", true),
             blinking_cursor: source.boolean("Terminal", "BlinkingCursor", false),
             cursor_blink_timeout: source.int("Terminal", "CursorBlinkTimeout", 15, 0, 3600),
+            output_frame_rate: source.int("Terminal", "OutputFrameRate", 0, 0, 240),
             kitty_keyboard: source.boolean("Terminal", "KittyKeyboard", false),
             margin: source.int("Terminal", "Margin", 0, 0, 50),
             center_content: source.boolean("Terminal", "CenterContent", false),
@@ -583,6 +589,7 @@ impl Settings {
             "BoldIntense": self.bold_intense,
             "BlinkingCursor": self.blinking_cursor,
             "CursorBlinkTimeout": self.cursor_blink_timeout,
+            "OutputFrameRate": self.output_frame_rate,
             "KittyKeyboard": self.kitty_keyboard,
             "Margin": self.margin,
             "CenterContent": self.center_content,

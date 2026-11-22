@@ -16,6 +16,11 @@ FormCard.FormCardPage {
         {text: controller.translate("@item:inlistbox", "Left"), value: "left"},
         {text: controller.translate("@item:inlistbox", "Hidden"), value: "hidden"}
     ]
+    readonly property var frameRates: [
+        {text: controller.translate("@item:inlistbox frames a second", "As many as the screen shows"), value: 0},
+        {text: "60", value: 60},
+        {text: "30", value: 30}
+    ]
     readonly property var cursors: [
         {text: controller.translate("@item:inlistbox", "Block"), value: "block"},
         {text: controller.translate("@item:inlistbox", "Underline"), value: "underline"},
@@ -455,6 +460,22 @@ FormCard.FormCardPage {
             objectName: "historyWarning"
             visible: historyMemory.memory.warn
             text: root.controller.translate("@info", "That is more than a quarter of the memory of this computer.")
+        }
+
+        FormCard.FormDelegateSeparator {}
+
+        FormCard.FormComboBoxDelegate {
+            objectName: "outputFrameRate"
+            text: root.controller.translate("@label:listbox", "Frames a second for output alone:")
+            model: root.frameRates
+            textRole: "text"
+            valueRole: "value"
+            currentIndex: Math.max(0, root.frameRates.findIndex(entry => entry.value === root.config.OutputFrameRate))
+            onActivated: root.set("OutputFrameRate", currentValue)
+        }
+
+        FormCard.FormTextDelegate {
+            text: root.controller.translate("@info", "On a screen faster than 60 Hz, fewer frames for a terminal that only shows output spare the processor and the graphics card. What you type always shows at once.")
         }
 
         FormCard.FormDelegateSeparator {}

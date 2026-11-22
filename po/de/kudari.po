@@ -1544,6 +1544,18 @@ msgctxt "@info"
 msgid "A program in session \"%1\" tried to copy to the clipboard from the background. Only the terminal in front may, as set under Security."
 msgstr "Ein Programm in der Sitzung „%1“ wollte aus dem Hintergrund in die Zwischenablage kopieren. Das darf nur das Terminal im Vordergrund, wie unter Sicherheit eingestellt."
 
+msgctxt "@item:inlistbox frames a second"
+msgid "As many as the screen shows"
+msgstr "So viele wie der Bildschirm zeigt"
+
+msgctxt "@label:listbox"
+msgid "Frames a second for output alone:"
+msgstr "Bilder je Sekunde nur für Ausgabe:"
+
+msgctxt "@info"
+msgid "On a screen faster than 60 Hz, fewer frames for a terminal that only shows output spare the processor and the graphics card. What you type always shows at once."
+msgstr "Auf einem Bildschirm mit mehr als 60 Hz schonen weniger Bilder für ein Terminal, das nur Ausgabe zeigt, Prozessor und Grafikkarte. Was Sie tippen, erscheint immer sofort."
+
 msgctxt "@info"
 msgid "About %1 for each terminal as wide as the active one."
 msgstr "Etwa %1 für jedes Terminal, das so breit ist wie das aktive."
