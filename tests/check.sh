@@ -63,7 +63,7 @@ echo "== Unit tests"
 cargo test --locked --workspace --features test-hooks
 # The parser in third_party/vte is not part of the workspace; its tests compare the ways
 # through the ground state that Kudari changed with the original.
-cargo test --locked -p vte
+cargo test --locked -p kudari-vte
 
 # The checks after the Rust ones need nothing of each other: they run side by side, each
 # with its output kept until it is shown in order.

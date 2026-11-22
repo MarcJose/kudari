@@ -1,8 +1,9 @@
 # Patched dependencies
 
-Copies of crates from crates.io with fixes that are not released yet. `Cargo.toml` puts them
-in place of the published versions through `[patch.crates-io]`. Each copy is the published
-version with the change named here and nothing else, so it can be compared with the original.
+Copies of crates from crates.io with fixes that are not released yet. Each copy is the
+published version with the change named here and nothing else, so it can be compared with the
+original. `Cargo.toml` puts the copies of cxx-qt in place of the published versions through
+`[patch.crates-io]`; those of the terminal emulator have names of their own, see below.
 
 | Crate | Version | Change | Upstream |
 |---|---|---|---|
@@ -20,7 +21,10 @@ The crates are under `MIT OR Apache-2.0`, © Klarälvdalens Datakonsult AB, a KD
 
 `alacritty_terminal` 0.26.0 and the parser it uses, `vte` 0.15.0, are copied as published,
 without the recorded sessions in `tests/` of `alacritty_terminal` and the example of `vte`,
-which their manifests no longer name. They carry fixes of faults that freeze or end the
+which their manifests no longer name. They are the packages `kudari-alacritty-terminal` and
+`kudari-vte`, with the names of their libraries unchanged, and Kudari uses them by their path.
+The originals from crates.io can then stand beside them: `crates/difftest` compares the copies
+with them for the same input, the calls of the parser and the screens of the emulator. They carry fixes of faults that freeze or end the
 terminals of Kudari, or show the wrong text; `crates/core/src/upstream_tests.rs` has a test
 for each, which runs against these copies. A change for speed is tested in the copy itself,
 against the way it replaces.

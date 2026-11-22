@@ -4,7 +4,9 @@
 # The KDE front end is the package at the root; the platform-independent core is a member
 # of the workspace. See docs/architecture.md.
 [workspace]
-members = ["crates/core", "crates/qt", "crates/windows", "crates/console"]
+members = ["crates/core", "crates/qt", "crates/windows", "crates/console", "crates/difftest"]
+# The copies of crates in third_party are dependencies, not members.
+exclude = ["third_party"]
 
 [workspace.package]
 version = "0.4.0"
@@ -15,7 +17,9 @@ license = "MIT"
 rust-version = "1.100"
 
 [workspace.dependencies]
-alacritty_terminal = "0.26"
+# The copy in third_party, under a name of its own: a test can then compare it with the original
+# from crates.io; see crates/difftest.
+alacritty_terminal = { package = "kudari-alacritty-terminal", path = "third_party/alacritty_terminal", version = "0.26.0" }
 cxx = "1.0"
 cxx-qt = "0.10"
 cxx-qt-build = "0.10"
@@ -133,5 +137,3 @@ strip = "none"
 [patch.crates-io]
 cxx-qt-build = { path = "third_party/cxx-qt-build" }
 qt-build-utils = { path = "third_party/qt-build-utils" }
-alacritty_terminal = { path = "third_party/alacritty_terminal" }
-vte = { path = "third_party/vte" }

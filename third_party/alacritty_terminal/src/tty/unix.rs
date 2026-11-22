@@ -75,9 +75,7 @@ fn get_pw_entry(buf: &mut [i8; 1024]) -> Result<Passwd<'_>> {
 
     // Try and read the pw file.
     let uid = unsafe { libc::getuid() };
-    let status = unsafe {
-        libc::getpwuid_r(uid, entry.as_mut_ptr(), buf.as_mut_ptr() as *mut _, buf.len(), &mut res)
-    };
+    let status = unsafe { libc::getpwuid_r(uid, entry.as_mut_ptr(), buf.as_mut_ptr() as *mut _, buf.len(), &mut res) };
     let entry = unsafe { entry.assume_init() };
 
     if status < 0 {
@@ -293,8 +291,13 @@ pub fn from_fd(config: &Options, window_id: u64, master: OwnedFd, slave: OwnedFd
                 set_nonblocking(master_fd);
             }
 
-            Ok(Pty { child, file: File::from(master), signals, sig_id })
-        },
+            Ok(Pty {
+                child,
+                file: File::from(master),
+                signals,
+                sig_id,
+            })
+        }
         Err(err) => Err(Error::new(
             err.kind(),
             format!(
@@ -325,41 +328,21 @@ impl EventedReadWrite for Pty {
     type Writer = File;
 
     #[inline]
-    unsafe fn register(
-        &mut self,
-        poll: &Arc<Poller>,
-        mut interest: Event,
-        poll_opts: PollMode,
-    ) -> Result<()> {
+    unsafe fn register(&mut self, poll: &Arc<Poller>, mut interest: Event, poll_opts: PollMode) -> Result<()> {
         interest.key = PTY_READ_WRITE_TOKEN;
         unsafe {
             poll.add_with_mode(&self.file, interest, poll_opts)?;
         }
 
-        unsafe {
-            poll.add_with_mode(
-                &self.signals,
-                Event::readable(PTY_CHILD_EVENT_TOKEN),
-                PollMode::Level,
-            )
-        }
+        unsafe { poll.add_with_mode(&self.signals, Event::readable(PTY_CHILD_EVENT_TOKEN), PollMode::Level) }
     }
 
     #[inline]
-    fn reregister(
-        &mut self,
-        poll: &Arc<Poller>,
-        mut interest: Event,
-        poll_opts: PollMode,
-    ) -> Result<()> {
+    fn reregister(&mut self, poll: &Arc<Poller>, mut interest: Event, poll_opts: PollMode) -> Result<()> {
         interest.key = PTY_READ_WRITE_TOKEN;
         poll.modify_with_mode(&self.file, interest, poll_opts)?;
 
-        poll.modify_with_mode(
-            &self.signals,
-            Event::readable(PTY_CHILD_EVENT_TOKEN),
-            PollMode::Level,
-        )
+        poll.modify_with_mode(&self.signals, Event::readable(PTY_CHILD_EVENT_TOKEN), PollMode::Level)
     }
 
     #[inline]
@@ -396,7 +379,7 @@ impl EventedPty for Pty {
             Err(err) => {
                 error!("Error checking child process termination: {err}");
                 None
-            },
+            }
             Ok(None) => None,
             Ok(exit_status) => Some(ChildEvent::Exited(exit_status)),
         }
@@ -432,7 +415,12 @@ impl ToWinsize for WindowSize {
 
         let ws_xpixel = ws_col * self.cell_width as libc::c_ushort;
         let ws_ypixel = ws_row * self.cell_height as libc::c_ushort;
-        Winsize { ws_row, ws_col, ws_xpixel, ws_ypixel }
+        Winsize {
+            ws_row,
+            ws_col,
+            ws_xpixel,
+            ws_ypixel,
+        }
     }
 }
 

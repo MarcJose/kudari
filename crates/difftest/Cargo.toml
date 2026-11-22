@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de>
+# SPDX-License-Identifier: MIT
+
+# Compares the copies of vte and alacritty_terminal in third_party with the originals from
+# crates.io, for the same input: only its tests do anything, and nothing of it is released.
+[package]
+name = "kudari-difftest"
+description = "Tests that compare the copies of the terminal emulator with the originals"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dev-dependencies]
+alacritty_terminal.workspace = true
+original-alacritty-terminal = { package = "alacritty_terminal", version = "=0.26.0" }
+original-vte = { package = "vte", version = "=0.15.0", features = ["std", "ansi"] }
+
+[lints]
+workspace = true
