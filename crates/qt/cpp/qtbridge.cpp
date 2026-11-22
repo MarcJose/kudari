@@ -1560,16 +1560,26 @@ void rk_print_text(const QString &text)
     dialog->open();
 }
 
-void rk_ask_history_lines(int terminal, int current, const QString &title, const QString &label)
+void rk_ask_history_lines(int terminal, int current, const QString &title, const QString &label, double lineBytes, const QString &estimate)
 {
     auto *dialog = new QInputDialog;
+    dialog->setObjectName(QStringLiteral("historyLines"));
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowTitle(title);
-    dialog->setLabelText(label);
     dialog->setInputMode(QInputDialog::IntInput);
     dialog->setIntRange(0, 1000000);
     dialog->setIntStep(1000);
+    // The memory the lines take, as they are chosen: each keeps a cell for every column.
+    const auto tell = [dialog, label, lineBytes, estimate](int lines) {
+        const auto bytes = static_cast<qint64>(lines * lineBytes);
+        const QString memory = QString(estimate).arg(QLocale().formattedDataSize(bytes));
+        dialog->setLabelText(label + QLatin1Char('\n') + memory);
+        // The label is no property of the dialog to read.
+        dialog->setProperty("memory", memory);
+    };
+    tell(current);
     dialog->setIntValue(current);
+    QObject::connect(dialog, &QInputDialog::intValueChanged, dialog, tell);
     QObject::connect(dialog, &QDialog::finished, [dialog, terminal](int result) {
         qt_dialog_active(false);
         if (result == QDialog::Accepted) {

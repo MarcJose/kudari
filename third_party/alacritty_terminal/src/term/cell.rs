@@ -68,7 +68,10 @@ impl From<VteHyperlink> for Hyperlink {
 
 impl From<Hyperlink> for VteHyperlink {
     fn from(val: Hyperlink) -> Self {
-        VteHyperlink { id: Some(val.id().to_owned()), uri: val.uri().to_owned() }
+        VteHyperlink {
+            id: Some(val.id().to_owned()),
+            uri: val.uri().to_owned(),
+        }
     }
 }
 
@@ -90,7 +93,7 @@ impl HyperlinkInner {
                 let mut id = HYPERLINK_ID_SUFFIX.fetch_add(1, Ordering::Relaxed).to_string();
                 id.push_str("_alacritty");
                 id
-            },
+            }
         };
 
         Self { id, uri }
@@ -250,14 +253,20 @@ impl GridCell for Cell {
 
     #[inline]
     fn reset(&mut self, template: &Self) {
-        *self = Cell { bg: template.bg, ..Cell::default() };
+        *self = Cell {
+            bg: template.bg,
+            ..Cell::default()
+        };
     }
 }
 
 impl From<Color> for Cell {
     #[inline]
     fn from(color: Color) -> Self {
-        Self { bg: color, ..Cell::default() }
+        Self {
+            bg: color,
+            ..Cell::default()
+        }
     }
 }
 
@@ -276,9 +285,7 @@ impl LineLength for grid::Row<Cell> {
         }
 
         for (index, cell) in self[..].iter().rev().enumerate() {
-            if cell.c != ' '
-                || cell.extra.as_ref().map(|extra| extra.zerowidth.is_empty()) == Some(false)
-            {
+            if cell.c != ' ' || cell.extra.as_ref().map(|extra| extra.zerowidth.is_empty()) == Some(false) {
                 length = Column(self.len() - index);
                 break;
             }

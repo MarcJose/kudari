@@ -12,7 +12,7 @@
 [package]
 edition = "2024"
 rust-version = "1.85.0"
-name = "alacritty_terminal"
+name = "kudari-alacritty-terminal"
 version = "0.26.0"
 authors = [
     "Christian Duerr <contact@christianduerr.com>",
@@ -80,6 +80,8 @@ optional = true
 version = "0.2.0"
 
 [dependencies.vte]
+package = "kudari-vte"
+path = "../vte"
 version = "0.15.0"
 features = [
     "std",

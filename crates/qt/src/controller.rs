@@ -284,6 +284,13 @@ pub mod qobject {
         #[qinvokable]
         fn translate_with(self: &Self, context: &QString, text: &QString, argument: &QString) -> QString;
 
+        /// What a history of `lines` lines takes, as JSON: `each` for a terminal as wide as the
+        /// active one, `all` for the terminals open now, in bytes, and `warn` when that is more
+        /// than a quarter of the memory of the computer.
+        #[qinvokable]
+        #[cxx_name = "historyMemory"]
+        fn history_memory(self: &Self, lines: i32) -> QString;
+
         #[qsignal]
         fn terminal_dirty(self: Pin<&mut Self>, terminal: i32);
 
@@ -1210,6 +1217,20 @@ impl qobject::Controller {
         self.update(App::revoke_agents);
     }
 
+    fn history_memory(&self, lines: i32) -> QString {
+        let lines = usize::try_from(lines).unwrap_or(0);
+        let columns = self
+            .app
+            .active_terminal()
+            .and_then(terminal::backend)
+            .map_or(80, |backend| backend.size().0);
+        let each = terminal::history_bytes(lines, columns);
+        let terminals = self.app.stack().all_terminals().len().max(1) as u64;
+        let all = each.saturating_mul(terminals);
+        let warn = terminal::history_too_big(all, kudari_core::process::total_memory());
+        qs(&json!({"each": each, "all": all, "warn": warn}).to_string())
+    }
+
     fn translate_with(&self, context: &QString, text: &QString, argument: &QString) -> QString {
         let context = &context.to_string();
         qs(&kudari_core::i18n::tr_arg(
@@ -1431,6 +1452,9 @@ impl qobject::Controller {
                 backend.history_lines() as i32,
                 &qs(&tr("@title:window", "Adjust Scrollback")),
                 &qs(&tr("@label:spinbox", "Lines kept in this terminal:")),
+                terminal::history_bytes(1, backend.size().0) as f64,
+                // `%1` stays for the dialog, which fills in the size as the lines change.
+                &qs(&kudari_core::i18n::tr_arg("@label", "About %1 of memory.", "%1")),
             ),
             TerminalCommand::MouseTracking(enabled) => backend.set_tracks_mouse(enabled),
             TerminalCommand::OpenFolder => {

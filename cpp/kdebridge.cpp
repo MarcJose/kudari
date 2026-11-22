@@ -1130,6 +1130,10 @@ QString rk_test_property(const QString &name, const QString &property)
             namedObjects(quickWindow->contentItem(), name, seen, found);
         }
     }
+    // The dialogs of widgets, as the one for the lines of a terminal.
+    for (QWidget *widget : QApplication::topLevelWidgets()) {
+        namedObjects(widget, name, seen, found);
+    }
     QStringList values;
     for (QObject *object : found) {
         values.append(object->property(property.toUtf8().constData()).toString());

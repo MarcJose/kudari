@@ -91,7 +91,10 @@ where
     }
 
     pub fn channel(&self) -> EventLoopSender {
-        EventLoopSender { sender: self.tx.clone(), poller: self.poll.clone() }
+        EventLoopSender {
+            sender: self.tx.clone(),
+            poller: self.poll.clone(),
+        }
     }
 
     /// Drain the channel.
@@ -110,12 +113,7 @@ where
     }
 
     #[inline]
-    fn pty_read<X>(
-        &mut self,
-        state: &mut State,
-        buf: &mut [u8],
-        mut writer: Option<&mut X>,
-    ) -> io::Result<()>
+    fn pty_read<X>(&mut self, state: &mut State, buf: &mut [u8], mut writer: Option<&mut X>) -> io::Result<()>
     where
         X: Write,
     {
@@ -146,7 +144,7 @@ where
                             break;
                         }
                         nothing_new = true;
-                    },
+                    }
                     _ => return Err(err),
                 },
             }
@@ -230,21 +228,21 @@ where
                     Ok(0) => {
                         state.set_current(Some(current));
                         break 'write_many;
-                    },
+                    }
                     Ok(n) => {
                         current.advance(n);
                         if current.finished() {
                             state.goto_next();
                             break 'write_one;
                         }
-                    },
+                    }
                     Err(err) => {
                         state.set_current(Some(current));
                         match err.kind() {
                             ErrorKind::Interrupted | ErrorKind::WouldBlock => break 'write_many,
                             _ => return Err(err),
                         }
-                    },
+                    }
                 }
             }
         }
@@ -277,8 +275,9 @@ where
             'event_loop: loop {
                 // Wakeup the event loop when a synchronized update timeout was reached.
                 let handler = state.parser.sync_timeout();
-                let timeout =
-                    handler.sync_timeout().map(|st| st.saturating_duration_since(Instant::now()));
+                let timeout = handler
+                    .sync_timeout()
+                    .map(|st| st.saturating_duration_since(Instant::now()));
 
                 events.clear();
                 if let Err(err) = self.poll.wait(&mut events, timeout) {
@@ -287,7 +286,7 @@ where
                         _ => {
                             error!("Event loop polling error: {err}");
                             break 'event_loop;
-                        },
+                        }
                     }
                 }
 
@@ -306,9 +305,7 @@ where
                 for event in events.iter() {
                     match event.key {
                         tty::PTY_CHILD_EVENT_TOKEN => {
-                            if let Some(tty::ChildEvent::Exited(status)) =
-                                self.pty.next_child_event()
-                            {
+                            if let Some(tty::ChildEvent::Exited(status)) = self.pty.next_child_event() {
                                 if let Some(status) = status {
                                     self.event_proxy.send_event(Event::ChildExit(status));
                                 }
@@ -319,7 +316,7 @@ where
                                 self.event_proxy.send_event(Event::Wakeup);
                                 break 'event_loop;
                             }
-                        },
+                        }
 
                         tty::PTY_READ_WRITE_TOKEN => {
                             if event.is_interrupt() {
@@ -328,8 +325,7 @@ where
                             }
 
                             if event.readable {
-                                if let Err(err) = self.pty_read(&mut state, &mut buf, pipe.as_mut())
-                                {
+                                if let Err(err) = self.pty_read(&mut state, &mut buf, pipe.as_mut()) {
                                     // On Linux, a `read` on the master side of a PTY can fail
                                     // with `EIO` if the client side hangs up.  In that case,
                                     // just loop back round for the inevitable `Exited` event.
@@ -355,7 +351,7 @@ where
                                     break 'event_loop;
                                 }
                             }
-                        },
+                        }
                         _ => (),
                     }
                 }
