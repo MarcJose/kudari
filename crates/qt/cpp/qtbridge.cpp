@@ -1685,8 +1685,15 @@ int rk_base_key(int key, int modifiers, int scanCode, const QString &text)
 
 QString rk_key_sequence_text(int key, int modifiers)
 {
-    const QKeyCombination combination(Qt::KeyboardModifiers(modifiers) & ~Qt::KeypadModifier, Qt::Key(key));
-    return QKeySequence(combination).toString(QKeySequence::PortableText);
+    // The digits and the keys for arithmetic of the number pad are keys of their own, which
+    // `Num+` names; its other keys, as Home where `Num Lock` is off, are the same as elsewhere.
+    const bool own = (key >= Qt::Key_0 && key <= Qt::Key_9) || key == Qt::Key_Asterisk || key == Qt::Key_Plus
+        || key == Qt::Key_Minus || key == Qt::Key_Slash || key == Qt::Key_Period || key == Qt::Key_Comma;
+    Qt::KeyboardModifiers kept = Qt::KeyboardModifiers(modifiers);
+    if (!own) {
+        kept &= ~Qt::KeypadModifier;
+    }
+    return QKeySequence(QKeyCombination(kept, Qt::Key(key))).toString(QKeySequence::PortableText);
 }
 
 QString rk_native_key_sequence(const QString &portable)

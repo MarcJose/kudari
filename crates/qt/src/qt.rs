@@ -207,3 +207,22 @@ fn qt_file_chosen(terminal: i32, purpose: i32, path: &QString) {
     let path = std::path::PathBuf::from(path.to_string());
     crate::controller::queue(move |controller| controller.file_chosen(terminal, purpose, path));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_shortcut_keeps_the_keys_of_the_number_pad_that_are_its_own() {
+        const CONTROL: i32 = 0x0400_0000;
+        const KEYPAD: i32 = 0x2000_0000;
+        let text = |key: i32, modifiers: i32| rk_key_sequence_text(key, modifiers).to_string();
+        // Its digits and keys for arithmetic are keys of their own.
+        assert_eq!(text(0x35, CONTROL | KEYPAD), "Ctrl+Num+5");
+        assert_eq!(text(0x2a, CONTROL | KEYPAD), "Ctrl+Num+*");
+        assert_eq!(text(0x2c, CONTROL | KEYPAD), "Ctrl+Num+,");
+        assert_eq!(text(0x35, CONTROL), "Ctrl+5");
+        // Home where `Num Lock` is off is the same key as elsewhere.
+        assert_eq!(text(0x0100_0010, CONTROL | KEYPAD), "Ctrl+Home");
+    }
+}

@@ -312,6 +312,48 @@ try {
     [void] (Invoke-Element 'Quit')
     [void] $process.WaitForExit(10000)
 
+    # A digit of the number pad is a key of its own: the 5 above the letters leaves the
+    # window alone, the 5 of the number pad hides it.
+    (Get-Content $ini) -replace '^toggle-window-state=.*', 'toggle-window-state=Ctrl+Alt+Num+5' | Set-Content $ini
+    $process = Start-Process $Program -PassThru -RedirectStandardError (Join-Path $work 'keypad.txt') -WorkingDirectory $work
+    $ByProcess = New-Object System.Windows.Automation.PropertyCondition ($Automation::ProcessIdProperty, $process.Id)
+    [void] (Wait-For { Get-Windows | Where-Object { -not $_.Current.BoundingRectangle.IsEmpty } | Select-Object -First 1 } 15)
+    Add-Type -Namespace Kudari -Name Keys -MemberDefinition @'
+[DllImport("user32.dll")] public static extern void keybd_event(byte key, byte scan, uint flags, System.UIntPtr extra);
+'@
+    function Send-Chord([byte] $key) {
+        foreach ($down in 0x11, 0x12, $key) { [Kudari.Keys]::keybd_event($down, 0, 0, [UIntPtr]::Zero) }
+        foreach ($up in $key, 0x12, 0x11) { [Kudari.Keys]::keybd_event($up, 0, 2, [UIntPtr]::Zero) }
+    }
+    function Test-Shown { [bool] (Get-Windows | Where-Object { -not $_.Current.BoundingRectangle.IsEmpty }) }
+    Send-Chord 0x35
+    Start-Sleep -Seconds 1
+    $stays = Test-Shown
+    Send-Chord 0x65
+    $hides = Wait-For { if (-not (Test-Shown)) { $true } }
+    Test-Check 'a digit of the number pad is a shortcut of its own' ($stays -and $hides)
+    if (-not ($stays -and $hides)) { Write-Host "      after the 5 above the letters: $stays, after the 5 of the number pad: hidden $([bool] $hides)" }
+    $process | Stop-Process -Force
+    [void] $process.WaitForExit(10000)
+
+    # A shortcut that another program holds: Windows refuses it at the start, and the tray
+    # says so. The log shows what goes to the tray, as the notifications of Windows can be off.
+    Add-Type -Namespace Kudari -Name Hotkeys -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool RegisterHotKey(System.IntPtr window, int id, uint modifiers, uint key);
+[DllImport("user32.dll")] public static extern bool UnregisterHotKey(System.IntPtr window, int id);
+'@
+    # Ctrl+Alt+Num+5, as Kudari has it now.
+    $held = [Kudari.Hotkeys]::RegisterHotKey([IntPtr]::Zero, 1, 0x4003, 0x65)
+    $heldLog = Join-Path $work 'held.txt'
+    $env:QT_LOGGING_RULES = 'kudari.notify.info=true'
+    $process = Start-Process $Program -PassThru -RedirectStandardError $heldLog -WorkingDirectory $work
+    Remove-Item Env:QT_LOGGING_RULES
+    $told = Wait-For { Select-String -Quiet 'does not give Kudari the shortcut' $heldLog } 15
+    Test-Check 'a shortcut that another program holds is told in the tray' ($held -and [bool] $told)
+    $process | Stop-Process -Force
+    [void] $process.WaitForExit(10000)
+    [void] [Kudari.Hotkeys]::UnregisterHotKey([IntPtr]::Zero, 1)
+
     # In German, the credits and the buttons of the dialogs are German as well. The script
     # stays ASCII for Windows PowerShell, so the umlauts come as their codes.
     $env:LANGUAGE = 'de'
