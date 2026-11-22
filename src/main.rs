@@ -68,6 +68,8 @@ fn main() {
     kudari_core::timing::mark("ready");
 
     let code = app.as_mut().map_or(1, |app| app.exec());
+    // Settings changed in the last moments wait for their sync, which an exit would skip.
+    kde::rk_config_flush();
     drop(connection);
     // The debug service of QML sends what it recorded as the application goes, and qmlprofiler
     // gets nothing from one that ends without: in the build for it, both go first.

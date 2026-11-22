@@ -259,6 +259,7 @@ impl Frontend for Plasma {
         for (action, sequences) in &migration.shortcuts {
             kde::rk_config_write(&qs("Shortcuts"), &qs(action), &qs(sequences));
         }
+        kde::rk_config_flush();
         true
     }
 }

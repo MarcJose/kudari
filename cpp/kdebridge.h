@@ -24,6 +24,7 @@ void rk_finish_startup(bool showTray);
 
 QString rk_config_read(const QString &group, const QString &key, const QString &fallback);
 void rk_config_write(const QString &group, const QString &key, const QString &value);
+void rk_config_flush();
 
 QString rk_shortcuts_json();
 QString rk_highlight_color();
