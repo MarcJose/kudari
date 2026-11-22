@@ -72,6 +72,9 @@ fn main() {
     if !win::rk_win_claim_instance(&cxx_qt_lib::QString::from(&instance_name())) {
         return;
     }
+    // The first terminal starts without waiting for wsl.exe, and the menus have the
+    // distributions by the time they open.
+    kudari_core::shells::look_for_wsl();
     kudari_core::timing::mark("bus");
     start_services();
     agents::listen();
