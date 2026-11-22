@@ -47,6 +47,8 @@ pub enum Count {
     InputMethodQueries,
     /// The periodic look at the terminals, for titles and watched programs.
     Polls,
+    /// A look for the link under the pointer, which reads the line under the lock.
+    LinkLookups,
 }
 
 /// What is timed.
@@ -173,7 +175,7 @@ mod counting {
         }
     }
 
-    pub static COUNTS: [AtomicU64; 14] = [const { AtomicU64::new(0) }; 14];
+    pub static COUNTS: [AtomicU64; 15] = [const { AtomicU64::new(0) }; 15];
     pub static TIMES: [Histogram; 10] = [const { Histogram::new() }; 10];
     /// Paints for each terminal, by its id.
     pub static PAINTS: Mutex<BTreeMap<i32, u64>> = Mutex::new(BTreeMap::new());
@@ -200,6 +202,7 @@ mod counting {
             Count::CursorMoves => 11,
             Count::InputMethodQueries => 12,
             Count::Polls => 13,
+            Count::LinkLookups => 14,
         }
     }
 
@@ -486,6 +489,7 @@ pub fn json() -> String {
             "cursor_moves": count(Count::CursorMoves),
             "input_method_queries": count(Count::InputMethodQueries),
             "polls": count(Count::Polls),
+            "link_lookups": count(Count::LinkLookups),
             "paints": paints,
             "queued": counting::QUEUED.load(Ordering::Relaxed),
             "queued_max": counting::QUEUED_MOST.load(Ordering::Relaxed),

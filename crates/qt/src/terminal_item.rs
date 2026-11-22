@@ -309,6 +309,18 @@ pub mod qobject {
         #[qinvokable]
         fn link_hint(self: &Self, x: f64, y: f64) -> QString;
 
+        /// Whether the pointer at a position is over another cell than at the last call, or the
+        /// text, the scroll, the size or Ctrl changed since: only then can the link and the
+        /// color under it be others.
+        #[qinvokable]
+        #[cxx_name = "hoverChanged"]
+        fn hover_changed(self: &Self, x: f64, y: f64, control: bool) -> bool;
+
+        /// The pointer left: the next `hoverChanged` is true wherever it comes back.
+        #[qinvokable]
+        #[cxx_name = "forgetHover"]
+        fn forget_hover(self: &Self);
+
         #[qinvokable]
         fn clear_selection(self: Pin<&mut Self>);
 
@@ -383,6 +395,9 @@ impl cxx_qt::Initialize for qobject::TerminalItem {
 }
 
 pub struct TerminalItemRust {
+    /// What the pointer was over last: its cell, the scroll, the size, Ctrl and the count of
+    /// changes of the text; see `hover_changed`.
+    hover_key: std::cell::Cell<Option<HoverKey>>,
     terminal_id: i32,
     term_font: QFont,
     preedit: QString,
@@ -444,9 +459,22 @@ pub struct TerminalItemRust {
     cursor_fonts: u32,
 }
 
+/// See [`TerminalItemRust::hover_key`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct HoverKey {
+    line: i32,
+    column: usize,
+    scrolled: usize,
+    columns: usize,
+    lines: usize,
+    control: bool,
+    changes: u64,
+}
+
 impl Default for TerminalItemRust {
     fn default() -> Self {
         Self {
+            hover_key: std::cell::Cell::new(None),
             terminal_id: -1,
             term_font: QFont::default(),
             preedit: QString::default(),
@@ -1141,6 +1169,7 @@ impl qobject::TerminalItem {
     /// The link at `x`, `y`. Only finding it locks the terminal; the look for a file comes
     /// after, see [`Self::look`].
     fn link(&self, x: f64, y: f64, files: bool) -> Option<view::Link> {
+        stats::count(stats::Count::LinkLookups);
         let backend = self.backend()?;
         let options = terminal::options().unwrap_or_default();
         let found = {
@@ -1211,6 +1240,30 @@ impl qobject::TerminalItem {
             origin_y + f64::from(link.start.line.0 + offset + 1) * cell_height - 1.0,
             link.cells as f64 * cell_width,
         ))
+    }
+
+    fn hover_changed(&self, x: f64, y: f64, control: bool) -> bool {
+        let Some(backend) = self.backend() else {
+            return true;
+        };
+        let key = {
+            let term = backend.lock();
+            let (point, _) = self.cells().at(&term, x, y);
+            HoverKey {
+                line: point.line.0,
+                column: point.column.0,
+                scrolled: term.grid().display_offset(),
+                columns: term.columns(),
+                lines: term.screen_lines(),
+                control,
+                changes: backend.changes(),
+            }
+        };
+        self.rust().hover_key.replace(Some(key)) != Some(key)
+    }
+
+    fn forget_hover(&self) {
+        self.rust().hover_key.set(None);
     }
 
     fn link_hint(&self, x: f64, y: f64) -> QString {
