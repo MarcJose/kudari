@@ -360,23 +360,6 @@ struct Mailbox {
     changes: AtomicU64,
 }
 
-/// The most bytes of a title that a program sets: tabs, the window and notifications show
-/// little of it, and a longer one only takes time to copy and lay out.
-const MAX_TITLE: usize = 1024;
-
-/// A title that a program set, cut to [`MAX_TITLE`] at the end of a character, with spaces
-/// for control characters.
-fn bounded_title(title: &str) -> String {
-    let mut end = title.len().min(MAX_TITLE);
-    while !title.is_char_boundary(end) {
-        end -= 1;
-    }
-    title[..end]
-        .chars()
-        .map(|character| if character.is_control() { ' ' } else { character })
-        .collect()
-}
-
 impl Mailbox {
     /// Where the text copied for `target` waits.
     fn slot(&self, target: Selection) -> &Mutex<Option<String>> {
@@ -468,7 +451,7 @@ impl EventListener for Proxy {
                 listener.report(id, Report::Bell(Pending(mailbox.bell_queued.clone())));
             }
             // The titles are read with the output, so they need no work of their own.
-            Event::Title(title) => *lock(&mailbox.title) = bounded_title(&title),
+            Event::Title(title) => *lock(&mailbox.title) = crate::sessions::bounded_title(&title),
             Event::ResetTitle => lock(&mailbox.title).clear(),
             // OSC 52 with `p` or `s`, as `tmux` and `neovim` send it, names the primary selection.
             Event::ClipboardStore(kind, text) => {
@@ -1462,12 +1445,18 @@ mod tests {
         let proxy = kept_proxy();
         // `printf '\e]2;%s\a' "$(head -c 50000000 /dev/zero | tr '\0' x)"`, in short.
         proxy.send_event(Event::Title("x".repeat(5_000_000)));
-        assert_eq!(lock(&proxy.mailbox.title).len(), MAX_TITLE);
+        assert_eq!(lock(&proxy.mailbox.title).len(), crate::sessions::MAX_TITLE);
         // Cut at the end of a character, with spaces for control characters.
-        proxy.send_event(Event::Title(format!("{}ä\ttab", "x".repeat(MAX_TITLE - 1))));
-        assert_eq!(lock(&proxy.mailbox.title).len(), MAX_TITLE - 1);
+        proxy.send_event(Event::Title(format!(
+            "{}ä\ttab",
+            "x".repeat(crate::sessions::MAX_TITLE - 1)
+        )));
+        assert_eq!(lock(&proxy.mailbox.title).len(), crate::sessions::MAX_TITLE - 1);
         proxy.send_event(Event::Title("a\tb\u{7}c".to_string()));
         assert_eq!(*lock(&proxy.mailbox.title), "a b c");
+        // Nothing that turns the text around, as `exe.txt` shown as `txt.exe`.
+        proxy.send_event(Event::Title("photo\u{202e}gpj.exe\u{2067}x\u{200f}".to_string()));
+        assert_eq!(*lock(&proxy.mailbox.title), "photogpj.exex");
     }
 
     #[test]
