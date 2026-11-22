@@ -211,6 +211,8 @@ All nine steps are complete.
 - Kudari loads libraries only from its own folder, from System32 and from the folder of Qt,
   never from the working directory or PATH (`SetDefaultDllDirectories` at the start of
   `main`). `alacritty_terminal` looks for `conpty.dll` with every new terminal, and a library
-  of that name in the folder Kudari was started in would otherwise run inside it. A newer
-  `conpty.dll` with its `OpenConsole.exe`, as Windows Terminal ships them, goes next to
-  `kudari.exe`.
+  of that name in the folder Kudari was started in would otherwise run inside it. The
+  packages carry `conpty.dll` with its `OpenConsole.exe` from Windows Terminal next to
+  `kudari.exe`, signed by Microsoft and checked against a pinned checksum: the console host of
+  Windows takes the output of programs many times slower. Where `OpenConsole.exe` is missing
+  or blocked, `conpty.dll` starts the console host of Windows.
