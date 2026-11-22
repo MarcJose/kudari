@@ -188,7 +188,10 @@ ApplicationWindow {
             id: menuItem
 
             property string shortcut: ""
+            // What a screen reader says, where the text has a doubled `&` that shows as one.
+            property string spoken: ""
 
+            Accessible.name: spoken.length > 0 ? spoken : text
             rightPadding: 12 + (shortcut.length > 0 ? shortcutLabel.implicitWidth + 24 : 0)
 
             Label {
@@ -222,6 +225,7 @@ ApplicationWindow {
             } else {
                 const item = itemComponent.createObject(null, {
                     text: entry.text,
+                    spoken: entry.spoken ?? "",
                     shortcut: root.shortcutText(entry),
                     checkable: entry.checkable === true || (entry.type === "value" && entry.kind !== "signal"),
                     checked: entry.checked === true,
