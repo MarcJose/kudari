@@ -1425,6 +1425,10 @@ msgid "Remove the shortcut"
 msgstr "Tastenkürzel entfernen"
 
 msgctxt "@info"
+msgid "Windows does not give Kudari the shortcut %1, which another program may use. Choose another one on the page Shortcuts of the settings."
+msgstr "Windows gibt Kudari das Tastenkürzel %1 nicht, vielleicht verwendet es ein anderes Programm. Wählen Sie ein anderes auf der Seite Tastenkürzel der Einstellungen."
+
+msgctxt "@info"
 msgid "Another program already uses this shortcut."
 msgstr "Ein anderes Programm verwendet dieses Tastenkürzel bereits."
 

@@ -642,7 +642,7 @@ impl Backend {
             shell,
             &settings.shell,
             settings.shell_integration,
-            crate::shells::installed(),
+            crate::shells::for_terminal(shell, &settings.shell),
             prompt.as_deref(),
         )
         .unwrap_or_default();

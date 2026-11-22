@@ -2,10 +2,11 @@
 # SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de>
 # SPDX-License-Identifier: MIT
 """Completes the CycloneDX SBOM of kudari-windows, which cargo-cyclonedx writes from the
-crates, with what the Windows packages carry besides: the modules of Qt and the runtime of
-Microsoft Visual C++, with the checksums of their files.
+crates, with what the Windows packages carry besides: the modules of Qt, the runtime of
+Microsoft Visual C++ and the console host of Windows Terminal, with the checksums of their
+files.
 
-    tools/windows_sbom.py CRATES.cdx.json STAGE QT_VERSION RUNTIME_VERSION > OUT.cdx.json
+    tools/windows_sbom.py CRATES.cdx.json STAGE QT_VERSION RUNTIME_VERSION CONPTY_VERSION > OUT.cdx.json
 
 STAGE is the directory of the package; the Qt modules are the Qt6*.dll in it.
 """
@@ -37,9 +38,9 @@ def component(reference, name, version, licenses, path, supplier, website):
 
 
 def main():
-    if len(sys.argv) != 5:
+    if len(sys.argv) != 6:
         sys.exit(__doc__)
-    crates, stage, qt_version, runtime_version = sys.argv[1:]
+    crates, stage, qt_version, runtime_version, conpty_version = sys.argv[1:]
     sbom = json.loads(Path(crates).read_text(encoding="utf-8"))
     stage = Path(stage)
     added = []
@@ -69,6 +70,21 @@ def main():
                     "https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist",
                 )
             )
+    for name in ("conpty.dll", "OpenConsole.exe"):
+        path = stage / name
+        if not path.exists():
+            sys.exit(f"windows_sbom: no {name} in {stage}")
+        added.append(
+            component(
+                f"conpty:{path.stem}@{conpty_version}",
+                path.stem,
+                conpty_version,
+                [{"license": {"id": "MIT"}}],
+                path,
+                "Microsoft",
+                "https://github.com/microsoft/terminal",
+            )
+        )
     if not any(item["bom-ref"].startswith("qt:") for item in added):
         sys.exit(f"windows_sbom: no Qt in {stage}")
     sbom.setdefault("components", []).extend(added)

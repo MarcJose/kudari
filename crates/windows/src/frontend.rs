@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex, PoisonError};
+use std::time::Duration;
 
 use kudari_core::app::Question;
 use kudari_core::ini::IniFile;
@@ -38,7 +39,16 @@ fn settings_path() -> PathBuf {
     configuration.join("kudari-windows.ini")
 }
 
-static SETTINGS: LazyLock<IniFile> = LazyLock::new(|| IniFile::open(&settings_path()));
+/// Changes close together, as a slider or the grip of the window sends them, go to the file
+/// together this long after the last, as under KDE.
+const SAVE_DELAY: Duration = Duration::from_millis(400);
+
+static SETTINGS: LazyLock<IniFile> = LazyLock::new(|| IniFile::open(&settings_path()).with_delay(SAVE_DELAY));
+
+/// Writes the changes of the settings that wait, before Kudari ends.
+pub fn flush_settings() {
+    SETTINGS.flush();
+}
 
 /// What the app last said about its actions, checked and enabled, for the menus.
 static ACTIONS: LazyLock<Mutex<HashMap<String, (bool, bool)>>> = LazyLock::new(Mutex::default);

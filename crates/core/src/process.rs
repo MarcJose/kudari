@@ -126,17 +126,23 @@ impl<P: Programs + ?Sized> Programs for Same<'_, P> {
 }
 
 /// The memory of this computer in bytes, as far as Kudari can tell: on Linux, `MemTotal` of
-/// `/proc/meminfo`.
+/// `/proc/meminfo`; on Windows, the physical memory that Windows tells.
 #[must_use]
 pub fn total_memory() -> Option<u64> {
-    if !cfg!(target_os = "linux") {
-        return None;
+    #[cfg(windows)]
+    return windows::total_memory();
+    #[cfg(not(windows))]
+    {
+        if !cfg!(target_os = "linux") {
+            return None;
+        }
+        let info = std::fs::read_to_string("/proc/meminfo").ok()?;
+        memory_in(&info)
     }
-    let info = std::fs::read_to_string("/proc/meminfo").ok()?;
-    memory_in(&info)
 }
 
 /// `MemTotal` of the text of `/proc/meminfo`, in bytes.
+#[cfg(any(not(windows), test))]
 fn memory_in(info: &str) -> Option<u64> {
     let line = info.lines().find_map(|line| line.strip_prefix("MemTotal:"))?;
     let kilobytes: u64 = line.trim().strip_suffix("kB")?.trim().parse().ok()?;
