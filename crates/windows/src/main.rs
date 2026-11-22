@@ -91,6 +91,8 @@ fn main() {
     kudari_core::timing::mark("qml");
     kudari_core::timing::mark("ready");
     let code = app.as_mut().map_or(1, |app| app.exec());
+    // The static settings are never dropped, and exit leaves out what dropping would do.
+    frontend::flush_settings();
     std::process::exit(code);
 }
 
