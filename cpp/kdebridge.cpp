@@ -77,6 +77,7 @@
 #include <QKeySequence>
 #include <QMenu>
 #include <QMimeData>
+#include <QMimeDatabase>
 #include <QPrintDialog>
 #include <QPrinter>
 #include <QQuickItem>
@@ -1295,7 +1296,15 @@ void rk_setup_qml_i18n(QQmlApplicationEngine &engine)
 
 void rk_open_url(const QString &url)
 {
-    auto job = new KIO::OpenUrlJob(url.startsWith(QLatin1Char('/')) ? QUrl::fromLocalFile(url) : QUrl(url));
+    const QUrl target = url.startsWith(QLatin1Char('/')) ? QUrl::fromLocalFile(url) : QUrl(url);
+    // KIO follows a desktop entry of type Link to its address, of any scheme, also with
+    // executables not to run. Kudari opens none, whatever its name: this is KIO's own look.
+    if (target.isLocalFile()
+        && QMimeDatabase().mimeTypeForUrl(target).inherits(QStringLiteral("application/x-desktop"))) {
+        qWarning("kudari: a desktop entry is not opened: %s", qPrintable(target.toLocalFile()));
+        return;
+    }
+    auto job = new KIO::OpenUrlJob(target);
     job->setUiDelegate(KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingEnabled, nullptr));
     job->setRunExecutables(false);
     job->start();
