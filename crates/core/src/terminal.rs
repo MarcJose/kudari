@@ -1233,6 +1233,11 @@ fn save_due(path: &std::path::Path, count: u64, saved: Option<&(PathBuf, u64)>) 
 }
 
 impl Backend {
+    /// How often the text of the terminal may have changed so far; see [`Mailbox::changes`].
+    pub fn changes(&self) -> u64 {
+        self.mailbox.changes.load(Ordering::Relaxed)
+    }
+
     fn save_due(&self) -> bool {
         let path = lock(&self.auto_save).clone();
         path.is_some_and(|path| {
