@@ -644,6 +644,12 @@ impl TestHooks {
         kudari_qt::terminal_item::matched_text(terminal)
     }
 
+    /// Opens `target` as a link of a terminal would after its checks, without them: what the
+    /// desktop does with it alone.
+    fn open_url(&self, target: String) {
+        queue(move |_| kudari_core::services::Desktop::open_url(&crate::plasma::Plasma, &target));
+    }
+
     /// Saves an image of the window, to find where the checks have to click.
     fn grab(&self, path: String) {
         queue(move |_| crate::kde::rk_test_grab(&crate::kde::qs(&path)));

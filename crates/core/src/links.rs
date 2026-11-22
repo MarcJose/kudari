@@ -492,6 +492,26 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn desktop_entries_never_open_by_any_name() {
+        // A file that `KIO` opens by what it says: `Type=Link` would go to its address past
+        // the schemes allowed, `Type=Application` asks to start its program.
+        let directory = std::env::temp_dir().join(format!("kudari-open-desktop-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let schemes = crate::options::Options::default().link_schemes;
+        for name in ["a.desktop", "b.DESKTOP", "c.kdelnk", "README"] {
+            let path = directory.join(name);
+            std::fs::write(&path, "[Desktop Entry]\nType=Link\nURL=smb://host/share\n").unwrap();
+            assert!(!may_open(&path.to_string_lossy(), &schemes), "{name}");
+            let link = format!("file://{}", path.to_string_lossy());
+            assert!(!may_open(&link, &schemes), "{link}");
+        }
+        std::fs::write(directory.join("notes"), "plain\n").unwrap();
+        assert!(may_open(&directory.join("notes").to_string_lossy(), &schemes));
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
     fn random_links_do_no_harm() {
         for input in crate::fuzz::inputs(&["/usr/bin/a.rs:12:3", "https://example.org"]) {
             let _ = resolve(&input, "vim +LINE PATH");

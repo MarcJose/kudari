@@ -173,6 +173,16 @@ Exec=$work/input
 NoDisplay=true
 X-KDE-Wayland-Interfaces=org_kde_kwin_fake_input
 DESKTOP
+# A program for links of a scheme of its own, which notes each link it gets.
+cat > "$work/data/applications/kudari-gui-scheme.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Kudari GUI scheme
+Exec=sh -c 'echo "\$1" >> $work/scheme-links' sh %u
+MimeType=x-scheme-handler/kudaritest;
+NoDisplay=true
+DESKTOP
+printf '[Default Applications]\nx-scheme-handler/kudaritest=kudari-gui-scheme.desktop\n' > "$work/config/mimeapps.list"
 printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n' > "$work/config/kudarirc"
 printf 'key F5 : "KEYTAB"\n' > "$work/data/kudari/keytabs/test.keytab"
 printf 'hello\n' > "$work/home/notes.txt"
@@ -375,6 +385,13 @@ input key 29 42 2; settle
 check "a link number opens with Shift held as well" "$work/home/notes.txt:12|" "$(content "$work/edited")"
 hook SetSetting UrlHintsModifier none; settle
 hook SetSetting OpenLinksByClick false; hook SetSetting EditorCommand ""; settle
+# KIO follows a desktop entry of type Link to its address, past the schemes allowed, also one
+# named .Desktop, which got past Kudari before. Kudari opens none, also asked to open the
+# file directly: the program for the scheme gets the link that goes to it, and not the one
+# of the entry.
+printf '[Desktop Entry]\nType=Link\nURL=kudaritest://entry\n' > "$work/home/entry.Desktop"
+hook OpenUrl "kudaritest://direct"; hook OpenUrl "$work/home/entry.Desktop"; sleep 3
+check "a desktop entry under any name is not opened" "kudaritest://direct|" "$(content "$work/scheme-links")"
 
 run_open "clear; cat > $work/pasted"
 hook Popup "$work/source/a.txt"; sleep 1; menu_entry 1; end_input
