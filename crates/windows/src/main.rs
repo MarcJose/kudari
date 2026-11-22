@@ -72,6 +72,9 @@ fn main() {
     if !win::rk_win_claim_instance(&cxx_qt_lib::QString::from(&instance_name())) {
         return;
     }
+    // The first terminal starts without waiting for wsl.exe, and the menus have the
+    // distributions by the time they open.
+    kudari_core::shells::look_for_wsl();
     kudari_core::timing::mark("bus");
     start_services();
     agents::listen();
@@ -91,6 +94,8 @@ fn main() {
     kudari_core::timing::mark("qml");
     kudari_core::timing::mark("ready");
     let code = app.as_mut().map_or(1, |app| app.exec());
+    // The static settings are never dropped, and exit leaves out what dropping would do.
+    frontend::flush_settings();
     std::process::exit(code);
 }
 

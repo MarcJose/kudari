@@ -89,6 +89,7 @@ cargo clippy -p kudari-core --all-targets --target x86_64-pc-windows-gnu  # the 
 cargo build -p kudari-windows && tests/windows/run.sh  # the Windows front end, on Linux
 tools/windows-package.ps1 -Out dist && tests/windows/package.ps1 dist  # the packages, on Windows
 tests/windows/gui.ps1 path\to\kudari.exe  # the window, on a Windows desktop
+tests/windows/bench.ps1 -Program path\to\kudari.exe  # start, waiting, memory, output through ConPTY
 tools/security.sh                                # secrets, dependencies, workflows
 tools/bench.sh                                   # speed of output and drawing, against other terminals
 tools/bench.sh --scenarios                       # start, showing, waiting and memory of Kudari
@@ -278,6 +279,13 @@ you object files that someone else compiled.
 and the GUI test run, taken together. It does not measure the C++ bridge and QML. The CI
 shows the table in the summary of the run, attaches the HTML report, and fails if the
 coverage drops below 90 %.
+
+`tests/windows/bench.ps1` measures the Windows front end in a desktop session: its start
+and a second start that shows the window again, what it takes while it waits, its memory,
+and the loads of `tools/bench.sh` as they come through ConPTY. The console host answers
+queries such as that of the cursor itself, so a load ends with a copy to the clipboard after
+it, and the console host does much of the work of each load. Compare a change only with
+runs on the same computer, before and after.
 
 `tools/sanitize.sh` builds Kudari with AddressSanitizer and UndefinedBehaviorSanitizer for
 its C++, the bridges to Qt and KDE and the code that cxx-qt makes, and runs the GUI test
