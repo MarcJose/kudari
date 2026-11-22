@@ -20,8 +20,11 @@ use crate::settings::{Settings, Store};
 /// Bell notifications are at most this frequent, so that a burst of bells is one notification.
 const BELL_INTERVAL: Duration = Duration::from_millis(500);
 
-/// How often the front end calls [`App::poll`] per second, for the auto save interval.
-pub const POLLS_PER_SECOND: u32 = 2;
+/// How often the front end calls [`App::poll`] while someone can see it or waits for it.
+pub const POLL_INTERVAL: Duration = Duration::from_millis(500);
+/// How often it calls it while the window is hidden and no terminal is watched or saved: the
+/// titles only go to D-Bus then, and the window shown polls at once.
+pub const HIDDEN_POLL_INTERVAL: Duration = Duration::from_secs(4);
 
 /// What the app needs to ask the front end about.
 pub trait Host {
@@ -258,7 +261,8 @@ pub struct App {
     focus_toggle_lock: bool,
     /// The window is only being shown again to get the focus, without animation.
     refocusing: bool,
-    polls: u32,
+    /// When the output was last saved for the terminals that save it.
+    auto_saved: Option<Instant>,
     /// Sessions an AI agent opened, the only ones it may close.
     /// The sessions agents opened, with the name of the agent that opened each.
     agent_sessions: BTreeMap<SessionId, String>,
@@ -294,7 +298,7 @@ impl App {
             last_bell: None,
             focus_toggle_lock: false,
             refocusing: false,
-            polls: 0,
+            auto_saved: None,
             agent_sessions: BTreeMap::new(),
             agents: Access::default(),
             window_visible: false,
@@ -1014,14 +1018,31 @@ impl App {
         self.activity_reported.clear();
     }
 
-    /// The periodic look at the terminals: titles, finished programs, silence and auto save.
-    pub fn poll(&mut self, statuses: &[Status]) -> Vec<Effect> {
+    /// How often [`App::poll`] is due: seldom while the window is hidden, unless a terminal is
+    /// watched for its program or its silence, or `auto_saving` its output, which want it on
+    /// time then most of all.
+    #[must_use]
+    pub fn poll_interval(&self, auto_saving: bool) -> Duration {
+        let watched = self.stack.all_terminals().into_iter().any(|terminal| {
+            self.stack
+                .terminal_state(terminal)
+                .is_some_and(|state| state.monitor_process || state.monitor_silence)
+        });
+        if self.window_visible || watched || auto_saving {
+            POLL_INTERVAL
+        } else {
+            HIDDEN_POLL_INTERVAL
+        }
+    }
+
+    /// The periodic look at the terminals at `now`: titles, finished programs, silence and
+    /// auto save, which goes by the time and not by the polls, as they come seldom at times.
+    pub fn poll(&mut self, statuses: &[Status], now: Instant) -> Vec<Effect> {
         let mut effects = Vec::new();
-        self.polls = self.polls.wrapping_add(1);
-        if self
-            .polls
-            .is_multiple_of(self.settings.auto_save_seconds.max(1) as u32 * POLLS_PER_SECOND)
-        {
+        let every = Duration::from_secs(self.settings.auto_save_seconds.max(1) as u64);
+        let saved = *self.auto_saved.get_or_insert(now);
+        if now.saturating_duration_since(saved) >= every {
+            self.auto_saved = Some(now);
             effects.push(Effect::AutoSave);
         }
         let mut changed = false;
@@ -1942,31 +1963,69 @@ mod tests {
         let terminal = app.active_terminal().unwrap();
         app.set_all_monitor(session, Monitor::Process, true);
         app.set_all_monitor(session, Monitor::Silence, true);
-        let renamed = app.poll(&[status(terminal, "vim", true, 0)]);
+        let start = Instant::now();
+        let at = |seconds: u64| start + Duration::from_secs(seconds);
+        let renamed = app.poll(&[status(terminal, "vim", true, 0)], at(0));
         assert!(renamed.contains(&Effect::Publish));
         assert_eq!(app.stack().tab_title(session), Some("vim"));
         assert!(
-            app.poll(&[status(terminal, "vim", true, 0)])
+            app.poll(&[status(terminal, "vim", true, 0)], at(1))
                 .contains(&Effect::AutoSave)
         );
-        let ended = notified(&app.poll(&[status(terminal, "vim", false, 11)]));
+        let ended = notified(&app.poll(&[status(terminal, "vim", false, 11)], at(1)));
         assert_eq!(ended.len(), 2, "{ended:?}");
         assert_eq!(ended[0].0, "processFinished");
         assert_eq!(ended[1], ("silence", "Silence in session \"vim\".".to_string()));
-        assert!(notified(&app.poll(&[status(terminal, "vim", false, 12)])).is_empty());
+        assert!(notified(&app.poll(&[status(terminal, "vim", false, 12)], at(1))).is_empty());
         app.terminal_output(terminal);
         assert_eq!(
-            notified(&app.poll(&[status(terminal, "vim", false, 12)])).len(),
+            notified(&app.poll(&[status(terminal, "vim", false, 12)], at(1))).len(),
             1,
             "silent again"
         );
         let mut fixed = app_with(&[("DynamicTabTitles", "false")]);
         let terminal = fixed.active_terminal().unwrap();
-        fixed.poll(&[status(terminal, "top", false, 0)]);
+        fixed.poll(&[status(terminal, "top", false, 0)], at(0));
         assert_eq!(
             fixed.stack().tab_title(fixed.stack().active_id().unwrap()),
             Some("Shell")
         );
+    }
+
+    #[test]
+    fn output_is_saved_by_the_time_and_not_by_the_polls() {
+        let mut app = app_with(&[("AutoSaveSeconds", "10")]);
+        let start = Instant::now();
+        let saves = |app: &mut App, seconds: u64| {
+            app.poll(&[], start + Duration::from_secs(seconds))
+                .contains(&Effect::AutoSave)
+        };
+        // Polls a second apart, as a hidden window may make them seldom, then every 4 s.
+        assert!(!saves(&mut app, 0));
+        assert!((1..10).all(|second| !saves(&mut app, second)));
+        assert!(saves(&mut app, 10));
+        assert!(!saves(&mut app, 14));
+        assert!(!saves(&mut app, 18));
+        assert!(saves(&mut app, 22));
+    }
+
+    #[test]
+    fn a_hidden_window_polls_seldom_unless_something_waits_for_it() {
+        let mut app = app_with(&[]);
+        let session = app.stack().active_id().unwrap();
+        assert!(!app.window_visible());
+        assert_eq!(app.poll_interval(false), HIDDEN_POLL_INTERVAL);
+        assert_eq!(app.poll_interval(true), POLL_INTERVAL, "auto save");
+        app.set_all_monitor(session, Monitor::Process, true);
+        assert_eq!(app.poll_interval(false), POLL_INTERVAL, "a watched program");
+        app.set_all_monitor(session, Monitor::Process, false);
+        app.set_all_monitor(session, Monitor::Silence, true);
+        assert_eq!(app.poll_interval(false), POLL_INTERVAL, "watched silence");
+        app.set_all_monitor(session, Monitor::Silence, false);
+        assert_eq!(app.poll_interval(false), HIDDEN_POLL_INTERVAL);
+        app.toggle_window(true);
+        assert!(app.window_visible());
+        assert_eq!(app.poll_interval(false), POLL_INTERVAL, "a shown window");
     }
 
     #[test]
@@ -1976,10 +2035,13 @@ mod tests {
         let terminal = app.active_terminal().unwrap();
         // A directory named so that its end shows first, as `exe.txt` shown as `txt.exe`.
         let turned = status(terminal, "~/photo\u{202e}gpj.exe : sh", false, 0);
-        assert!(app.poll(std::slice::from_ref(&turned)).contains(&Effect::Publish));
+        assert!(
+            app.poll(std::slice::from_ref(&turned), Instant::now())
+                .contains(&Effect::Publish)
+        );
         assert_eq!(app.stack().tab_title(session), Some("~/photogpj.exe : sh"));
         // The same title again is no change.
-        assert!(!app.poll(&[turned]).contains(&Effect::Publish));
+        assert!(!app.poll(&[turned], Instant::now()).contains(&Effect::Publish));
     }
 
     #[test]
@@ -1991,7 +2053,10 @@ mod tests {
         let right = right.unwrap();
         app.activate_terminal(left);
         // `htop` on the left, a shell that idles on the right.
-        app.poll(&[status(left, "~ : htop", true, 0), status(right, "~ : zsh", false, 0)]);
+        app.poll(
+            &[status(left, "~ : htop", true, 0), status(right, "~ : zsh", false, 0)],
+            Instant::now(),
+        );
         assert_eq!(app.stack().tab_title(session), Some("~ : htop"));
         app.activate_terminal(right);
         assert_eq!(app.stack().tab_title(session), Some("~ : zsh"), "by a click");
