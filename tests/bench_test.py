@@ -52,6 +52,18 @@ class Report(unittest.TestCase):
         part = text.split("frames that Qt Quick drew")[1]
         return next(line.split() for line in part.splitlines() if line.startswith(load + " "))
 
+    def test_the_rate_and_the_screens_are_told(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            self.assertIsNone(bench.screen_of(work))
+            (work / "refresh").write_text("144\n")
+            self.assertEqual(bench.screen_of(work), "The virtual screen showed 144 Hz.")
+            (work / "outputs").write_text("2\n")
+            self.assertEqual(
+                bench.screen_of(work),
+                "The virtual screen showed 144 Hz, with a second screen beside it, on which Kudari opened.",
+            )
+
     def test_the_same_font_for_all_is_told_and_cells_apart_are_warned_of(self):
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)
