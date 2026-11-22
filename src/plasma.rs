@@ -35,9 +35,19 @@ impl Clipboard for Plasma {
 
 impl Notifications for Plasma {
     fn notify(&self, event: &str, text: &str) {
+        #[cfg(feature = "test-hooks")]
+        {
+            *LAST_NOTIFICATION
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = text.to_string();
+        }
         kde::rk_notify(&qs(event), &qs(text));
     }
 }
+
+/// The text of the notification Kudari sent last, for the GUI test.
+#[cfg(feature = "test-hooks")]
+pub static LAST_NOTIFICATION: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 impl Desktop for Plasma {
     fn open_url(&self, url: &str) {
