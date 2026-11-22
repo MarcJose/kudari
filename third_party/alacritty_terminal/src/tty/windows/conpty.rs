@@ -4,6 +4,7 @@ use std::ffi::OsStr;
 use std::io::{Error, Result};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::IntoRawHandle;
+use std::sync::OnceLock;
 use std::{mem, ptr};
 
 use windows_sys::Win32::Foundation::{HANDLE, S_OK};
@@ -24,7 +25,10 @@ use crate::tty::windows::blocking::{UnblockedReader, UnblockedWriter};
 use crate::tty::windows::child::ChildExitWatcher;
 use crate::tty::windows::{Pty, cmdline, win32_string};
 
-const PIPE_CAPACITY: usize = crate::event_loop::READ_BUFFER_SIZE;
+/// The room of each of the pipes between the console host and the terminal. The console host
+/// sends a screen at a time, and the reading thread empties the pipe as it fills: a quarter
+/// of the buffer of the event loop keeps up with it, and each terminal reserves 1.5 MiB less.
+const PIPE_CAPACITY: usize = crate::event_loop::READ_BUFFER_SIZE / 4;
 
 /// Load the pseudoconsole API from conpty.dll if possible, otherwise use the
 /// standard Windows API.
@@ -46,6 +50,12 @@ struct ConptyApi {
 }
 
 impl ConptyApi {
+    /// The API, loaded once for all terminals rather than searched for with each.
+    fn get() -> &'static Self {
+        static API: OnceLock<ConptyApi> = OnceLock::new();
+        API.get_or_init(Self::new)
+    }
+
     fn new() -> Self {
         match Self::load_conpty() {
             Some(conpty) => {
@@ -88,7 +98,7 @@ impl ConptyApi {
 /// RAII Pseudoconsole.
 pub struct Conpty {
     pub handle: HPCON,
-    api: ConptyApi,
+    api: &'static ConptyApi,
 }
 
 impl Drop for Conpty {
@@ -105,7 +115,7 @@ impl Drop for Conpty {
 unsafe impl Send for Conpty {}
 
 pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
-    let api = ConptyApi::new();
+    let api = ConptyApi::get();
     let mut pty_handle: HPCON = 0;
 
     // Passing 0 as the size parameter allows the "system default" buffer
