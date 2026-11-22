@@ -168,9 +168,13 @@ Item {
         colorSwatch.visible = color.length > 0;
         if (colorSwatch.visible) {
             colorSwatch.color = color;
-            colorSwatch.x = Math.min(x + pane.theme.gridUnit, terminal.width - colorSwatch.width);
-            colorSwatch.y = Math.min(y + pane.theme.gridUnit, terminal.height - colorSwatch.height);
+            placeColorSwatch(x, y);
         }
+    }
+
+    function placeColorSwatch(x, y) {
+        colorSwatch.x = Math.min(x + pane.theme.gridUnit, terminal.width - colorSwatch.width);
+        colorSwatch.y = Math.min(y + pane.theme.gridUnit, terminal.height - colorSwatch.height);
     }
 
     function linkUnderMouse(x, y, modifiers) {
@@ -512,6 +516,8 @@ Item {
             onExited: {
                 linkLine.visible = false;
                 colorSwatch.visible = false;
+                // Back over the same cell, the link shows again.
+                terminal.forgetHover();
             }
             onEntered: {
                 if (pane.focusFollowsMouse) {
@@ -553,8 +559,13 @@ Item {
                     return;
                 }
                 terminal.mouseMove(event.x, event.y, event.modifiers);
-                pane.linkUnderMouse(event.x, event.y, event.modifiers);
-                pane.colorUnderMouse(event.x, event.y);
+                // Within a cell, only the swatch of a color follows the pointer.
+                if (terminal.hoverChanged(event.x, event.y, (event.modifiers & Qt.ControlModifier) !== 0)) {
+                    pane.linkUnderMouse(event.x, event.y, event.modifiers);
+                    pane.colorUnderMouse(event.x, event.y);
+                } else {
+                    pane.placeColorSwatch(event.x, event.y);
+                }
             }
             onReleased: event => {
                 selectionDrag.Drag.active = false;
