@@ -25,6 +25,12 @@
 
 #include <dwmapi.h>
 #include <windows.h>
+#include <appmodel.h>
+#include <roapi.h>
+#include <windows.data.xml.dom.h>
+#include <windows.ui.notifications.h>
+#include <wrl/client.h>
+#include <wrl/wrappers/corewrappers.h>
 #endif
 
 // The messages handed to the tray, for the GUI test: off unless QT_LOGGING_RULES turns it on,
@@ -465,8 +471,83 @@ void rk_win_set_tray_visible(bool visible)
     }
 }
 
-void rk_win_notify(const QString &title, const QString &text)
+#ifdef Q_OS_WIN
+namespace
 {
+using Microsoft::WRL::ComPtr;
+using Microsoft::WRL::Wrappers::HStringReference;
+namespace Dom = ABI::Windows::Data::Xml::Dom;
+namespace Notifications = ABI::Windows::UI::Notifications;
+
+// Whether Kudari runs from its package, whose identity notifications of Windows need.
+bool hasPackage()
+{
+    UINT32 length = 0;
+    return GetCurrentPackageFullName(&length, nullptr) == ERROR_INSUFFICIENT_BUFFER;
+}
+
+// Puts `text` into the element `node`, as a node of text: the title of a session, which
+// programs set, cannot bring markup of its own into the notification.
+bool setText(Dom::IXmlDocument *document, Dom::IXmlNode *node, const QString &text)
+{
+    const std::wstring wide = text.toStdWString();
+    ComPtr<Dom::IXmlText> content;
+    ComPtr<Dom::IXmlNode> contentNode;
+    ComPtr<Dom::IXmlNode> appended;
+    return SUCCEEDED(document->CreateTextNode(HStringReference(wide.c_str(), UINT32(wide.size())).Get(), &content))
+        && SUCCEEDED(content.As(&contentNode)) && SUCCEEDED(node->AppendChild(contentNode.Get(), &appended));
+}
+
+// A notification of Windows with `title` and `text`, in the group of `event`.
+bool showToast(const QString &title, const QString &text, const QString &event)
+{
+    ComPtr<Notifications::IToastNotificationManagerStatics> manager;
+    ComPtr<Dom::IXmlDocument> document;
+    ComPtr<Dom::IXmlNodeList> texts;
+    UINT32 count = 0;
+    if (FAILED(RoGetActivationFactory(HStringReference(RuntimeClass_Windows_UI_Notifications_ToastNotificationManager).Get(),
+                                      IID_PPV_ARGS(&manager)))
+        || FAILED(manager->GetTemplateContent(Notifications::ToastTemplateType_ToastText02, &document))
+        || FAILED(document->GetElementsByTagName(HStringReference(L"text").Get(), &texts))
+        || FAILED(texts->get_Length(&count)) || count < 2) {
+        return false;
+    }
+    ComPtr<Dom::IXmlNode> titleNode;
+    ComPtr<Dom::IXmlNode> textNode;
+    if (FAILED(texts->Item(0, &titleNode)) || FAILED(texts->Item(1, &textNode)) || !setText(document.Get(), titleNode.Get(), title)
+        || !setText(document.Get(), textNode.Get(), text)) {
+        return false;
+    }
+    ComPtr<Notifications::IToastNotificationFactory> factory;
+    ComPtr<Notifications::IToastNotification> toast;
+    if (FAILED(RoGetActivationFactory(HStringReference(RuntimeClass_Windows_UI_Notifications_ToastNotification).Get(),
+                                      IID_PPV_ARGS(&factory)))
+        || FAILED(factory->CreateToastNotification(document.Get(), &toast))) {
+        return false;
+    }
+    ComPtr<Notifications::IToastNotification2> grouped;
+    if (!event.isEmpty() && SUCCEEDED(toast.As(&grouped))) {
+        const std::wstring group = event.toStdWString();
+        grouped->put_Group(HStringReference(group.c_str(), UINT32(group.size())).Get());
+    }
+    ComPtr<Notifications::IToastNotifier> notifier;
+    return SUCCEEDED(manager->CreateToastNotifier(&notifier)) && SUCCEEDED(notifier->Show(toast.Get()));
+}
+}
+#endif
+
+void rk_win_notify(const QString &title, const QString &text, const QString &event)
+{
+#ifdef Q_OS_WIN
+    // With the package, Windows shows the notification itself and keeps it in its list, also
+    // without the icon in the tray; the icon is what is left without it.
+    if (hasPackage() && showToast(title, text, event)) {
+        qCInfo(lcNotify).noquote() << "toast" << title << text;
+        return;
+    }
+#else
+    Q_UNUSED(event)
+#endif
     if (!s_tray) {
         return;
     }
@@ -486,6 +567,6 @@ void rk_win_notify(const QString &title, const QString &text)
         s_tray->setVisible(true);
         s_trayHide->start();
     }
-    qCInfo(lcNotify).noquote() << title << text;
+    qCInfo(lcNotify).noquote() << "tray" << title << text;
     s_tray->showMessage(title, text, s_tray->icon());
 }

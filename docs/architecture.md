@@ -150,8 +150,8 @@ Each step leaves the KDE version as it was, with all its tests passing.
    a small gettext reader in the core that knows contexts.
 6. **Services.** The global shortcut through `RegisterHotKey`. F12 belongs to the debugger,
    so the first start asks for another key. The clipboard of Qt, without a primary
-   selection. Toast notifications, which need the identity of the MSIX package, falling back
-   to the tray. Links through `ShellExecuteW`. Accent color and light or dark mode from the
+   selection. Toast notifications in the group of their event, which need the identity of the
+   MSIX package, falling back to the tray. Links through `ShellExecuteW`. Accent color and light or dark mode from the
    settings of Windows, Mica or Acrylic through `DwmSetWindowAttribute` on Windows 11. A
    tray icon, a single instance, and a second start that toggles the window.
 7. **Agents.** The agent interface goes over a named pipe for the user only: a security

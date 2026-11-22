@@ -146,6 +146,6 @@ fn start_services() {
             "Windows does not give Kudari the shortcut %1, which another program may use. Choose another one on the page Shortcuts of the settings.",
             &shown,
         );
-        win::rk_win_notify(&qs("Kudari"), &qs(&text));
+        win::rk_win_notify(&qs("Kudari"), &qs(&text), &qs("shortcut"));
     }
 }
