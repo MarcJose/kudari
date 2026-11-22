@@ -1451,9 +1451,8 @@ fn file_at(name: &str, position: &str, directory: &Path) -> Option<String> {
     let real = crate::mounts::resolved(&path)?;
     let metadata = std::fs::metadata(&real).ok()?;
     let plain = metadata.is_file() && is_inert(&real, &metadata);
-    let desktop_entry = [&path, &real]
-        .iter()
-        .any(|path| path.extension().is_some_and(|extension| extension == "desktop"));
+    // A link named as a desktop entry, to a file that is not named so.
+    let desktop_entry = names_desktop_entry(&path);
     let is_position = position
         .split(':')
         .skip(1)
@@ -1463,12 +1462,63 @@ fn file_at(name: &str, position: &str, directory: &Path) -> Option<String> {
 }
 
 /// Whether opening a file starts nothing but a viewer or an editor: on Unix, any file that
-/// is not executable.
+/// is not executable and no desktop entry, which can start a program or open an address.
 #[cfg(unix)]
 #[must_use]
-pub fn is_inert(_: &Path, metadata: &std::fs::Metadata) -> bool {
+pub fn is_inert(path: &Path, metadata: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    metadata.permissions().mode() & 0o111 == 0
+    metadata.permissions().mode() & 0o111 == 0 && !is_desktop_entry(path, metadata)
+}
+
+/// Whether `path` has the name of a desktop entry, in any case: `.desktop` or `.kdelnk`.
+fn names_desktop_entry(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("desktop") || extension.eq_ignore_ascii_case("kdelnk"))
+}
+
+/// Whether the file at `path` is a desktop entry by its name or by how it begins, as the MIME
+/// database of freedesktop.org tells `application/x-desktop`, which `KIO` opens by what it
+/// says: `[Desktop Entry]` within its first 32 bytes, or one of the other starts of it. Only
+/// a regular file is read, without waiting for one that is not, and at most 64 bytes of it.
+#[cfg(unix)]
+fn is_desktop_entry(path: &Path, metadata: &std::fs::Metadata) -> bool {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    if names_desktop_entry(path) {
+        return true;
+    }
+    if !metadata.is_file() {
+        return false;
+    }
+    let Ok(file) = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+    else {
+        return false;
+    };
+    // The name can lead elsewhere by now.
+    if !file.metadata().is_ok_and(|opened| opened.is_file()) {
+        return false;
+    }
+    let mut start = Vec::with_capacity(64);
+    let _ = file.take(64).read_to_end(&mut start);
+    starts_as_desktop_entry(&start)
+}
+
+/// Whether `start` is how a desktop entry begins; see [`is_desktop_entry`].
+#[cfg(unix)]
+fn starts_as_desktop_entry(start: &[u8]) -> bool {
+    const AT_START: [&[u8]; 4] = [
+        b"[Desktop Action",
+        b"[KDE Desktop Entry]",
+        b"# Config File",
+        b"# KDE Config File",
+    ];
+    const ENTRY: &[u8] = b"[Desktop Entry]";
+    AT_START.iter().any(|prefix| start.starts_with(prefix))
+        || (0..=32).any(|offset| start.get(offset..).is_some_and(|rest| rest.starts_with(ENTRY)))
 }
 
 /// Whether opening a file starts nothing but a viewer or an editor. On Windows the
@@ -1831,6 +1881,27 @@ mod tests {
         assert_eq!(existing_file("draft(1).", &directory), Some(draft));
         assert_eq!(existing_file("run.sh", &directory), None);
         assert_eq!(existing_file("evil.desktop", &directory), None);
+        // In another case, under the other name, or as a file named otherwise that says it is
+        // one, a desktop entry counts as such; so does a link with its name.
+        std::fs::write(directory.join("evil.Desktop"), "x").unwrap();
+        std::fs::write(directory.join("evil.KDELNK"), "x").unwrap();
+        std::fs::write(
+            directory.join("README"),
+            "\n\n[Desktop Entry]\nType=Link\nURL=http://x/\n",
+        )
+        .unwrap();
+        std::fs::write(directory.join("evil.txt"), "[Desktop Action run]\nExec=x\n").unwrap();
+        std::os::unix::fs::symlink(directory.join("notes.txt"), directory.join("link.desktop")).unwrap();
+        for name in ["evil.Desktop", "evil.KDELNK", "README", "evil.txt", "link.desktop"] {
+            assert_eq!(existing_file(name, &directory), None, "{name}");
+        }
+        // Text that only mentions one further in is no desktop entry.
+        std::fs::write(
+            directory.join("about.md"),
+            format!("{}\n[Desktop Entry]\n", "x".repeat(40)),
+        )
+        .unwrap();
+        assert!(existing_file("about.md", &directory).is_some());
         assert_eq!(existing_file("missing", &directory), None);
         std::fs::remove_dir_all(directory).unwrap();
     }
