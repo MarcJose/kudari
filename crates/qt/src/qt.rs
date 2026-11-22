@@ -119,7 +119,16 @@ pub mod ffi {
         fn rk_print_text(text: &QString);
         /// Asks without blocking for the scrollback size of a terminal; the answer arrives in
         /// `qt_history_lines_chosen`.
-        fn rk_ask_history_lines(terminal: i32, current: i32, title: &QString, label: &QString);
+        /// Asks for the lines of history of `terminal`, telling the memory they take at
+        /// `line_bytes` a line, with `%1` in `estimate` for it.
+        fn rk_ask_history_lines(
+            terminal: i32,
+            current: i32,
+            title: &QString,
+            label: &QString,
+            line_bytes: f64,
+            estimate: &QString,
+        );
 
         /// The names of the screens, separated by commas.
         fn rk_screen_names() -> QString;
