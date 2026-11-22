@@ -29,55 +29,55 @@ pub fn run() -> i32 {
     }
 }
 
+/// Every call carries `no_autostart`: a call to a name nobody owns would else start Kudari
+/// from its service file, which is not for an agent to decide, also when the user quits
+/// Kudari while a call of the agent waits for an answer and tries again.
 #[zbus::proxy(
     interface = "io.github.marcjose.kudari.Agent",
     default_service = "io.github.marcjose.kudari",
     default_path = "/kudari/agent"
 )]
 trait Agent {
+    #[zbus(no_autostart)]
     fn terminals(&self) -> zbus::Result<String>;
-    #[zbus(name = "readTerminal")]
+    #[zbus(name = "readTerminal", no_autostart)]
     fn read_terminal(&self, terminal: i32, lines: u32) -> zbus::Result<String>;
-    #[zbus(name = "sendText")]
+    #[zbus(name = "sendText", no_autostart)]
     fn send_text(&self, terminal: i32, text: &str, execute: bool) -> zbus::Result<String>;
-    #[zbus(name = "sendKey")]
+    #[zbus(name = "sendKey", no_autostart)]
     fn send_key(&self, terminal: i32, key: &str) -> zbus::Result<()>;
-    #[zbus(name = "openSession")]
+    #[zbus(name = "openSession", no_autostart)]
     fn open_session(&self, title: &str) -> zbus::Result<String>;
-    #[zbus(name = "closeSession")]
+    #[zbus(name = "closeSession", no_autostart)]
     fn close_session(&self, session: i32) -> zbus::Result<()>;
 }
 
+/// How long one call waits for its answer: Kudari answers within a second, also when its
+/// window is busy, so only a Kudari that hangs takes longer.
+const CALL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// What a tool says when Kudari does not run.
+const NOT_RUNNING: &str =
+    "Kudari is not running. The user can start it from the application menu or with the command kudari.";
+
 /// The running Kudari, reached over the session bus.
 struct Dbus {
-    connection: zbus::Connection,
+    agent: AgentProxy<'static>,
 }
 
 impl Dbus {
     fn connect() -> zbus::Result<Self> {
-        Ok(Self {
-            connection: block_on(zbus::Connection::session())?,
-        })
-    }
-
-    /// The interface of the running instance. A call to a name nobody owns would start
-    /// Kudari from its service file, which is not for an agent to decide.
-    fn agent(&self) -> Result<AgentProxy<'_>, String> {
-        let text = |error: zbus::Error| error.to_string();
-        let bus = block_on(zbus::fdo::DBusProxy::new(&self.connection)).map_err(text)?;
-        let service = zbus::names::BusName::try_from(crate::dbus::SERVICE).map_err(|error| error.to_string())?;
-        if !block_on(bus.name_has_owner(service)).map_err(|error| error.to_string())? {
-            return Err(
-                "Kudari is not running. The user can start it from the application menu or with the command kudari."
-                    .to_string(),
-            );
-        }
-        block_on(
-            AgentProxy::builder(&self.connection)
+        let connection = block_on(
+            zbus::connection::Builder::session()
+                .method_timeout(CALL_TIMEOUT)
+                .build(),
+        )?;
+        let agent = block_on(
+            AgentProxy::builder(&connection)
                 .cache_properties(zbus::proxy::CacheProperties::No)
                 .build(),
-        )
-        .map_err(text)
+        )?;
+        Ok(Self { agent })
     }
 }
 
@@ -114,6 +114,9 @@ fn patiently<T>(call: impl Fn() -> zbus::Result<T>) -> Result<T, String> {
 /// The sentence the interface answered with, or what went wrong on the way.
 fn reason(error: zbus::Error) -> String {
     use zbus::DBusError;
+    if not_running(&error) {
+        return NOT_RUNNING.to_string();
+    }
     match error {
         zbus::Error::FDO(error) => error.description().map_or_else(|| error.to_string(), str::to_string),
         zbus::Error::MethodError(_, Some(detail), _) => detail,
@@ -121,30 +124,45 @@ fn reason(error: zbus::Error) -> String {
     }
 }
 
+/// Whether the bus answered that nobody has the name of Kudari, which a call without autostart
+/// gets when Kudari does not run.
+fn not_running(error: &zbus::Error) -> bool {
+    use zbus::DBusError;
+    let name = match error {
+        zbus::Error::FDO(error) => error.name().to_string(),
+        zbus::Error::MethodError(name, _, _) => name.to_string(),
+        _ => return false,
+    };
+    matches!(
+        name.as_str(),
+        "org.freedesktop.DBus.Error.ServiceUnknown" | "org.freedesktop.DBus.Error.NameHasNoOwner"
+    )
+}
+
 impl Instance for Dbus {
     fn terminals(&self) -> Result<String, String> {
-        let agent = self.agent()?;
+        let agent = &self.agent;
         patiently(|| block_on(agent.terminals()))
     }
 
     fn read_terminal(&self, terminal: i32, lines: u32) -> Result<String, String> {
-        let agent = self.agent()?;
+        let agent = &self.agent;
         patiently(|| block_on(agent.read_terminal(terminal, lines)))
     }
 
     fn send_text(&self, terminal: i32, text: &str, execute: bool) -> Result<String, String> {
-        let agent = self.agent()?;
+        let agent = &self.agent;
         patiently(|| block_on(agent.send_text(terminal, text, execute)))
     }
 
     fn send_key(&self, terminal: i32, key: &str) -> Result<(), String> {
-        let agent = self.agent()?;
+        let agent = &self.agent;
         patiently(|| block_on(agent.send_key(terminal, key)))
     }
 
     /// Returns once the shell of the new terminal runs, so the next call can use it.
     fn open_session(&self, title: &str) -> Result<String, String> {
-        let agent = self.agent()?;
+        let agent = &self.agent;
         let opened = patiently(|| block_on(agent.open_session(title)))?;
         let terminal = serde_json::from_str::<Value>(&opened)
             .ok()
@@ -157,7 +175,7 @@ impl Instance for Dbus {
     }
 
     fn close_session(&self, session: i32) -> Result<(), String> {
-        let agent = self.agent()?;
+        let agent = &self.agent;
         patiently(|| block_on(agent.close_session(session)))
     }
 }
@@ -170,6 +188,21 @@ mod tests {
 
     fn failing(error: zbus::fdo::Error) -> zbus::Result<String> {
         Err(zbus::Error::FDO(Box::new(error)))
+    }
+
+    #[test]
+    fn nobody_with_the_name_means_kudari_does_not_run() {
+        let unknown = zbus::Error::FDO(Box::new(zbus::fdo::Error::ServiceUnknown(
+            "The name is not activatable".into(),
+        )));
+        assert_eq!(reason(unknown), NOT_RUNNING);
+        let no_owner = zbus::Error::FDO(Box::new(zbus::fdo::Error::NameHasNoOwner("gone".into())));
+        assert_eq!(reason(no_owner), NOT_RUNNING);
+        // What Kudari answers stays as it said it.
+        let denied = zbus::Error::FDO(Box::new(zbus::fdo::Error::AccessDenied(
+            "Reading terminals is switched off".into(),
+        )));
+        assert_eq!(reason(denied), "Reading terminals is switched off");
     }
 
     #[test]
