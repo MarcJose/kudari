@@ -113,7 +113,9 @@ where
     }
 
     #[inline]
-    fn pty_read<X>(&mut self, state: &mut State, buf: &mut [u8], mut writer: Option<&mut X>) -> io::Result<()>
+    /// Reads and parses what the PTY has, and tells whether it read it dry: it stops after
+    /// `MAX_LOCKED_READ` with output perhaps left.
+    fn pty_read<X>(&mut self, state: &mut State, buf: &mut [u8], mut writer: Option<&mut X>) -> io::Result<bool>
     where
         X: Write,
     {
@@ -128,19 +130,24 @@ where
         let mut terminal_lease = Some(shared.lease());
         let mut terminal = None;
         let mut locked_since = Instant::now();
+        let mut dry = false;
 
         loop {
             // Read from the PTY.
             let mut nothing_new = false;
             match self.pty.reader().read(&mut buf[unprocessed..]) {
                 // This is received on Windows/macOS when no more data is readable from the PTY.
-                Ok(0) if unprocessed == 0 => break,
+                Ok(0) if unprocessed == 0 => {
+                    dry = true;
+                    break;
+                }
                 Ok(0) => nothing_new = true,
                 Ok(got) => unprocessed += got,
                 Err(err) => match err.kind() {
                     ErrorKind::Interrupted | ErrorKind::WouldBlock => {
                         // Go back to mio if we're caught up on parsing and the PTY would block.
                         if unprocessed == 0 {
+                            dry = true;
                             break;
                         }
                         nothing_new = true;
@@ -190,7 +197,7 @@ where
                     // size. Shutting down needs nothing more parsed.
                     if !self.drain_recv_channel(state) {
                         state.shut_down = true;
-                        return Ok(());
+                        return Ok(true);
                     }
                     if state.needs_write() {
                         self.pty_write(state)?;
@@ -215,7 +222,7 @@ where
             self.event_proxy.send_event(Event::Wakeup);
         }
 
-        Ok(())
+        Ok(dry)
     }
 
     #[inline]
@@ -325,7 +332,20 @@ where
                             }
 
                             if event.readable {
-                                if let Err(err) = self.pty_read(&mut state, &mut buf, pipe.as_mut()) {
+                                let read = self.pty_read(&mut state, &mut buf, pipe.as_mut());
+                                // On Windows the thread that reads the PTY into a pipe tells
+                                // the poller of output only once a read found the pipe empty.
+                                // Where a read stopped before that, registering again tells
+                                // of what is left at once, and of what comes later; else the
+                                // terminal would wait for ever. Elsewhere the poller is level
+                                // triggered and tells of it anyway.
+                                if cfg!(windows) && matches!(read, Ok(false)) {
+                                    if let Err(err) = self.pty.reregister(&self.poll, interest, poll_opts) {
+                                        error!("Event loop registration error: {err}");
+                                        break 'event_loop;
+                                    }
+                                }
+                                if let Err(err) = read {
                                     // On Linux, a `read` on the master side of a PTY can fail
                                     // with `EIO` if the client side hangs up.  In that case,
                                     // just loop back round for the inevitable `Exited` event.

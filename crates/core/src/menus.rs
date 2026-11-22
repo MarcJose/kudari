@@ -344,6 +344,10 @@ pub struct Terminal<'a> {
 pub fn terminal_menu(terminal: &Terminal, states: &dyn States) -> Value {
     let mut entries = Vec::new();
     if !terminal.link.is_empty() {
+        // Where the link goes, as it would open it, in an entry that does nothing, as under
+        // KDE. A menu takes `&` as the mark of the key of an entry, and `&&` as `&`.
+        let shown = crate::view::shown_target(terminal.link);
+        entries.push(json!({ "type": "address", "text": shown.replace('&', "&&"), "spoken": shown, "enabled": false }));
         entries.push(
             json!({ "type": "link", "link": terminal.link, "copy": false, "text": tr("@action:inmenu", "Open Link") }),
         );
@@ -552,8 +556,11 @@ mod tests {
             },
             &Checked,
         );
-        assert_eq!(linked[0]["type"], "link");
-        assert_eq!(linked[1]["copy"], true);
+        assert_eq!(linked[0]["type"], "address");
+        assert_eq!(linked[0]["text"], "https://kde.org");
+        assert_eq!(linked[0]["enabled"], false);
+        assert_eq!(linked[1]["type"], "link");
+        assert_eq!(linked[2]["copy"], true);
         let signals = linked.as_array().unwrap().last().unwrap()["entries"]
             .as_array()
             .unwrap()
@@ -563,6 +570,41 @@ mod tests {
         for signal in SIGNALS {
             assert_eq!(Signal::from_number(signal_number(signal)), Some(signal));
         }
+    }
+
+    #[test]
+    fn the_address_of_a_link_shows_as_it_would_open() {
+        let address = |link: &str| {
+            let terminal = Terminal {
+                link,
+                can_copy: false,
+                signals: &[],
+            };
+            terminal_menu(&terminal, &Checked)[0]["text"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        // What does not show, as a mark of direction, shows as a sign, and an ampersand stays
+        // one in the menu.
+        assert_eq!(
+            address("https://kde.org/\u{202e}gpj.exe"),
+            "https://kde.org/\u{fffd}gpj.exe"
+        );
+        assert_eq!(address("https://kde.org/?a=1&b=2"), "https://kde.org/?a=1&&b=2");
+        let terminal = Terminal {
+            link: "https://kde.org/?a=1&b=2",
+            can_copy: false,
+            signals: &[],
+        };
+        // A screen reader says it as it shows.
+        assert_eq!(
+            terminal_menu(&terminal, &Checked)[0]["spoken"],
+            "https://kde.org/?a=1&b=2"
+        );
+        let long = format!("https://kde.org/{}", "x".repeat(500));
+        assert_eq!(address(&long), crate::view::shown_target(&long));
+        assert!(address(&long).chars().count() < long.chars().count());
     }
 
     #[test]

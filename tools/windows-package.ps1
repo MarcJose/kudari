@@ -3,7 +3,8 @@
 <#
 .SYNOPSIS
 Makes the Windows packages of Kudari: a ZIP archive and an MSIX package with the program,
-Qt, the runtime of Visual C++ and the licenses, the program and the package signed.
+Qt, the runtime of Visual C++, the console host of Windows Terminal and the licenses, the
+program and the package signed.
 
 .DESCRIPTION
     tools/windows-package.ps1 -Out dist [-Certificate signing.pfx] [-Timestamp] [-Sbom crates.cdx.json]
@@ -35,6 +36,10 @@ $QtLicenses = @{
     'GPL-3.0-only.txt'  = '8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903'
 }
 $QtLicenseUrl = 'https://raw.githubusercontent.com/qt/qtbase/v6.8.3/LICENSES'
+# The console host of Windows Terminal and the conpty.dll that starts it, from the package
+# Microsoft.Windows.Console.ConPTY; tools/update-pins.py renews both lines.
+$ConPtyVersion = '1.25.261109001'
+$ConPtySha256 = '3d77f535df848e44225c2a8912ac844fecb23f3057732b639f3034b587496f09'
 $TimestampUrl = 'http://timestamp.digicert.com'
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -123,6 +128,23 @@ try {
     $runtime = Get-ChildItem (Join-Path $redist.FullName 'x64') -Directory -Filter 'Microsoft.VC*.CRT' | Select-Object -First 1
     Copy-Item (Join-Path $runtime.FullName '*.dll') $stage
 
+    # conpty.dll starts OpenConsole.exe beside it as the console host of the terminals, in place
+    # of the one of Windows, which takes the output of programs many times slower. Where
+    # OpenConsole.exe is missing or blocked, conpty.dll takes the one of Windows.
+    $conptyPackage = Join-Path $work 'conpty.zip'
+    Invoke-WebRequest "https://api.nuget.org/v3-flatcontainer/microsoft.windows.console.conpty/$ConPtyVersion/microsoft.windows.console.conpty.$ConPtyVersion.nupkg" -OutFile $conptyPackage
+    if ((Get-FileHash $conptyPackage -Algorithm SHA256).Hash -ne $ConPtySha256) { throw 'Unexpected package of ConPTY' }
+    $conpty = Join-Path $work 'conpty'
+    Expand-Archive $conptyPackage $conpty
+    foreach ($file in 'runtimes\win-x64\native\conpty.dll', 'build\native\runtimes\x64\OpenConsole.exe') {
+        $path = Join-Path $conpty $file
+        $signature = Get-AuthenticodeSignature $path
+        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike 'CN=Microsoft Corporation,*') {
+            throw "$file is not signed by Microsoft"
+        }
+        Copy-Item $path $stage
+    }
+
     $licenses = (New-Item -ItemType Directory (Join-Path $stage 'licenses')).FullName
     Copy-Item LICENSES\MIT.txt (Join-Path $licenses 'Kudari-MIT.txt')
     # The crates of the Windows build, which links some that Linux does not.
@@ -132,6 +154,29 @@ try {
         Invoke-WebRequest "$QtLicenseUrl/$file" -OutFile $path
         if ((Get-FileHash $path -Algorithm SHA256).Hash -ne $QtLicenses[$file]) { throw "Unexpected text of $file" }
     }
+    @'
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED *AS IS*, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+'@ | Set-Content (Join-Path $licenses 'ConPTY-MIT.txt') -Encoding utf8NoBOM
     $qtVersion = (qmake -query QT_VERSION).Trim()
     @"
 Kudari $version is under the MIT license, in Kudari-MIT.txt. The Rust crates it is built
@@ -145,6 +190,10 @@ Qt is at https://download.qt.io/official_releases/qt/.
 
 The runtime of Microsoft Visual C++ $($redist.Name) (msvcp140*.dll, vcruntime140*.dll,
 concrt140.dll) is redistributed under the license terms of Microsoft Visual Studio.
+
+conpty.dll and OpenConsole.exe, of Windows Terminal, come unchanged from the package
+Microsoft.Windows.Console.ConPTY $ConPtyVersion, under the MIT license in ConPTY-MIT.txt.
+Their source is at https://github.com/microsoft/terminal.
 "@ | Set-Content (Join-Path $licenses 'README.txt') -Encoding utf8NoBOM
 
     Invoke-Sign (Join-Path $stage 'kudari.exe')
@@ -172,7 +221,7 @@ concrt140.dll) is redistributed under the license terms of Microsoft Visual Stud
 
     if ($Sbom) {
         $cdx = Join-Path $Out "$name-x86_64-windows.cdx.json"
-        python tools/windows_sbom.py $Sbom $stage $qtVersion $redist.Name | Set-Content $cdx -Encoding utf8NoBOM
+        python tools/windows_sbom.py $Sbom $stage $qtVersion $redist.Name $ConPtyVersion | Set-Content $cdx -Encoding utf8NoBOM
     }
     Get-ChildItem $Out | ForEach-Object { Write-Host $_.FullName }
 } finally {

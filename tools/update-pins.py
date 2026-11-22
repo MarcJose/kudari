@@ -1,22 +1,29 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Marc Jose <marc@hahn-jose.de>
 # SPDX-License-Identifier: MIT
-"""Renews the container images pinned in the workflows, which Dependabot does not see.
+"""Renews the container images pinned in the workflows and the package of ConPTY pinned in
+tools/windows-package.ps1, which Dependabot does not see.
 
     tools/update-pins.py [--check]
 
 The Arch image moves to the newest weekly base image, TruffleHog to its newest release;
-each keeps a tag to read and the digest that decides. --check only reports what is behind.
+each keeps a tag to read and the digest that decides. ConPTY moves to its newest release
+that is no preview, with the SHA-256 of its package. --check only reports what is behind.
 """
 
 import argparse
+import hashlib
 import json
 import re
 import sys
 import urllib.request
 from pathlib import Path
 
-WORKFLOWS = Path(__file__).resolve().parent.parent / ".github" / "workflows"
+ROOT = Path(__file__).resolve().parent.parent
+WORKFLOWS = ROOT / ".github" / "workflows"
+PACKAGE = ROOT / "tools" / "windows-package.ps1"
+CONPTY = re.compile(r"\$ConPtyVersion = '([^']+)'\n\$ConPtySha256 = '([0-9a-f]{64})'")
+NUGET = "https://api.nuget.org/v3-flatcontainer/microsoft.windows.console.conpty"
 ARCH = re.compile(r"archlinux:base-[0-9.]+@sha256:[0-9a-f]{64}")
 TRUFFLEHOG = re.compile(r"ghcr\.io/trufflesecurity/trufflehog:[0-9.]+@sha256:[0-9a-f]{64}")
 
@@ -49,6 +56,14 @@ def newest_trufflehog():
     return f"ghcr.io/trufflesecurity/trufflehog:{version}@{digest}"
 
 
+def newest_conpty():
+    data, _ = fetch(f"{NUGET}/index.json")
+    releases = [version for version in json.loads(data)["versions"] if "-" not in version]
+    version = max(releases, key=lambda version: tuple(int(part) for part in version.split(".")))
+    package, _ = fetch(f"{NUGET}/{version}/microsoft.windows.console.conpty.{version}.nupkg")
+    return version, hashlib.sha256(package).hexdigest()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--check", action="store_true", help="only report pins that are behind")
@@ -67,8 +82,18 @@ def main():
                     updated = updated.replace(old, pin)
         if updated != text and not arguments.check:
             workflow.write_text(updated)
+    text = PACKAGE.read_text()
+    pinned = CONPTY.search(text)
+    if pinned is None:
+        sys.exit(f"update-pins: no pin of ConPTY in {PACKAGE.name}")
+    version, digest = newest_conpty()
+    if pinned.group(1) != version:
+        behind = True
+        print(f"{PACKAGE.name}: ConPTY {pinned.group(1)} -> {version}")
+        if not arguments.check:
+            PACKAGE.write_text(text.replace(pinned.group(0), f"$ConPtyVersion = '{version}'\n$ConPtySha256 = '{digest}'"))
     if not behind:
-        print("All pinned images are current.")
+        print("All pins are current.")
     sys.exit(1 if behind and arguments.check else 0)
 
 

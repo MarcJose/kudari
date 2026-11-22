@@ -11,6 +11,7 @@
 #include <QKeySequence>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QLoggingCategory>
 #include <QMenu>
 #include <QQuickStyle>
 #include <QQuickWindow>
@@ -25,6 +26,10 @@
 #include <dwmapi.h>
 #include <windows.h>
 #endif
+
+// The messages handed to the tray, for the GUI test: off unless QT_LOGGING_RULES turns it on,
+// as the notifications of Windows can be off.
+Q_LOGGING_CATEGORY(lcNotify, "kudari.notify", QtWarningMsg)
 
 namespace
 {
@@ -57,9 +62,39 @@ LRESULT CALLBACK instanceProcedure(HWND window, UINT message, WPARAM wParam, LPA
     return DefWindowProcW(window, message, wParam, lParam);
 }
 
-// The virtual key of Windows for a key of Qt, for the keys a global shortcut is likely to use.
-UINT virtualKey(Qt::Key key)
+// The virtual key of Windows for a key of the number pad, which has keys of its own for the
+// digits and for arithmetic; 0 for the others, which are the same keys as elsewhere.
+UINT keypadKey(Qt::Key key)
 {
+    if (key >= Qt::Key_0 && key <= Qt::Key_9) {
+        return VK_NUMPAD0 + static_cast<UINT>(key - Qt::Key_0);
+    }
+    switch (key) {
+    case Qt::Key_Asterisk:
+        return VK_MULTIPLY;
+    case Qt::Key_Plus:
+        return VK_ADD;
+    case Qt::Key_Minus:
+        return VK_SUBTRACT;
+    case Qt::Key_Slash:
+        return VK_DIVIDE;
+    case Qt::Key_Period:
+    case Qt::Key_Comma:
+        return VK_DECIMAL;
+    default:
+        return 0;
+    }
+}
+
+// The virtual key of Windows for a key of Qt, for the keys a global shortcut is likely to use.
+UINT virtualKey(QKeyCombination combination)
+{
+    const Qt::Key key = combination.key();
+    if (combination.keyboardModifiers().testFlag(Qt::KeypadModifier)) {
+        if (const UINT keypad = keypadKey(key)) {
+            return keypad;
+        }
+    }
     if (key >= Qt::Key_F1 && key <= Qt::Key_F24) {
         return VK_F1 + static_cast<UINT>(key - Qt::Key_F1);
     }
@@ -180,7 +215,7 @@ bool rk_win_claim_instance(const QString &name)
 
 bool rk_win_hotkey_supported(const QString &sequence)
 {
-    return sequence.isEmpty() || virtualKey(QKeySequence(sequence)[0].key()) != 0;
+    return sequence.isEmpty() || virtualKey(QKeySequence(sequence)[0]) != 0;
 }
 
 bool rk_win_register_hotkey(const QString &sequence)
@@ -193,7 +228,7 @@ bool rk_win_register_hotkey(const QString &sequence)
         return true;
     }
     const QKeyCombination combination = QKeySequence(sequence)[0];
-    const UINT key = virtualKey(combination.key());
+    const UINT key = virtualKey(combination);
     if (key == 0) {
         return false;
     }
@@ -451,5 +486,6 @@ void rk_win_notify(const QString &title, const QString &text)
         s_tray->setVisible(true);
         s_trayHide->start();
     }
+    qCInfo(lcNotify).noquote() << title << text;
     s_tray->showMessage(title, text, s_tray->icon());
 }
