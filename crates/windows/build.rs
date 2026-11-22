@@ -96,6 +96,8 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         println!("cargo:rustc-link-lib=user32");
         println!("cargo:rustc-link-lib=dwmapi");
+        // The activation of Windows Runtime classes, for the notifications.
+        println!("cargo:rustc-link-lib=runtimeobject");
     }
     // The parts of the settings pages of kudari-qt, in the style of Windows: they import the
     // directory qrc:/qml/form, which each front end fills with its own.

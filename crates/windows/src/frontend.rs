@@ -92,8 +92,8 @@ impl Clipboard for Windows {
 }
 
 impl Notifications for Windows {
-    fn notify(&self, _event: &str, text: &str) {
-        win::rk_win_notify(&qs("Kudari"), &qs(text));
+    fn notify(&self, event: &str, text: &str) {
+        win::rk_win_notify(&qs("Kudari"), &qs(text), &qs(event));
     }
 }
 

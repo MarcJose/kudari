@@ -102,6 +102,48 @@ try {
     Test-Check 'kudari mcp lists the tools' ($answers -match '"list_terminals"')
     Test-Check 'kudari mcp says that Kudari is not running' ($answers -match 'Kudari is not running')
     if ($failures) { Write-Host $answers }
+
+    # From the package, a message of Kudari is a notification of Windows in the group of its
+    # event, which Windows keeps in its list: here that Windows refuses the shortcut, which the
+    # test holds. Windows makes a message through the tray icon of a package a notification as
+    # well, but one without a group and with the icon shown for it. The settings of the
+    # package go where Windows keeps the files of the package, not into those of the user.
+    # Windows shows notifications only on a desktop where the user has them on; Windows
+    # PowerShell reads them, as PowerShell 7 does not know the classes of Windows Runtime.
+    $application = "$($package.PackageFamilyName)!Kudari"
+    $notifications = {
+        param([string] $application, [string] $what)
+        [void] [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+        if ($what -eq 'setting') {
+            [string] [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($application).Setting
+        } else {
+            [Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory($application) |
+                ForEach-Object { "$($_.Group) $($_.Content.GetXml())" }
+        }
+    }
+    $setting = powershell.exe -NoProfile -Command $notifications -args $application, 'setting'
+    if ($setting -ne 'Enabled' -or -not [Environment]::UserInteractive) {
+        Write-Host "skip  a message of Kudari from the package is a notification of Windows: they are '$setting' here"
+    } else {
+        $settings = Join-Path $env:LOCALAPPDATA "Packages\$($package.PackageFamilyName)\LocalCache\Roaming\Kudari"
+        New-Item -ItemType Directory -Force $settings | Out-Null
+        Set-Content (Join-Path $settings 'kudari.ini') "[Dialogs]`nFirstRun=false`n[Shortcuts]`ntoggle-window-state=Ctrl+Alt+Num+5"
+        Add-Type -Namespace KudariPackage -Name Hotkeys -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool RegisterHotKey(System.IntPtr window, int id, uint modifiers, uint key);
+[DllImport("user32.dll")] public static extern bool UnregisterHotKey(System.IntPtr window, int id);
+'@
+        $held = [KudariPackage.Hotkeys]::RegisterHotKey([IntPtr]::Zero, 1, 0x4003, 0x65)
+        Start-Process "shell:AppsFolder\$application"
+        $told = $null
+        foreach ($attempt in 1..30) {
+            $told = @(powershell.exe -NoProfile -Command $notifications -args $application, 'history') -match '^shortcut .*does not give Kudari the shortcut'
+            if ($told) { break }
+            Start-Sleep -Milliseconds 500
+        }
+        Test-Check 'a message of Kudari from the package is a notification of Windows in the group of its event' ($held -and [bool] $told)
+        Get-Process kudari -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$($package.InstallLocation)*" } | Stop-Process -Force
+        [void] [KudariPackage.Hotkeys]::UnregisterHotKey([IntPtr]::Zero, 1)
+    }
 } finally {
     Get-AppxPackage -Name 'io.github.marcjose.kudari' | Remove-AppxPackage
     $store.Remove($certificate)

@@ -23,7 +23,9 @@ pub mod ffi {
         fn rk_win_hotkey_supported(sequence: &QString) -> bool;
         fn rk_win_setup_tray(toggle_text: &QString, quit_text: &QString);
         fn rk_win_set_tray_visible(visible: bool);
-        fn rk_win_notify(title: &QString, text: &QString);
+        /// Tells the user `text`: as a notification of Windows where Kudari runs from its
+        /// package, grouped by `event`, else through the icon in the tray.
+        fn rk_win_notify(title: &QString, text: &QString, event: &QString);
         /// For checks: saves the window as an image after `delay` milliseconds and quits.
         fn rk_win_screenshot_later(path: &QString, delay: i32);
         /// Loads libraries only from the folder of the program and from System32, never from
