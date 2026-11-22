@@ -1323,6 +1323,14 @@ msgid "an unknown program"
 msgstr "einem unbekannten Programm"
 
 msgctxt "@info"
+msgid "Its program is %1."
+msgstr "Sein Programm ist %1."
+
+msgctxt "@info"
+msgid "It lies in a folder for downloads or for temporary files, where programs come that nobody installed."
+msgstr "Es liegt in einem Ordner für Downloads oder für temporäre Dateien, in den Programme kommen, die niemand installiert hat."
+
+msgctxt "@info"
 msgid "Allow this only if you started the agent yourself. Its access lasts until the agent ends, or until you end it with the eye button in the bar."
 msgstr "Erlauben Sie das nur, wenn Sie den Agenten selbst gestartet haben. Sein Zugriff gilt, bis der Agent endet oder bis Sie ihn mit dem Augen-Knopf in der Leiste beenden."
 

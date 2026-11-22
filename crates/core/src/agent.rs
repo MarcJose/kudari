@@ -10,7 +10,7 @@
 //! connection, normally one `kudari mcp`, and the answer holds until it disconnects.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
@@ -309,9 +309,54 @@ impl Access {
     }
 }
 
+/// The program behind an agent, as the question names it.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Asker<'a> {
+    /// The name of the program, which it chooses itself.
+    pub name: Option<&'a str>,
+    /// Where its program lies, where the system tells it.
+    pub path: Option<&'a Path>,
+    /// That place is a folder for downloads or for temporary files.
+    pub unusual: bool,
+}
+
+/// The folders for downloads and temporary files of this user on Windows, where programs
+/// come that nobody installed.
+#[must_use]
+pub fn unusual_folders() -> Vec<PathBuf> {
+    let variable = |name: &str| {
+        std::env::var_os(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    let mut folders: Vec<PathBuf> = ["TEMP", "TMP"].iter().filter_map(|name| variable(name)).collect();
+    folders.extend(variable("USERPROFILE").map(|home| home.join("Downloads")));
+    folders.extend(variable("LOCALAPPDATA").map(|local| local.join("Temp")));
+    folders
+}
+
+/// Whether `path` lies in one of `folders`, as Windows compares paths: without regard to
+/// case, with either slash.
+#[must_use]
+pub fn lies_in(path: &Path, folders: &[PathBuf]) -> bool {
+    let parts = |path: &Path| -> Vec<String> {
+        path.to_string_lossy()
+            .split(['\\', '/'])
+            .filter(|part| !part.is_empty())
+            .map(str::to_lowercase)
+            .collect()
+    };
+    let path = parts(path);
+    folders.iter().any(|folder| {
+        let folder = parts(folder);
+        !folder.is_empty() && path.len() > folder.len() && path.starts_with(&folder)
+    })
+}
+
 /// The text of the question about an agent.
 #[must_use]
-pub fn question_text(reading: bool, control: bool, program: Option<&str>) -> String {
+pub fn question_text(reading: bool, control: bool, asker: Asker) -> String {
+    let program = asker.name;
     let program = program.map_or_else(|| tr("@info", "an unknown program"), str::to_string);
     let ask = |program: &str| match (reading, control) {
         (true, true) => tr_arg(
@@ -337,6 +382,24 @@ pub fn question_text(reading: bool, control: bool, program: Option<&str>) -> Str
     if !wants.starts_with("<html>") {
         wants = ask(&crate::gettext::escape(&program));
     }
+    // The name is what the program chose; its place says more, as the hint of a link shows
+    // it, with what does not show as a sign.
+    let place = asker.path.map(|path| {
+        let shown = crate::view::shown_target(&path.to_string_lossy());
+        // Escaped as the name above.
+        let mut place = tr_arg("@info", "Its program is %1.", &shown);
+        if !place.starts_with("<html>") {
+            place = tr_arg("@info", "Its program is %1.", &crate::gettext::escape(&shown));
+        }
+        if asker.unusual {
+            let warning = tr(
+                "@info",
+                "It lies in a folder for downloads or for temporary files, where programs come that nobody installed.",
+            );
+            place = format!("{place} {warning}");
+        }
+        place
+    });
     let advice = tr(
         "@info",
         "Allow this only if you started the agent yourself. Its access lasts until the agent ends, or until you end it with the eye button in the bar.",
@@ -348,7 +411,8 @@ pub fn question_text(reading: bool, control: bool, program: Option<&str>) -> Str
             .and_then(|rest| rest.strip_suffix("</html>"));
         format!("<p>{}</p>", inner.unwrap_or(text))
     };
-    format!("<html>{}{}</html>", paragraph(&wants), paragraph(&advice))
+    let place = place.map_or_default(|place| paragraph(&place));
+    format!("<html>{}{place}{}</html>", paragraph(&wants), paragraph(&advice))
 }
 
 /// A running terminal, as agents use it.
@@ -625,13 +689,13 @@ impl App {
         json!({ "sessions": sessions })
     }
 
-    /// The text of the question about `agent`, which comes from `program`, or `None` if the
+    /// The text of the question about `agent`, which comes from `asker`, or `None` if the
     /// user is no longer to be asked about it.
     #[must_use]
-    pub fn agent_question(&self, agent: &str, program: Option<&str>) -> Option<String> {
+    pub fn agent_question(&self, agent: &str, asker: Asker) -> Option<String> {
         let settings = self.settings();
         (self.agents().asking() == Some(agent))
-            .then(|| question_text(settings.allow_agent_reading, settings.allow_agent_control, program))
+            .then(|| question_text(settings.allow_agent_reading, settings.allow_agent_control, asker))
     }
 
     /// The user answered the question about `agent`.
@@ -677,9 +741,64 @@ mod tests {
     #[test]
     fn the_name_of_the_program_is_text_in_the_question() {
         // As on Windows: the translation comes without <html>, the name is escaped here.
-        let question = question_text(true, false, Some("a<p>&b"));
+        let question = question_text(
+            true,
+            false,
+            Asker {
+                name: Some("a<p>&b"),
+                ..Asker::default()
+            },
+        );
         assert!(question.contains("from a&lt;p&gt;&amp;b."), "{question}");
         assert_eq!(question.matches("<p>").count(), 2, "{question}");
+    }
+
+    #[test]
+    fn the_place_of_the_program_shows_as_text_in_the_question() {
+        // A mark of direction would turn the end of the name round: it shows as a sign.
+        let path = Path::new("C:\\Users\\u\\Tools\\cl<a>ude\u{202e}exe.txt");
+        let question = |unusual| {
+            let asker = Asker {
+                name: Some("claude"),
+                path: Some(path),
+                unusual,
+            };
+            question_text(true, false, asker)
+        };
+        let usual = question(false);
+        assert!(
+            usual.contains("Its program is C:\\Users\\u\\Tools\\cl&lt;a&gt;ude\u{fffd}exe.txt."),
+            "{usual}"
+        );
+        assert!(!usual.contains("downloads"), "{usual}");
+        assert_eq!(usual.matches("<p>").count(), 3, "{usual}");
+        let unusual = question(true);
+        assert!(
+            unusual.contains("a folder for downloads or for temporary files"),
+            "{unusual}"
+        );
+        // Without a place, as under KDE, the question stays as it was.
+        let unnamed = question_text(true, false, Asker::default());
+        assert!(!unnamed.contains("Its program"), "{unnamed}");
+        assert_eq!(unnamed.matches("<p>").count(), 2, "{unnamed}");
+    }
+
+    #[test]
+    fn a_program_lies_in_a_folder_as_windows_compares_paths() {
+        let folders = [
+            PathBuf::from("C:\\Users\\U\\downloads"),
+            PathBuf::from("C:/Users/u/AppData/Local/Temp"),
+        ];
+        assert!(lies_in(Path::new("C:\\Users\\u\\Downloads\\agent.exe"), &folders));
+        assert!(lies_in(
+            Path::new("C:\\Users\\u\\AppData\\Local\\Temp\\x\\agent.exe"),
+            &folders
+        ));
+        // A folder with the same start is another folder, and the folder is no program in it.
+        assert!(!lies_in(Path::new("C:\\Users\\u\\DownloadsOld\\agent.exe"), &folders));
+        assert!(!lies_in(Path::new("C:\\Users\\u\\Downloads"), &folders));
+        assert!(!lies_in(Path::new("C:\\Program Files\\Agent\\agent.exe"), &folders));
+        assert!(!lies_in(Path::new("C:\\agent.exe"), &[PathBuf::new()]));
     }
 
     #[test]
@@ -1029,8 +1148,18 @@ mod tests {
                 app.agent_request(Some("b"), Request::Terminals, &host),
                 (Err(Error::Waiting), vec![])
             );
-            assert!(app.agent_question("a", Some("claude")).unwrap().contains("claude"));
-            assert_eq!(app.agent_question("b", None), None);
+            assert!(
+                app.agent_question(
+                    "a",
+                    Asker {
+                        name: Some("claude"),
+                        ..Asker::default()
+                    },
+                )
+                .unwrap()
+                .contains("claude")
+            );
+            assert_eq!(app.agent_question("b", Asker::default()), None);
             assert_eq!(app.agent_answered("a", true), [Effect::AgentAccess(true)]);
             assert!(ask(&mut app, Request::Terminals, &host).is_ok());
             assert_eq!(app.agent_answered("a", false), []);

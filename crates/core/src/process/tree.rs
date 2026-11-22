@@ -86,12 +86,18 @@ pub fn name(processes: &[Process], id: u32) -> Option<String> {
 /// a process that `is_own` says is `kudari mcp`, the agent which started it.
 #[must_use]
 pub fn program(processes: &[Process], id: u32, is_own: impl Fn(u32) -> bool) -> Option<String> {
-    let id = if is_own(id) {
-        processes.iter().find(|process| process.id == id)?.parent
+    name(processes, asker(processes, id, is_own)?).filter(|name| !name.is_empty())
+}
+
+/// The process behind process `id` for the question about an AI agent: for a process that
+/// `is_own` says is `kudari mcp`, the agent which started it.
+#[must_use]
+pub fn asker(processes: &[Process], id: u32, is_own: impl Fn(u32) -> bool) -> Option<u32> {
+    if is_own(id) {
+        Some(processes.iter().find(|process| process.id == id)?.parent)
     } else {
-        id
-    };
-    name(processes, id).filter(|name| !name.is_empty())
+        Some(id)
+    }
 }
 
 #[cfg(test)]
