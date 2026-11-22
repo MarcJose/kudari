@@ -101,7 +101,12 @@ impl IniFile {
         }
         // Written beside it and renamed, so that a crash leaves the old file whole.
         let partial = self.path.with_extension("ini.partial");
-        std::fs::write(&partial, text)?;
+        let mut file = std::fs::File::create(&partial)?;
+        std::io::Write::write_all(&mut file, text.as_bytes())?;
+        // On the disk before it takes the place of the old one, or a crash just after can
+        // leave an empty file there.
+        file.sync_all()?;
+        drop(file);
         std::fs::rename(&partial, &self.path)
     }
 }
@@ -125,6 +130,10 @@ impl Store for IniFile {
             && let Ok((text, _)) = read_text(&self.path)
         {
             *groups = groups_of(&text);
+        }
+        // The same value again, as a slider sends it, needs no write.
+        if groups.get(group).and_then(|found| found.get(key)).map(String::as_str) == Some(value) {
+            return;
         }
         groups
             .entry(group.to_string())
@@ -356,6 +365,22 @@ mod tests {
         assert_eq!(again.read("Window", "KeepOpen", ""), "true");
         assert_eq!(again.read("Window", "Width", ""), "80");
         assert_eq!(settings.read("Appearance", "TerminalHighlightOpacity", ""), "0.8");
+        std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_same_value_again_writes_nothing() {
+        let path = file("same");
+        let store = IniFile::open(&path);
+        store.write("Window", "Height", "50");
+        let written = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        // A slider that sends the value it has: the file stays as it was.
+        store.write("Window", "Height", "50");
+        assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), written);
+        store.write("Window", "Height", "60");
+        assert_ne!(std::fs::metadata(&path).unwrap().modified().unwrap(), written);
+        assert_eq!(IniFile::open(&path).read("Window", "Height", ""), "60");
         std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
     }
 

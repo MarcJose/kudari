@@ -477,15 +477,31 @@ hook SetSetting SilenceSeconds 1; sleep 0.2
 check "a change of the settings leaves flow control to the program" -ixon \
     "$(tr -s ' ;' '\n' < "$work/ixon" | grep -x -- '-\{0,1\}ixon')"
 
-setting() { sed -n "s/^$1=//p" "$work/config/kudarirc"; }
+# A setting as the file has it. Kudari writes the file a moment after the last of a row of
+# changes; the hook writes it now.
+setting() { hook FlushSettings > /dev/null; sed -n "s/^$1=//p" "$work/config/kudarirc"; }
 
 # The bar at the bottom: two tabs titled "~ : sh", the close button of the second at 221.
 sessions addSession >/dev/null; sleep 1
 grab tabs
 input click 221 377; sleep 1
 check "the close button of a tab closes its session" 0 "$(sessions sessionIdList)"
+published() { hook Stats | python3 -c 'import json, sys; print(json.load(sys.stdin)["settings_published"])'; }
+hook ResetStats
 input drag 640 398 640 600; wait_height 600
+dragged=$(published)
 check "the grip below the bar changes the height" 75 "$(setting Height)"
+# While it is dragged, the grip only shows the height: the settings take it once, as it is
+# let go, rather than at each move, where each write saved the file.
+check "the grip saves the height once, as it is let go" 1 "$dragged"
+# A change of the settings reaches the file a moment after the last of a row of changes, as
+# the steps of a slider come, rather than with a write of its own each.
+hook SetSetting AutoSaveSeconds 7
+early=$(sed -n 's/^AutoSaveSeconds=//p' "$work/config/kudarirc")
+sleep 1
+late=$(sed -n 's/^AutoSaveSeconds=//p' "$work/config/kudarirc")
+hook SetSetting AutoSaveSeconds 10; settle
+check "a change of the settings reaches the file a moment later" "[] [7]" "[$early] [$late]"
 input drag 640 598 640 400; wait_height 400
 check "the grip works both ways" 50 "$(setting Height)"
 hook Trigger options_configure; sleep 2
@@ -1798,9 +1814,12 @@ output=$(kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk '/^Outp
 kscreen-doctor "output.$output.disable" > /dev/null 2>&1; sleep 2
 window toggleWindowState; sleep 1.5
 check "the shortcut shows the window again after a screen went away" "visible=1 visible=1" "$shown $(state)"
+# A setting changed just before quitting reaches the file, though its moment had not come.
+hook SetSetting AutoSaveSeconds 9
 hook Trigger file_quit
 wait_quit "$kudari"
 check "quitting after a screen went away ends the program" no "$(kill -0 "$kudari" 2>/dev/null && echo yes || echo no)"
+check "a setting changed just before quitting is saved" 9 "$(sed -n 's/^AutoSaveSeconds=//p' "$work/screens/kudarirc")"
 
 # Calls back into the controller or a terminal item while one of their methods still runs:
 # each pair is in reentry.txt, and one more fails, so that a change in the order of the work

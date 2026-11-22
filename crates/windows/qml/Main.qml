@@ -23,7 +23,9 @@ ApplicationWindow {
     readonly property int workWidth: !app.fullscreen && app.workWidth > 0 ? app.workWidth : targetScreen.width
     readonly property int workHeight: !app.fullscreen && app.workHeight > 0 ? app.workHeight : targetScreen.height
     readonly property int windowWidth: app.fullscreen ? workWidth : Math.floor(workWidth * settings.width / 100)
-    readonly property int windowHeight: app.fullscreen ? workHeight : Math.floor(workHeight * settings.height / 100)
+    // While the grip is dragged, the height it shows, saved once it is let go; else -1.
+    property int dragHeightPercent: -1
+    readonly property int windowHeight: app.fullscreen ? workHeight : Math.floor(workHeight * (dragHeightPercent >= 0 ? dragHeightPercent : settings.height) / 100)
     readonly property int windowX: app.fullscreen ? 0 : Math.floor(workWidth * settings.position * (100 - settings.width) / 10000)
     // How far the window has slid in, from 0 to 1.
     property real shown: 0
@@ -403,11 +405,19 @@ ApplicationWindow {
                 anchors.fill: parent
                 enabled: !app.fullscreen
                 cursorShape: Qt.SizeVerCursor
-                onPressedChanged: root.gripDragged = pressed
+                // Each move shows the new height; it goes into the settings once, when the grip is let
+                // go, as each write saves the settings to the disk.
+                onPressedChanged: {
+                    if (!pressed && root.dragHeightPercent >= 0) {
+                        app.setHeightPercent(root.dragHeightPercent);
+                        root.dragHeightPercent = -1;
+                    }
+                    root.gripDragged = pressed;
+                }
                 onPositionChanged: mouse => {
                     const bottom = mapToGlobal(mouse.x, mouse.y).y - root.targetScreen.virtualY;
                     const percent = Math.round(100 * bottom / root.workHeight);
-                    app.setHeightPercent(Math.max(10, Math.min(100, percent)));
+                    root.dragHeightPercent = Math.max(10, Math.min(100, percent));
                 }
             }
         }
