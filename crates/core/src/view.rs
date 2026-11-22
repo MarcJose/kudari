@@ -1683,7 +1683,44 @@ fn html_escape(character: char, html: &mut String) {
     }
 }
 
-/// The selection with its colors and styles, for pasting into rich text editors.
+/// The most cells of a selection that a copy gives as HTML as well: each can take a span of
+/// its own, about 110 bytes, and a selection beyond this copies as plain text alone.
+pub const MOST_HTML_CELLS: usize = 2_000_000;
+
+/// How a cell looks in the HTML of a copy, to compare with the cell before it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CellStyle {
+    foreground: Rgb,
+    background: Option<Rgb>,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+}
+
+impl CellStyle {
+    /// The span that starts the style.
+    fn open(self, html: &mut String) {
+        use std::fmt::Write as _;
+        let Rgb { r, g, b } = self.foreground;
+        let _ = write!(html, "<span style=\"color:#{r:02x}{g:02x}{b:02x}");
+        if let Some(Rgb { r, g, b }) = self.background {
+            let _ = write!(html, ";background-color:#{r:02x}{g:02x}{b:02x}");
+        }
+        if self.bold {
+            html.push_str(";font-weight:bold");
+        }
+        if self.italic {
+            html.push_str(";font-style:italic");
+        }
+        if self.underline {
+            html.push_str(";text-decoration:underline");
+        }
+        html.push_str("\">");
+    }
+}
+
+/// The selection with its colors and styles, for pasting into rich text editors; nothing for
+/// one of more than [`MOST_HTML_CELLS`] cells.
 #[must_use]
 pub fn selection_html<T>(term: &Term<T>, bold_intense: bool) -> String {
     let Some(range) = term.selection.as_ref().and_then(|selection| selection.to_range(term)) else {
@@ -1693,6 +1730,10 @@ pub fn selection_html<T>(term: &Term<T>, bold_intense: bool) -> String {
     let palette = term.colors();
     let grid = term.grid();
     let columns = term.columns();
+    let lines = (range.end.line.0 - range.start.line.0 + 1) as usize;
+    if lines.saturating_mul(columns) > MOST_HTML_CELLS {
+        return String::new();
+    }
     let hex = |color: Rgb| format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b);
     let mut html = format!(
         "<pre style=\"color:{};background-color:{};font-family:monospace\">",
@@ -1723,7 +1764,7 @@ pub fn selection_html<T>(term: &Term<T>, bold_intense: bool) -> String {
                 .find(|column| row[Column(*column)].c != ' ')
                 .map_or(first, |column| column + 1)
         };
-        let mut style = String::new();
+        let mut style: Option<CellStyle> = None;
         for column in first..end.min(columns) {
             let cell = &row[Column(column)];
             if cell
@@ -1737,35 +1778,26 @@ pub fn selection_html<T>(term: &Term<T>, bold_intense: bool) -> String {
             if cell.flags.contains(Flags::HIDDEN) {
                 foreground = back;
             }
-            let mut wanted = format!("color:{}", hex(foreground));
-            if back != scheme.background {
-                wanted.push_str(";background-color:");
-                wanted.push_str(&hex(back));
-            }
-            if cell.flags.contains(Flags::BOLD) {
-                wanted.push_str(";font-weight:bold");
-            }
-            if cell.flags.contains(Flags::ITALIC) {
-                wanted.push_str(";font-style:italic");
-            }
-            if cell.flags.intersects(Flags::ALL_UNDERLINES) {
-                wanted.push_str(";text-decoration:underline");
-            }
-            if wanted != style {
-                if !style.is_empty() {
+            let wanted = CellStyle {
+                foreground,
+                background: (back != scheme.background).then_some(back),
+                bold: cell.flags.contains(Flags::BOLD),
+                italic: cell.flags.contains(Flags::ITALIC),
+                underline: cell.flags.intersects(Flags::ALL_UNDERLINES),
+            };
+            if style != Some(wanted) {
+                if style.is_some() {
                     html.push_str("</span>");
                 }
-                html.push_str("<span style=\"");
-                html.push_str(&wanted);
-                html.push_str("\">");
-                style = wanted;
+                wanted.open(&mut html);
+                style = Some(wanted);
             }
             html_escape(cell.c, &mut html);
             for character in cell.zerowidth().into_iter().flatten() {
                 html_escape(*character, &mut html);
             }
         }
-        if !style.is_empty() {
+        if style.is_some() {
             html.push_str("</span>");
         }
         if line != range.end.line.0 && !wrapped {
@@ -2221,6 +2253,29 @@ mod tests {
             selection_step(&mut term, Key::Escape, NONE, "", &OPTIONS),
             SelectionStep::Leave(None)
         );
+    }
+
+    #[test]
+    fn a_huge_selection_copies_as_plain_text_alone() {
+        let size = alacritty_terminal::term::test::TermSize::new(1000, 10);
+        let config = alacritty_terminal::term::Config {
+            scrolling_history: 3000,
+            ..alacritty_terminal::term::Config::default()
+        };
+        let mut term = Term::new(config, &size, VoidListener);
+        feed(&mut term, "\x1b[31mred\x1b[0m\r\n".repeat(3000).as_bytes());
+        let select = |term: &mut Term<VoidListener>, lines: i32| {
+            let bottom = term.bottommost_line();
+            let start = Point::new(Line(bottom.0 - lines + 1), Column(0));
+            let mut selection = Selection::new(SelectionType::Simple, start, Side::Left);
+            selection.update(Point::new(bottom, term.last_column()), Side::Right);
+            term.selection = Some(selection);
+        };
+        // 2,000 lines of 1,000 columns are as many cells as HTML is made for.
+        select(&mut term, 2000);
+        assert!(selection_html(&term, false).contains("color:#"));
+        select(&mut term, 2001);
+        assert_eq!(selection_html(&term, false), "");
     }
 
     #[test]
