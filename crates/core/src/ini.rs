@@ -6,8 +6,9 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use crate::settings::Store;
 
@@ -39,18 +40,50 @@ pub fn parse_ini(text: &str) -> HashMap<String, Group> {
     groups
 }
 
-/// Settings in an INI file, written back on every change. Values keep line breaks and
+/// Settings in an INI file, written back on every change, or with [`IniFile::with_delay`]
+/// a moment after the last of changes close together. Values keep line breaks and
 /// backslashes through the escapes of `KConfig`.
 #[derive(Debug)]
 pub struct IniFile {
+    shared: Arc<Shared>,
+}
+
+type Groups = BTreeMap<String, BTreeMap<String, String>>;
+
+#[derive(Debug)]
+struct Shared {
     path: PathBuf,
-    groups: Mutex<BTreeMap<String, BTreeMap<String, String>>>,
+    groups: Mutex<Groups>,
     /// False when the file exists but could not be read: writing it would replace the
     /// settings in it with the few changed since, so changes stay in memory.
     writable: bool,
     /// The file was not UTF-8; the original goes to a backup before the first save.
     back_up: AtomicBool,
+    /// Changes that wait for the file. Taken after `groups`, where both are.
+    waiting: Mutex<Waiting>,
+    /// Wakes the thread that writes them.
+    wake: Condvar,
+    /// How often the file was written.
+    saves: AtomicUsize,
+    /// How long changes wait to go to the file together; nothing writes each at once.
+    delay: Duration,
 }
+
+#[derive(Debug, Default)]
+struct Waiting {
+    /// Group, key and value, in the order they came.
+    changes: Vec<(String, String, String)>,
+    /// When they go to the file.
+    due: Option<Instant>,
+    /// The writes that failed in a row.
+    failures: u32,
+    /// The file is closed: the thread ends.
+    closed: bool,
+}
+
+/// How often a write that failed is tried again by itself. After that the changes wait for
+/// the next one, or for the end, and stay in memory meanwhile.
+const RETRIES: u32 = 5;
 
 impl IniFile {
     /// The settings in `path`; none if it does not exist yet. A file in the ANSI code page of
@@ -70,14 +103,157 @@ impl IniFile {
         };
         let groups = groups_of(&text);
         Self {
-            path: path.to_path_buf(),
-            groups: Mutex::new(groups),
-            writable,
-            back_up: AtomicBool::new(back_up),
+            shared: Arc::new(Shared {
+                path: path.to_path_buf(),
+                groups: Mutex::new(groups),
+                writable,
+                back_up: AtomicBool::new(back_up),
+                waiting: Mutex::new(Waiting::default()),
+                wake: Condvar::new(),
+                saves: AtomicUsize::new(0),
+                delay: Duration::ZERO,
+            }),
         }
     }
 
-    fn save(&self, groups: &BTreeMap<String, BTreeMap<String, String>>) -> std::io::Result<()> {
+    /// Writes changes `delay` after the last of them, all together, as a slider or a grip
+    /// that is dragged sends many. What guards the user, and that the first start is done,
+    /// still go at once; [`IniFile::flush`] and dropping the file write what waits.
+    #[must_use]
+    pub fn with_delay(mut self, delay: Duration) -> Self {
+        let Some(shared) = Arc::get_mut(&mut self.shared) else {
+            return self;
+        };
+        shared.delay = delay;
+        if !delay.is_zero() {
+            let shared = Arc::clone(&self.shared);
+            let started = std::thread::Builder::new()
+                .name("kudari-settings".to_string())
+                .spawn(move || shared.write_when_due());
+            // Without the thread, each change goes at once.
+            if started.is_err()
+                && let Some(shared) = Arc::get_mut(&mut self.shared)
+            {
+                shared.delay = Duration::ZERO;
+            }
+        }
+        self
+    }
+
+    /// Writes the changes that wait, at once.
+    pub fn flush(&self) {
+        self.shared.flush();
+    }
+
+    #[cfg(test)]
+    fn saves(&self) -> usize {
+        self.shared.saves.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for IniFile {
+    fn drop(&mut self) {
+        self.shared.flush();
+        self.shared.waiting().closed = true;
+        self.shared.wake.notify_all();
+    }
+}
+
+impl Shared {
+    fn groups(&self) -> MutexGuard<'_, Groups> {
+        self.groups.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn waiting(&self) -> MutexGuard<'_, Waiting> {
+        self.waiting.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Writes `changes` and those that wait into the file as it is now.
+    fn write_now(&self, groups: &mut Groups, changes: Vec<(String, String, String)>) {
+        let mut waiting = self.waiting();
+        // These waited only where they changed what was in memory, which the file can lack.
+        let waited = std::mem::take(&mut waiting.changes);
+        waiting.due = None;
+        drop(waiting);
+        // The user can have changed the file in an editor while Kudari ran: what is in it
+        // stays, and only these keys change. The settings of Kudari are in it already, as
+        // each is saved; a file that cannot be read leaves the ones in memory.
+        if self.writable
+            && let Ok((text, _)) = read_text(&self.path)
+        {
+            *groups = groups_of(&text);
+        }
+        let mut written = Vec::new();
+        for (group, key, value) in waited {
+            groups
+                .entry(group.clone())
+                .or_default()
+                .insert(key.clone(), value.clone());
+            written.push((group, key, value));
+        }
+        for (group, key, value) in changes {
+            let entry = groups.entry(group.clone()).or_default();
+            // The same value again, as a slider sends it, needs no write.
+            if entry.get(&key) != Some(&value) {
+                entry.insert(key.clone(), value.clone());
+                written.push((group, key, value));
+            }
+        }
+        if written.is_empty() {
+            return;
+        }
+        let saved = self.save(groups);
+        let mut waiting = self.waiting();
+        let Err(error) = saved else {
+            waiting.failures = 0;
+            return;
+        };
+        eprintln!("kudari: could not save {}: {error}", self.path.display());
+        if self.delay.is_zero() {
+            return;
+        }
+        // Another program can hold the file for a moment, as an editor or a virus scanner
+        // does on Windows: the changes wait again, before those that came meanwhile.
+        written.append(&mut waiting.changes);
+        waiting.changes = written;
+        waiting.failures += 1;
+        if waiting.failures <= RETRIES {
+            waiting.due = Some(Instant::now() + self.delay);
+            self.wake.notify_all();
+        }
+    }
+
+    fn flush(&self) {
+        let mut groups = self.groups();
+        if !self.waiting().changes.is_empty() {
+            self.write_now(&mut groups, Vec::new());
+        }
+    }
+
+    /// The thread that writes the changes once they are due, until the file is closed.
+    fn write_when_due(&self) {
+        let mut waiting = self.waiting();
+        while !waiting.closed {
+            match waiting.due {
+                None => waiting = self.wake.wait(waiting).unwrap_or_else(PoisonError::into_inner),
+                Some(due) if Instant::now() < due => {
+                    let left = due.saturating_duration_since(Instant::now());
+                    waiting = self
+                        .wake
+                        .wait_timeout(waiting, left)
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .0;
+                }
+                Some(_) => {
+                    drop(waiting);
+                    self.flush();
+                    waiting = self.waiting();
+                }
+            }
+        }
+    }
+
+    fn save(&self, groups: &Groups) -> std::io::Result<()> {
         use std::fmt::Write;
 
         if !self.writable {
@@ -107,13 +283,20 @@ impl IniFile {
         // leave an empty file there.
         file.sync_all()?;
         drop(file);
-        std::fs::rename(&partial, &self.path)
+        std::fs::rename(&partial, &self.path)?;
+        self.saves.fetch_add(1, Ordering::Relaxed);
+        Ok(())
     }
+}
+
+/// What guards the user, and that the first start is done, which go to the file at once.
+fn at_once(group: &str, key: &str) -> bool {
+    group == "Security" || (group == "Dialogs" && key == "FirstRun")
 }
 
 impl Store for IniFile {
     fn read(&self, group: &str, key: &str, default: &str) -> String {
-        let groups = self.groups.lock().unwrap_or_else(PoisonError::into_inner);
+        let groups = self.shared.groups();
         groups
             .get(group)
             .and_then(|found| found.get(key))
@@ -122,16 +305,12 @@ impl Store for IniFile {
     }
 
     fn write(&self, group: &str, key: &str, value: &str) {
-        let mut groups = self.groups.lock().unwrap_or_else(PoisonError::into_inner);
-        // The user can have changed the file in an editor while Kudari ran: what is in it
-        // stays, and only this key changes. The settings of Kudari are in it already, as each
-        // is saved when it changes; a file that cannot be read leaves the ones in memory.
-        if self.writable
-            && let Ok((text, _)) = read_text(&self.path)
-        {
-            *groups = groups_of(&text);
+        let mut groups = self.shared.groups();
+        let change = (group.to_string(), key.to_string(), value.to_string());
+        if self.shared.delay.is_zero() || at_once(group, key) {
+            self.shared.write_now(&mut groups, vec![change]);
+            return;
         }
-        // The same value again, as a slider sends it, needs no write.
         if groups.get(group).and_then(|found| found.get(key)).map(String::as_str) == Some(value) {
             return;
         }
@@ -139,9 +318,10 @@ impl Store for IniFile {
             .entry(group.to_string())
             .or_default()
             .insert(key.to_string(), value.to_string());
-        if let Err(error) = self.save(&groups) {
-            eprintln!("kudari: could not save {}: {error}", self.path.display());
-        }
+        let mut waiting = self.shared.waiting();
+        waiting.changes.push(change);
+        waiting.due = Some(Instant::now() + self.shared.delay);
+        self.shared.wake.notify_all();
     }
 }
 
@@ -381,6 +561,85 @@ mod tests {
         store.write("Window", "Height", "60");
         assert_ne!(std::fs::metadata(&path).unwrap().modified().unwrap(), written);
         assert_eq!(IniFile::open(&path).read("Window", "Height", ""), "60");
+        std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    /// Waits up to a second for `done`.
+    fn soon(done: impl Fn() -> bool) -> bool {
+        let until = Instant::now() + Duration::from_secs(1);
+        while !done() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        done()
+    }
+
+    #[test]
+    fn changes_close_together_go_to_the_file_once_a_moment_after_the_last() {
+        let path = file("delayed");
+        let store = IniFile::open(&path).with_delay(Duration::from_millis(150));
+        // A grip that is dragged: each step is read back at once, and none is in the file yet.
+        for height in 10..=50 {
+            store.write("Window", "Height", &height.to_string());
+        }
+        assert_eq!(store.read("Window", "Height", ""), "50");
+        assert!(!path.exists());
+        assert!(soon(|| IniFile::open(&path).read("Window", "Height", "") == "50"));
+        assert_eq!(store.saves(), 1);
+        // A change by hand meanwhile stays beside the next one of Kudari.
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, text.replace("[Window]", "[Window]\nKeepOpen=true")).unwrap();
+        store.write("Window", "Width", "80");
+        assert!(soon(|| IniFile::open(&path).read("Window", "Width", "") == "80"));
+        assert_eq!(IniFile::open(&path).read("Window", "KeepOpen", ""), "true");
+        assert_eq!(store.saves(), 2);
+        drop(store);
+        std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn what_guards_the_user_goes_to_the_file_at_once_and_the_rest_with_it() {
+        let path = file("guards");
+        let store = IniFile::open(&path).with_delay(Duration::from_secs(60));
+        store.write("Window", "Width", "80");
+        store.write("Security", "AllowAgentControl", "false");
+        let again = IniFile::open(&path);
+        assert_eq!(again.read("Security", "AllowAgentControl", ""), "false");
+        assert_eq!(again.read("Window", "Width", ""), "80");
+        store.write("Dialogs", "FirstRun", "false");
+        assert_eq!(IniFile::open(&path).read("Dialogs", "FirstRun", ""), "false");
+        drop(store);
+        std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn flushing_and_closing_write_what_waits() {
+        let path = file("flushed");
+        let store = IniFile::open(&path).with_delay(Duration::from_secs(60));
+        store.write("Window", "Width", "80");
+        store.flush();
+        assert_eq!(IniFile::open(&path).read("Window", "Width", ""), "80");
+        // Nothing waits: flushing again writes nothing.
+        store.flush();
+        assert_eq!(store.saves(), 1);
+        store.write("Window", "Height", "40");
+        drop(store);
+        assert_eq!(IniFile::open(&path).read("Window", "Height", ""), "40");
+        std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_write_that_fails_is_tried_again_a_moment_later() {
+        let path = file("retried");
+        let store = IniFile::open(&path).with_delay(Duration::from_millis(50));
+        // A folder where the file goes takes no file, as a file that another program holds
+        // on Windows takes none for a moment.
+        std::fs::create_dir_all(&path).unwrap();
+        store.write("Window", "Width", "80");
+        assert!(soon(|| store.shared.waiting().failures > 0));
+        assert_eq!(store.read("Window", "Width", ""), "80");
+        std::fs::remove_dir(&path).unwrap();
+        assert!(soon(|| IniFile::open(&path).read("Window", "Width", "") == "80"));
+        drop(store);
         std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
     }
 
