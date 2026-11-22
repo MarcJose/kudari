@@ -628,6 +628,14 @@ impl TestHooks {
         kudari_qt::terminal_item::set_refresh_delay(milliseconds.into());
     }
 
+    /// The text of the notification sent last, as it went to `KNotification`.
+    fn last_notification(&self) -> String {
+        crate::plasma::LAST_NOTIFICATION
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// The text under each match of the search that the last frame of the terminal showed,
     /// a line each.
     fn matched_text(&self, terminal: i32) -> String {
