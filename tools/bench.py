@@ -1699,6 +1699,21 @@ def ranged(whole, width):
     return milliseconds(whole) if width == 1 else f"{whole}-{whole + width}"
 
 
+def screen_of(directory):
+    """The rate of the virtual screen and its number of outputs, where --refresh or --outputs
+    set them; None for the 60 Hz of one screen."""
+    def given(name):
+        path = directory / name
+        return path.read_text().strip() if path.exists() else ""
+
+    refresh, outputs = given("refresh"), given("outputs")
+    if not refresh and not outputs:
+        return None
+    rate = f"{refresh} Hz" if refresh else "60 Hz"
+    second = ", with a second screen beside it, on which Kudari opened" if outputs == "2" else ""
+    return f"The virtual screen showed {rate}{second}."
+
+
 def same_terminals(directory, sizes, apart=0.05):
     """What --font and --history gave all terminals, and a warning where the cells still differ
     by more than `apart` between them; None without either."""
@@ -1754,6 +1769,9 @@ def report(directory, order, detail=False):
     print("Seconds per load: the median, its median absolute deviation in percent of it, a 95 %")
     print("bootstrap interval of the median (seed 1), the fastest and the slowest run, and the runs")
     print("further than three deviations and 3 % from the median. The throughput is that of the median.")
+    screen = screen_of(directory)
+    if screen:
+        print(screen)
     same = same_terminals(directory, {terminal: runs[terminal][0][1][0] for terminal in terminals})
     if same:
         print(same)

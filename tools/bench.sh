@@ -6,7 +6,8 @@
 #
 #   tools/bench.sh [--binary [NAME=]PATH] [--rev [NAME=]REV] [--runs N] [--warmup N] [--seed N]
 #                  [--loads LOAD,...]
-#                  [--set GROUP.KEY=VALUE] [--scale N] [--detail] [--scenarios] [--perf]
+#                  [--set GROUP.KEY=VALUE] [--scale N] [--font FAMILY:SIZE] [--history N]
+#                  [--refresh HZ] [--outputs 1|2] [--detail] [--scenarios] [--perf]
 #                  [--qml-profile] [--keep] [--keep-env] [TERMINAL...]
 #
 # The terminals are kudari, yakuake, konsole, alacritty, kitty, ghostty, contour and xterm;
@@ -83,8 +84,12 @@
 # and xterm on their command line; ghostty takes the font, and its history counts bytes, not
 # lines; contour takes neither. The report warns when the cells still differ by more than 5 %,
 # as the height of a line, the margins and the rounding of the width of a cell differ between
-# terminals. The graphics card of the computer draws, so compare only runs on the same computer. Needs kwin_wayland with
-# Xwayland, qdbus6, dbus-run-session and python3, and kscreen-doctor for --scale.
+# terminals. The virtual screen shows 60 frames a second; --refresh HZ gives it that rate
+# instead, as a mode of its own that kscreen-doctor adds, and the measurement stops if it does
+# not take. --outputs 2 gives KWin a second screen beside it, and Kudari opens on that one. The
+# graphics card of the computer draws, so compare only runs on the same computer. Needs
+# kwin_wayland with Xwayland, qdbus6, dbus-run-session and python3, and kscreen-doctor for
+# --scale and --refresh.
 set -eu
 tools=$(cd "$(dirname "$0")" && pwd)
 all="kudari yakuake konsole alacritty kitty ghostty contour xterm"
@@ -139,6 +144,30 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
             exit 1
         fi
         sleep 1
+    fi
+    # A rate of its own for the screen, as a mode that kscreen-doctor adds and selects. Only
+    # the private KWin of the measurement may get it, never the session of the user.
+    refresh=$(cat "$KUDARI_BENCH_WORK/refresh" 2> /dev/null || true)
+    if [ -n "$refresh" ]; then
+        case $XDG_RUNTIME_DIR in */kudari-bench-run.*) private=1 ;; *) private= ;; esac
+        if [ "$WAYLAND_DISPLAY" != kudari-bench ] || [ -z "$private" ]; then
+            echo "the rate of the screen is only set in the KWin of the measurement" > "$KUDARI_BENCH_WORK/failed"
+            exit 1
+        fi
+        modes() { kscreen-doctor -o 2> /dev/null | sed 's/\x1b\[[0-9;]*m//g'; }
+        output=$(modes | awk '/^Output:/ { print $3; exit }')
+        kscreen-doctor "output.$output.addCustomMode.2560.1440.$((refresh * 1000)).full" > /dev/null 2>&1 || true
+        sleep 1
+        # The mode closest to the rate asked for, such as 143.91 for 144.
+        mode=$(modes | grep -o '[0-9]*:2560x1440@[0-9.]*' | awk -F'[:@]' -v want="$refresh" \
+            'BEGIN { best = -1 } { apart = $3 - want; if (apart < 0) apart = -apart; if (apart < 1 && (best < 0 || apart < near)) { best = $1; near = apart } } END { if (best >= 0) print best }')
+        [ -z "$mode" ] || kscreen-doctor "output.$output.mode.$mode" > /dev/null 2>&1 || true
+        sleep 1
+        active=$(modes | grep -o '[0-9]*:2560x1440@[0-9.]*\*' | head -n 1 | sed 's/.*@//; s/\*//')
+        if [ -z "$active" ] || ! awk -v active="$active" -v want="$refresh" 'BEGIN { exit !(active - want < 1 && want - active < 1) }'; then
+            echo "the virtual screen did not take a rate of $refresh Hz but ${active:-none}; see kscreen-doctor -o" > "$KUDARI_BENCH_WORK/failed"
+            exit 1
+        fi
     fi
     [ -z "${KUDARI_BENCH_SCENARIOS:-}" ] || exec "$tools/bench-scenarios.sh"
 fi
@@ -328,6 +357,8 @@ warmup=1
 settings=
 font=
 history=
+refresh=
+outputs=1
 seed=
 detail=
 perf=
@@ -367,6 +398,15 @@ while [ $# -gt 0 ]; do
             history=$2
             shift 2
             ;;
+        --refresh)
+            printf '%s' "${2:-}" | grep -qE '^[1-9][0-9]*$' || die "--refresh needs frames a second, such as 144"
+            refresh=$2
+            shift 2
+            ;;
+        --outputs)
+            case ${2:-} in 1 | 2) outputs=$2 ;; *) die "--outputs takes 1 or 2" ;; esac
+            shift 2
+            ;;
         --loads)
             loads=$(echo "$2" | tr ',' ' ')
             for load in $loads; do
@@ -400,7 +440,7 @@ while [ $# -gt 0 ]; do
         *)
             case " $all " in
                 *" $1 "*) terminals="$terminals $1"; shift ;;
-                *) die "usage: tools/bench.sh [--binary [NAME=]PATH] [--rev [NAME=]REV] [--runs N] [--warmup N] [--seed N] [--loads LOAD,...] [--scale N] [--detail] [--scenarios] [--perf] [--qml-profile] [--keep] [--keep-env] [TERMINAL...]; the terminals are: $all" ;;
+                *) die "usage: tools/bench.sh [--binary [NAME=]PATH] [--rev [NAME=]REV] [--runs N] [--warmup N] [--seed N] [--loads LOAD,...] [--scale N] [--font FAMILY:SIZE] [--history N] [--refresh HZ] [--outputs 1|2] [--detail] [--scenarios] [--perf] [--qml-profile] [--keep] [--keep-env] [TERMINAL...]; the terminals are: $all" ;;
             esac
             ;;
     esac
@@ -512,6 +552,12 @@ VARIANTS
         settings="$settings$(printf '\nTerminal.HistoryLines=%s' "$history")"
         printf '%s\n' "$history" > "$work/same-history"
     fi
+    # The screen: its rate, and a second one, which Kudari opens on.
+    [ -z "$refresh" ] || printf '%s\n' "$refresh" > "$work/refresh"
+    if [ "$outputs" = 2 ]; then
+        settings="$settings$(printf '\nWindow.Screen=2')"
+        printf '2\n' > "$work/outputs"
+    fi
     # The settings for Kudari, one a line as given, and as lines of its kudarirc; KConfig
     # joins groups named twice. A value may hold spaces, so the lines split only at newlines.
     printf '%s\n' "$settings" | sed '/^$/d' > "$work/settings"
@@ -577,8 +623,10 @@ tail -f "$work/progress.log" &
 progress=$!
 trap 'kill "$progress" 2> /dev/null; rm -rf "$XDG_RUNTIME_DIR"' EXIT
 # KWin finds the desktop file of the fake input among its data.
+outputs=$(cat "$work/outputs" 2> /dev/null || echo 1)
 KUDARI_BENCH_ROLE=session XDG_DATA_HOME="$work/data" kwin_wayland --virtual --xwayland --no-lockscreen --socket=kudari-bench \
-    --width 2560 --height 1440 --scale "$scale" --exit-with-session "$tools/bench.sh" > "$work/kwin.log" 2>&1 || true
+    --width 2560 --height 1440 --output-count "$outputs" --scale "$scale" --exit-with-session "$tools/bench.sh" \
+    > "$work/kwin.log" 2>&1 || true
 sleep 0.5
 if [ -e "$work/failed" ]; then
     die "$(cat "$work/failed")"
