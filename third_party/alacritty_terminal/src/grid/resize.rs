@@ -125,7 +125,7 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
                 _ => {
                     reversed.push(row);
                     continue;
-                },
+                }
             };
 
             // Remove wrap flag before appending additional cells.
@@ -136,7 +136,9 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
             // Remove leading spacers when reflowing wide char to the previous line.
             let mut last_len = last_row.len();
             if last_len >= 1
-                && last_row[Column(last_len - 1)].flags().contains(Flags::LEADING_WIDE_CHAR_SPACER)
+                && last_row[Column(last_len - 1)]
+                    .flags()
+                    .contains(Flags::LEADING_WIDE_CHAR_SPACER)
             {
                 last_row.shrink(last_len - 1);
                 last_len -= 1;
@@ -283,13 +285,11 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
                             new_raw.push(row);
                             break;
                         }
-                    },
+                    }
                 };
 
                 // Insert spacer if a wide char would be wrapped into the last column.
-                if row.len() >= columns
-                    && row[Column(columns - 1)].flags().contains(Flags::WIDE_CHAR)
-                {
+                if row.len() >= columns && row[Column(columns - 1)].flags().contains(Flags::WIDE_CHAR) {
                     let mut spacer = T::default();
                     spacer.flags_mut().insert(Flags::LEADING_WIDE_CHAR_SPACER);
 
@@ -335,9 +335,7 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
                 } else {
                     // Reflow cursor if a line below it is deleted.
                     let cursor_buffer_line = self.lines - self.cursor.point.line.0 as usize - 1;
-                    if (i == cursor_buffer_line && self.cursor.point.column < columns)
-                        || i < cursor_buffer_line
-                    {
+                    if (i == cursor_buffer_line && self.cursor.point.column < columns) || i < cursor_buffer_line {
                         self.cursor.point.line = max(self.cursor.point.line - 1, Line(0));
                     }
 
@@ -379,7 +377,9 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         if !reflow {
             self.cursor.point.column = min(self.cursor.point.column, Column(columns - 1));
         } else if self.cursor.point.column == columns
-            && !self[self.cursor.point.line][Column(columns - 1)].flags().contains(Flags::WRAPLINE)
+            && !self[self.cursor.point.line][Column(columns - 1)]
+                .flags()
+                .contains(Flags::WRAPLINE)
         {
             self.cursor.input_needs_wrap = true;
             self.cursor.point.column -= 1;

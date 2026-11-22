@@ -127,13 +127,13 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
                 State::Ground => i += self.advance_ground(performer, &bytes[i..]),
                 State::CsiEntry | State::CsiParam if self.csi_params_way() && matches!(bytes[i], 0x30..=0x3B) => {
                     i += self.advance_csi_params(&bytes[i..]);
-                },
+                }
                 _ => {
                     // Inlining it results in worse codegen.
                     let byte = bytes[i];
                     self.change_state(performer, byte);
                     i += 1;
-                },
+                }
             }
         }
     }
@@ -148,11 +148,7 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
     /// See [`Perform::advance`] for more details.
     #[inline]
     #[must_use = "Returned value should be used to processs the remaining bytes"]
-    pub fn advance_until_terminated<P: Perform>(
-        &mut self,
-        performer: &mut P,
-        bytes: &[u8],
-    ) -> usize {
+    pub fn advance_until_terminated<P: Perform>(&mut self, performer: &mut P, bytes: &[u8]) -> usize {
         let mut i = 0;
 
         // Handle partial codepoints from previous calls to `advance`.
@@ -165,13 +161,13 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
                 State::Ground => i += self.advance_ground(performer, &bytes[i..]),
                 State::CsiEntry | State::CsiParam if self.csi_params_way() && matches!(bytes[i], 0x30..=0x3B) => {
                     i += self.advance_csi_params(&bytes[i..]);
-                },
+                }
                 _ => {
                     // Inlining it results in worse codegen.
                     let byte = bytes[i];
                     self.change_state(performer, byte);
                     i += 1;
-                },
+                }
             }
         }
 
@@ -205,23 +201,23 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
             0x20..=0x2F => {
                 self.action_collect(byte);
                 self.state = State::CsiIntermediate
-            },
+            }
             0x30..=0x39 => {
                 self.action_paramnext(byte);
                 self.state = State::CsiParam
-            },
+            }
             0x3A => {
                 self.action_subparam();
                 self.state = State::CsiParam
-            },
+            }
             0x3B => {
                 self.action_param();
                 self.state = State::CsiParam
-            },
+            }
             0x3C..=0x3F => {
                 self.action_collect(byte);
                 self.state = State::CsiParam
-            },
+            }
             0x40..=0x7E => self.action_csi_dispatch(performer, byte),
             _ => self.anywhere(performer, byte),
         }
@@ -275,7 +271,7 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
                     } else {
                         param = param.saturating_mul(10).saturating_add(u16::from(byte - b'0'));
                     }
-                },
+                }
                 b':' => {
                     if self.params.is_full() {
                         self.ignoring = true;
@@ -283,7 +279,7 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
                         self.params.extend(param);
                         param = 0;
                     }
-                },
+                }
                 b';' => {
                     if self.params.is_full() {
                         self.ignoring = true;
@@ -291,7 +287,7 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
                         self.params.push(param);
                         param = 0;
                     }
-                },
+                }
                 _ => break,
             }
             taken += 1;
@@ -308,7 +304,7 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
             0x20..=0x2F => {
                 self.action_collect(byte);
                 self.state = State::CsiIntermediate
-            },
+            }
             0x30..=0x39 => self.action_paramnext(byte),
             0x3A => self.action_subparam(),
             0x3B => self.action_param(),
@@ -326,23 +322,23 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
             0x20..=0x2F => {
                 self.action_collect(byte);
                 self.state = State::DcsIntermediate
-            },
+            }
             0x30..=0x39 => {
                 self.action_paramnext(byte);
                 self.state = State::DcsParam
-            },
+            }
             0x3A => {
                 self.action_subparam();
                 self.state = State::DcsParam
-            },
+            }
             0x3B => {
                 self.action_param();
                 self.state = State::DcsParam
-            },
+            }
             0x3C..=0x3F => {
                 self.action_collect(byte);
                 self.state = State::DcsParam
-            },
+            }
             0x40..=0x7E => self.action_hook(performer, byte),
             0x7F => (),
             _ => self.anywhere(performer, byte),
@@ -368,7 +364,7 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
             0x20..=0x2F => {
                 self.action_collect(byte);
                 self.state = State::DcsIntermediate
-            },
+            }
             0x30..=0x39 => self.action_paramnext(byte),
             0x3A => self.action_subparam(),
             0x3B => self.action_param(),
@@ -387,17 +383,17 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
                 performer.unhook();
                 performer.execute(byte);
                 self.state = State::Ground
-            },
+            }
             0x1B => {
                 performer.unhook();
                 self.reset_params();
                 self.state = State::Escape
-            },
+            }
             0x7F => (),
             0x9C => {
                 performer.unhook();
                 self.state = State::Ground
-            },
+            }
             _ => (),
         }
     }
@@ -409,47 +405,47 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
             0x20..=0x2F => {
                 self.action_collect(byte);
                 self.state = State::EscapeIntermediate
-            },
+            }
             0x30..=0x4F => {
                 performer.esc_dispatch(self.intermediates(), self.ignoring, byte);
                 self.state = State::Ground
-            },
+            }
             0x50 => {
                 self.reset_params();
                 self.state = State::DcsEntry
-            },
+            }
             0x51..=0x57 => {
                 performer.esc_dispatch(self.intermediates(), self.ignoring, byte);
                 self.state = State::Ground
-            },
+            }
             0x58 => self.state = State::SosPmApcString,
             0x59..=0x5A => {
                 performer.esc_dispatch(self.intermediates(), self.ignoring, byte);
                 self.state = State::Ground
-            },
+            }
             0x5B => {
                 self.reset_params();
                 self.state = State::CsiEntry
-            },
+            }
             0x5C => {
                 performer.esc_dispatch(self.intermediates(), self.ignoring, byte);
                 self.state = State::Ground
-            },
+            }
             0x5D => {
                 self.osc_raw.clear();
                 self.osc_num_params = 0;
                 self.state = State::OscString
-            },
+            }
             0x5E..=0x5F => self.state = State::SosPmApcString,
             0x60..=0x7E => {
                 performer.esc_dispatch(self.intermediates(), self.ignoring, byte);
                 self.state = State::Ground
-            },
+            }
             // Anywhere.
             0x18 | 0x1A => {
                 performer.execute(byte);
                 self.state = State::Ground
-            },
+            }
             0x1B => (),
             _ => (),
         }
@@ -463,7 +459,7 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
             0x30..=0x7E => {
                 performer.esc_dispatch(self.intermediates(), self.ignoring, byte);
                 self.state = State::Ground
-            },
+            }
             0x7F => (),
             _ => self.anywhere(performer, byte),
         }
@@ -476,17 +472,17 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
             0x07 => {
                 self.osc_end(performer, byte);
                 self.state = State::Ground
-            },
+            }
             0x18 | 0x1A => {
                 self.osc_end(performer, byte);
                 performer.execute(byte);
                 self.state = State::Ground
-            },
+            }
             0x1B => {
                 self.osc_end(performer, byte);
                 self.reset_params();
                 self.state = State::Escape
-            },
+            }
             0x3B => {
                 #[cfg(not(feature = "std"))]
                 {
@@ -495,7 +491,7 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
                     }
                 }
                 self.action_osc_put_param()
-            },
+            }
             _ => self.action_osc_put(byte),
         }
     }
@@ -506,11 +502,11 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
             0x18 | 0x1A => {
                 performer.execute(byte);
                 self.state = State::Ground
-            },
+            }
             0x1B => {
                 self.reset_params();
                 self.state = State::Escape
-            },
+            }
             _ => (),
         }
     }
@@ -600,7 +596,7 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
                 let prev = self.osc_params[param_idx - 1];
                 let begin = prev.1;
                 self.osc_params[param_idx] = (begin, idx);
-            },
+            }
         }
 
         self.osc_num_params += 1;
@@ -639,8 +635,7 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
     /// The aliasing is needed here for multiple slices into self.osc_raw
     #[inline]
     fn osc_dispatch<P: Perform>(&self, performer: &mut P, byte: u8) {
-        let mut slices: [MaybeUninit<&[u8]>; MAX_OSC_PARAMS] =
-            unsafe { MaybeUninit::uninit().assume_init() };
+        let mut slices: [MaybeUninit<&[u8]>; MAX_OSC_PARAMS] = unsafe { MaybeUninit::uninit().assume_init() };
 
         for (i, slice) in slices.iter_mut().enumerate().take(self.osc_num_params) {
             let indices = self.osc_params[i];
@@ -681,7 +676,10 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
         #[cfg(not(test))]
         let ascii_way = true;
         if ascii_way {
-            let ascii = bytes[..plain_chars].iter().position(|byte| !byte.is_ascii()).unwrap_or(plain_chars);
+            let ascii = bytes[..plain_chars]
+                .iter()
+                .position(|byte| !byte.is_ascii())
+                .unwrap_or(plain_chars);
             if ascii > 0 {
                 let mut index = 0;
                 while index < ascii {
@@ -742,7 +740,7 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
                 }
 
                 processed
-            },
+            }
             // Handle invalid and partial utf8.
             Err(err) => {
                 // Dispatch all the valid bytes.
@@ -765,7 +763,7 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
                         // `bytes[valid_bytes + len..plain_chars]`, it's easier
                         // to just skip it and invalid utf8 is pretty rare anyway.
                         valid_bytes + len
-                    },
+                    }
                     None => {
                         if plain_chars < num_bytes {
                             // Process bytes cut off by escape.
@@ -782,9 +780,9 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
                             self.partial_utf8_len = partial_len;
                             num_bytes
                         }
-                    },
+                    }
                 }
-            },
+            }
         }
     }
 
@@ -806,7 +804,7 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
 
                 self.partial_utf8_len = 0;
                 c.len_utf8() - old_bytes
-            },
+            }
             Err(err) => {
                 let valid_bytes = err.valid_up_to();
                 // If we have any valid bytes, that means we partially copied another
@@ -832,11 +830,11 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
 
                         self.partial_utf8_len = 0;
                         invalid_len - old_bytes
-                    },
+                    }
                     // If the character still isn't complete, wait for more data.
                     None => to_copy,
                 }
-            },
+            }
         }
     }
 
@@ -927,14 +925,7 @@ pub trait Perform {
     /// The `ignore` flag indicates that either more than two intermediates
     /// arrived or the number of parameters exceeded the maximum supported
     /// length, and subsequent characters were ignored.
-    fn csi_dispatch(
-        &mut self,
-        _params: &Params,
-        _intermediates: &[u8],
-        _ignore: bool,
-        _action: char,
-    ) {
-    }
+    fn csi_dispatch(&mut self, _params: &Params, _intermediates: &[u8], _ignore: bool, _action: char) {}
 
     /// The final character of an escape sequence has arrived.
     ///
@@ -968,9 +959,9 @@ mod tests {
 
     const OSC_BYTES: &[u8] = &[
         0x1B, 0x5D, // Begin OSC
-        b'2', b';', b'j', b'w', b'i', b'l', b'm', b'@', b'j', b'w', b'i', b'l', b'm', b'-', b'd',
-        b'e', b's', b'k', b':', b' ', b'~', b'/', b'c', b'o', b'd', b'e', b'/', b'a', b'l', b'a',
-        b'c', b'r', b'i', b't', b't', b'y', 0x07, // End OSC
+        b'2', b';', b'j', b'w', b'i', b'l', b'm', b'@', b'j', b'w', b'i', b'l', b'm', b'-', b'd', b'e', b's', b'k',
+        b':', b' ', b'~', b'/', b'c', b'o', b'd', b'e', b'/', b'a', b'l', b'a', b'c', b'r', b'i', b't', b't', b'y',
+        0x07, // End OSC
     ];
 
     #[derive(Default)]
@@ -1010,7 +1001,8 @@ mod tests {
         fn hook(&mut self, params: &Params, intermediates: &[u8], ignore: bool, c: char) {
             let params = params.iter().map(|subparam| subparam.to_vec()).collect();
             let intermediates = intermediates.to_vec();
-            self.dispatched.push(Sequence::DcsHook(params, intermediates, ignore, c));
+            self.dispatched
+                .push(Sequence::DcsHook(params, intermediates, ignore, c));
         }
 
         fn put(&mut self, byte: u8) {
@@ -1043,7 +1035,7 @@ mod tests {
                 assert_eq!(params.len(), 2);
                 assert_eq!(params[0], &OSC_BYTES[2..3]);
                 assert_eq!(params[1], &OSC_BYTES[4..(OSC_BYTES.len() - 1)]);
-            },
+            }
             _ => panic!("expected osc sequence"),
         }
     }
@@ -1076,7 +1068,7 @@ mod tests {
             Sequence::Osc(params, _) => {
                 assert_eq!(params.len(), MAX_OSC_PARAMS);
                 assert!(params.iter().all(Vec::is_empty));
-            },
+            }
             _ => panic!("expected osc sequence"),
         }
     }
@@ -1114,9 +1106,9 @@ mod tests {
     #[test]
     fn parse_osc_with_utf8_arguments() {
         const INPUT: &[u8] = &[
-            0x0D, 0x1B, 0x5D, 0x32, 0x3B, 0x65, 0x63, 0x68, 0x6F, 0x20, 0x27, 0xC2, 0xAF, 0x5C,
-            0x5F, 0x28, 0xE3, 0x83, 0x84, 0x29, 0x5F, 0x2F, 0xC2, 0xAF, 0x27, 0x20, 0x26, 0x26,
-            0x20, 0x73, 0x6C, 0x65, 0x65, 0x70, 0x20, 0x31, 0x07,
+            0x0D, 0x1B, 0x5D, 0x32, 0x3B, 0x65, 0x63, 0x68, 0x6F, 0x20, 0x27, 0xC2, 0xAF, 0x5C, 0x5F, 0x28, 0xE3, 0x83,
+            0x84, 0x29, 0x5F, 0x2F, 0xC2, 0xAF, 0x27, 0x20, 0x26, 0x26, 0x20, 0x73, 0x6C, 0x65, 0x65, 0x70, 0x20, 0x31,
+            0x07,
         ];
         let mut dispatcher = Dispatcher::default();
         let mut parser = Parser::new();
@@ -1125,7 +1117,10 @@ mod tests {
 
         assert_eq!(dispatcher.dispatched[0], Sequence::Execute(b'\r'));
         let osc_data = INPUT[5..(INPUT.len() - 1)].into();
-        assert_eq!(dispatcher.dispatched[1], Sequence::Osc(vec![vec![b'2'], osc_data], true));
+        assert_eq!(
+            dispatcher.dispatched[1],
+            Sequence::Osc(vec![vec![b'2'], osc_data], true)
+        );
         assert_eq!(dispatcher.dispatched.len(), 2);
     }
 
@@ -1141,7 +1136,7 @@ mod tests {
         match &dispatcher.dispatched[0] {
             Sequence::Osc(params, _) => {
                 assert_eq!(params[1], &INPUT[4..(INPUT.len() - 2)]);
-            },
+            }
             _ => panic!("expected osc sequence"),
         }
     }
@@ -1175,7 +1170,7 @@ mod tests {
 
                 #[cfg(not(feature = "std"))]
                 assert_eq!(params[1].len(), MAX_OSC_RAW - params[0].len());
-            },
+            }
             _ => panic!("expected osc sequence"),
         }
     }
@@ -1198,7 +1193,7 @@ mod tests {
             Sequence::Csi(params, _, ignore, _) => {
                 assert_eq!(params.len(), params::MAX_PARAMS);
                 assert!(!ignore);
-            },
+            }
             _ => panic!("expected csi sequence"),
         }
     }
@@ -1221,7 +1216,7 @@ mod tests {
             Sequence::Csi(params, _, ignore, _) => {
                 assert_eq!(params.len(), params::MAX_PARAMS);
                 assert!(ignore);
-            },
+            }
             _ => panic!("expected csi sequence"),
         }
     }
@@ -1285,7 +1280,7 @@ mod tests {
                 assert_eq!(intermediates, b"?");
                 assert_eq!(params, &[[1049]]);
                 assert!(!ignore);
-            },
+            }
             _ => panic!("expected csi sequence"),
         }
     }
@@ -1304,7 +1299,7 @@ mod tests {
                 assert_eq!(params, &[vec![38, 2, 255, 0, 255], vec![1]]);
                 assert_eq!(intermediates, &[]);
                 assert!(!ignore);
-            },
+            }
             _ => panic!("expected csi sequence"),
         }
     }
@@ -1324,7 +1319,7 @@ mod tests {
                 assert_eq!(params.len(), params::MAX_PARAMS);
                 assert!(params.iter().all(|param| param == &[1]));
                 assert!(ignore);
-            },
+            }
             _ => panic!("expected dcs sequence"),
         }
     }
@@ -1343,7 +1338,7 @@ mod tests {
                 assert_eq!(intermediates, b"$");
                 assert_eq!(params, &[[1]]);
                 assert!(!ignore);
-            },
+            }
             _ => panic!("expected dcs sequence"),
         }
         assert_eq!(dispatcher.dispatched[1], Sequence::DcsPut(b'x'));
@@ -1363,7 +1358,7 @@ mod tests {
             Sequence::DcsHook(params, _, _, c) => {
                 assert_eq!(params, &[[0], [1]]);
                 assert_eq!(c, &'|');
-            },
+            }
             _ => panic!("expected dcs sequence"),
         }
         for (i, byte) in b"17/ab".iter().enumerate() {
@@ -1401,7 +1396,7 @@ mod tests {
                 assert_eq!(intermediates, b"(");
                 assert_eq!(*byte, b'A');
                 assert!(!ignore);
-            },
+            }
             _ => panic!("expected esc sequence"),
         }
     }
@@ -1415,7 +1410,10 @@ mod tests {
         parser.advance(&mut dispatcher, INPUT);
 
         assert_eq!(dispatcher.dispatched.len(), 2);
-        assert_eq!(dispatcher.dispatched[0], Sequence::Csi(vec![vec![2004]], vec![63], false, 'l'));
+        assert_eq!(
+            dispatcher.dispatched[0],
+            Sequence::Csi(vec![vec![2004]], vec![63], false, 'l')
+        );
         assert_eq!(dispatcher.dispatched[1], Sequence::Esc(vec![35], false, 56));
     }
 
@@ -1434,7 +1432,7 @@ mod tests {
                 assert_eq!(params, &[[0; 32]]);
                 assert_eq!(c, &'x');
                 assert!(ignore);
-            },
+            }
             _ => panic!("expected csi sequence"),
         }
     }
@@ -1454,7 +1452,7 @@ mod tests {
                 assert_eq!(intermediates, b"?");
                 assert_eq!(params, &[[1049]]);
                 assert!(!ignore);
-            },
+            }
             _ => panic!("expected csi sequence"),
         }
     }
@@ -1488,7 +1486,7 @@ mod tests {
                 for item in params[1].iter() {
                     assert_eq!(*item, b'a');
                 }
-            },
+            }
             _ => panic!("expected osc sequence"),
         }
     }
@@ -1512,7 +1510,7 @@ mod tests {
             Sequence::Osc(params, false) => {
                 assert_eq!(params[0], b"2");
                 assert_eq!(params[1], INPUT_MIDDLE);
-            },
+            }
             _ => panic!("expected osc sequence"),
         }
     }
@@ -1688,8 +1686,14 @@ mod tests {
                 1 => bytes.push(next(32) as u8),
                 2 => bytes.push(0x7F),
                 3 => bytes.extend_from_slice(
-                    [&b"\x1b[1;31m"[..], b"\x1b[0m", b"\x1b]0;title\x07", b"\x1b[", b"\x1b", b"\x1b(B"]
-                        [next(6) as usize],
+                    [
+                        &b"\x1b[1;31m"[..],
+                        b"\x1b[0m",
+                        b"\x1b]0;title\x07",
+                        b"\x1b[",
+                        b"\x1b",
+                        b"\x1b(B",
+                    ][next(6) as usize],
                 ),
                 4 => bytes.extend_from_slice(["é", "日", "🙂", "e\u{301}"][next(4) as usize].as_bytes()),
                 5 => bytes.extend_from_slice(&"日🙂".as_bytes()[..1 + next(6) as usize]),
@@ -1775,7 +1779,7 @@ mod tests {
             }
             match next(6) {
                 0 => bytes.push([0x18, 0x1A, 0x1B, 0x7F][next(4) as usize]),
-                1 => {},
+                1 => {}
                 _ => bytes.push(0x40 + next(63) as u8),
             }
             if next(2) == 0 {

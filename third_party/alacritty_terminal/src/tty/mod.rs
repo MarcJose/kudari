@@ -101,7 +101,11 @@ pub fn setup_env() {
     // Default to 'alacritty' terminfo if it is available, otherwise
     // default to 'xterm-256color'. May be overridden by user's config
     // below.
-    let terminfo = if terminfo_exists("alacritty") { "alacritty" } else { "xterm-256color" };
+    let terminfo = if terminfo_exists("alacritty") {
+        "alacritty"
+    } else {
+        "xterm-256color"
+    };
     unsafe { env::set_var("TERM", terminfo) };
 
     // Advertise 24-bit color support.
@@ -117,9 +121,7 @@ fn terminfo_exists(terminfo: &str) -> bool {
     // Return true if the terminfo file exists at the specified location.
     macro_rules! check_path {
         ($path:expr) => {
-            if $path.join(first).join(terminfo).exists()
-                || $path.join(&first_hex).join(terminfo).exists()
-            {
+            if $path.join(first).join(terminfo).exists() || $path.join(&first_hex).join(terminfo).exists() {
                 return true;
             }
         };
