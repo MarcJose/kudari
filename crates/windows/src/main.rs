@@ -139,5 +139,13 @@ fn start_services() {
     let toggle = frontend::Windows.toggle();
     if !win::rk_win_register_hotkey(&qs(&toggle)) {
         eprintln!("kudari: Windows refused the shortcut {toggle}");
+        // A program with windows has no console that would show that: the tray tells it.
+        let shown = kudari_qt::qt::rk_native_key_sequence(&qs(&toggle)).to_string();
+        let text = kudari_core::i18n::tr_arg(
+            "@info",
+            "Windows does not give Kudari the shortcut %1, which another program may use. Choose another one on the page Shortcuts of the settings.",
+            &shown,
+        );
+        win::rk_win_notify(&qs("Kudari"), &qs(&text));
     }
 }
