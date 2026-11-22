@@ -183,6 +183,13 @@ pub(super) fn program(pid: u32, own: Option<&Path>) -> Option<String> {
     tree::program(&processes(), pid, is_own)
 }
 
+/// Where the program behind process `pid` lies; for `kudari mcp`, the binary `own`, that of
+/// the agent which started it.
+pub(super) fn program_path(pid: u32, own: Option<&Path>) -> Option<PathBuf> {
+    let is_own = |id| own.is_some_and(|own| image(id).is_some_and(|image| same_file(&image, own)));
+    image(tree::asker(&processes(), pid, is_own)?)
+}
+
 /// Whether two paths name the same file, as Windows ignores case.
 fn same_file(one: &Path, other: &Path) -> bool {
     match (std::fs::canonicalize(one), std::fs::canonicalize(other)) {

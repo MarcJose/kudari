@@ -40,7 +40,13 @@ pub fn ask_user(agent: String) {
 }
 
 fn show_question(c: Pin<&mut Controller>, agent: &str, program: Option<&str>) {
-    let Some(text) = c.app().agent_question(agent, program) else {
+    let Some(text) = c.app().agent_question(
+        agent,
+        agent::Asker {
+            name: program,
+            ..agent::Asker::default()
+        },
+    ) else {
         return;
     };
     kde::rk_ask_agent(

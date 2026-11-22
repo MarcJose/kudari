@@ -358,6 +358,37 @@ try {
     [void] $process.WaitForExit(10000)
     [void] [Kudari.Hotkeys]::UnregisterHotKey([IntPtr]::Zero, 1)
 
+    # The question about an AI agent names where its program lies, and warns where that is a
+    # folder for temporary files: here a copy of Kudari in the folder of the test, run as
+    # `mcp`, whose first tool asks.
+    Add-Content $ini "`n[Security]`nAllowAgentReading=true"
+    $process = Start-Process $Program -PassThru -RedirectStandardError (Join-Path $work 'agent.txt') -WorkingDirectory $work
+    $ByProcess = New-Object System.Windows.Automation.PropertyCondition ($Automation::ProcessIdProperty, $process.Id)
+    [void] (Wait-For { Get-Windows | Where-Object { -not $_.Current.BoundingRectangle.IsEmpty } | Select-Object -First 1 } 15)
+    $agentProgram = Join-Path (New-Item -ItemType Directory -Force (Join-Path $work 'agent')).FullName 'agent.exe'
+    Copy-Item $Program $agentProgram
+    $start = New-Object System.Diagnostics.ProcessStartInfo $agentProgram, 'mcp'
+    $start.UseShellExecute = $false
+    $start.RedirectStandardInput = $true
+    $start.RedirectStandardOutput = $true
+    $agent = [System.Diagnostics.Process]::Start($start)
+    # Its input stays open, as an agent waits for the answer.
+    $agent.StandardInput.WriteLine('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}')
+    $agent.StandardInput.WriteLine('{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_terminals","arguments":{}}}')
+    $agent.StandardInput.Flush()
+    $question = Wait-For {
+        foreach ($element in Find-ByType ([System.Windows.Automation.ControlType]::Text)) {
+            if ($element.Current.Name -like '*Its program is*') { return $element.Current.Name }
+        }
+    } 15
+    Test-Check 'the question about an agent names where its program lies' ([bool] $question -and $question -like "*$agentProgram*")
+    Test-Check 'the question warns of a program in a folder for temporary files' ([bool] $question -and $question -like '*for temporary files*')
+    if (-not ($question -like "*$agentProgram*" -and $question -like '*for temporary files*')) { Write-Host "      the question: '$question'" }
+    [void] (Invoke-Element 'Deny')
+    $agent.Kill()
+    $process | Stop-Process -Force
+    [void] $process.WaitForExit(10000)
+
     # In German, the credits and the buttons of the dialogs are German as well. The script
     # stays ASCII for Windows PowerShell, so the umlauts come as their codes.
     $env:LANGUAGE = 'de'

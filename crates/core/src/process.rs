@@ -327,6 +327,19 @@ pub fn program(pid: u32, own: Option<&Path>) -> Option<String> {
     }
 }
 
+/// Where the program behind process `pid` lies, for the question about an AI agent; for
+/// `kudari mcp`, the binary `own`, that of the agent which started it. On Windows only.
+#[must_use]
+pub fn program_path(pid: u32, own: Option<&Path>) -> Option<PathBuf> {
+    #[cfg(windows)]
+    return windows::program_path(pid, own);
+    #[cfg(not(windows))]
+    {
+        let _ = (pid, own);
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

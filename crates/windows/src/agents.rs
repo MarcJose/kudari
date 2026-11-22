@@ -9,11 +9,12 @@
 //! asks the user before each new agent gets access, and names the program that connected.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use kudari_core::agent::{Error, Request};
+use kudari_core::agent::{Asker, Error, Request, lies_in, unusual_folders};
 use kudari_core::pipe::{self, Handler};
 use kudari_qt::controller::queue;
 
@@ -73,10 +74,15 @@ pub fn ask_user(agent: String) {
     // Finding the program reads the list of processes, which takes a moment. Without a
     // thread, as when the user has as many processes as allowed, the question comes without
     // the name of the program.
-    let ask = |agent: String, program: Option<String>| {
+    let ask = |agent: String, program: Option<String>, path: Option<PathBuf>| {
         queue(move |mut controller| {
+            let asker = Asker {
+                name: program.as_deref(),
+                path: path.as_deref(),
+                unusual: path.as_deref().is_some_and(|path| lies_in(path, &unusual_folders())),
+            };
             // The question is part of the window, which shows for it.
-            if controller.as_mut().ask_about_agent(&agent, program.as_deref()) && !*controller.window_visible() {
+            if controller.as_mut().ask_about_agent(&agent, asker) && !*controller.window_visible() {
                 controller.toggle_window();
             }
         });
@@ -85,10 +91,11 @@ pub fn ask_user(agent: String) {
     let asked = std::thread::Builder::new().name("agent".to_string()).spawn(move || {
         let own = std::env::current_exe().ok();
         let program = process.and_then(|process| kudari_core::process::program(process, own.as_deref()));
-        ask(agent, program);
+        let path = process.and_then(|process| kudari_core::process::program_path(process, own.as_deref()));
+        ask(agent, program, path);
     });
     if asked.is_err() {
-        ask(unnamed, None);
+        ask(unnamed, None, None);
     }
 }
 
