@@ -1194,8 +1194,8 @@ impl qobject::Controller {
 
     /// Asks the user about `agent` through `agentAsked`, with the name of its program,
     /// unless the question is no longer open. Returns whether it asked.
-    pub fn ask_about_agent(self: Pin<&mut Self>, agent: &str, program: Option<&str>) -> bool {
-        let Some(text) = self.app.agent_question(agent, program) else {
+    pub fn ask_about_agent(self: Pin<&mut Self>, agent: &str, asker: kudari_core::agent::Asker) -> bool {
+        let Some(text) = self.app.agent_question(agent, asker) else {
             return false;
         };
         self.agent_asked(

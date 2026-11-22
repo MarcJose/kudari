@@ -1324,6 +1324,14 @@ msgid "an unknown program"
 msgstr "an unknown program"
 
 msgctxt "@info"
+msgid "Its program is %1."
+msgstr "Its program is %1."
+
+msgctxt "@info"
+msgid "It lies in a folder for downloads or for temporary files, where programs come that nobody installed."
+msgstr "It lies in a folder for downloads or for temporary files, where programs come that nobody installed."
+
+msgctxt "@info"
 msgid "Allow this only if you started the agent yourself. Its access lasts until the agent ends, or until you end it with the eye button in the bar."
 msgstr "Allow this only if you started the agent yourself. Its access lasts until the agent ends, or until you end it with the eye button in the bar."
 
