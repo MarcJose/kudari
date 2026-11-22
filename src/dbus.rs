@@ -628,6 +628,14 @@ impl TestHooks {
         kudari_qt::terminal_item::set_refresh_delay(milliseconds.into());
     }
 
+    /// The text of the notification sent last, as it went to `KNotification`.
+    fn last_notification(&self) -> String {
+        crate::plasma::LAST_NOTIFICATION
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// The text under each match of the search that the last frame of the terminal showed,
     /// a line each.
     fn matched_text(&self, terminal: i32) -> String {
@@ -681,6 +689,17 @@ impl TestHooks {
         queue(move |_| {
             if let Some(backend) = crate::terminal::backend(terminal) {
                 let _ = backend.save_output(std::path::Path::new(&path));
+            }
+        });
+    }
+
+    /// Saves the output of a terminal to `path` from now on, as auto save in its menu does
+    /// after its dialog; an empty path turns it off.
+    fn auto_save(&self, terminal: i32, path: String) {
+        queue(move |_| {
+            if let Some(backend) = crate::terminal::backend(terminal) {
+                *backend.auto_save.lock().unwrap_or_else(PoisonError::into_inner) =
+                    (!path.is_empty()).then(|| PathBuf::from(path));
             }
         });
     }

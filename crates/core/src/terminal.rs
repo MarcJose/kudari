@@ -6,8 +6,8 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, mpsc};
 use std::time::Instant;
 
 use alacritty_terminal::event::{Event, EventListener, Notify, OnResize, WindowSize};
@@ -328,6 +328,9 @@ struct Mailbox {
     replies: Mutex<Vec<Reply>>,
     /// Whether the terminal broke; see [`Report::Failed`].
     failed: AtomicBool,
+    /// Counts what can change the text of the terminal: output, a reset, a new size or a new
+    /// length of the history. Auto save writes only when it moved; see [`auto_save`].
+    changes: AtomicU64,
 }
 
 /// The most bytes of a title that a program sets: tabs, the window and notifications show
@@ -425,6 +428,7 @@ impl EventListener for Proxy {
         };
         let mailbox = &self.mailbox;
         if matches!(event, Event::Wakeup) {
+            mailbox.changes.fetch_add(1, Ordering::Relaxed);
             stats::count(stats::Count::Wakeups);
             stats::key(id, stats::Step::Output);
         }
@@ -533,6 +537,8 @@ pub struct Backend {
     window_size: Mutex<WindowSize>,
     /// File the terminal content is saved to regularly.
     pub auto_save: Mutex<Option<PathBuf>>,
+    /// The file auto save wrote last, and the count of changes it wrote.
+    saved: Mutex<Option<(PathBuf, u64)>>,
     /// Scrollback size of this terminal, instead of the configured one.
     history_lines: Mutex<Option<usize>>,
     /// Whether programs get the mouse here, instead of the configured choice.
@@ -688,6 +694,7 @@ impl Backend {
             mailbox,
             window_size: Mutex::new(size),
             auto_save: Mutex::new(None),
+            saved: Mutex::new(None),
             history_lines: Mutex::new(None),
             mouse_tracking: Mutex::new(None),
             quoting,
@@ -714,6 +721,12 @@ impl Backend {
             config.scrolling_history = lines;
         }
         self.lock().set_options(config);
+        self.changed();
+    }
+
+    /// Notes a change of the text that came without output; see [`Mailbox::changes`].
+    fn changed(&self) {
+        self.mailbox.changes.fetch_add(1, Ordering::Relaxed);
     }
 
     /// The scrollback size of this terminal.
@@ -807,6 +820,7 @@ impl Backend {
         }
         term.resize(TermSize::new(columns.into(), lines.into()));
         drop(term);
+        self.changed();
         stats::count(stats::Count::Resizes);
         let mut notifier = Notifier(self.notifier.0.clone());
         notifier.on_resize(size);
@@ -973,6 +987,7 @@ impl Backend {
         let full_screen = term.mode().contains(TermMode::ALT_SCREEN);
         term.reset_state();
         drop(term);
+        self.changed();
         crate::memory::release_later();
         if redraws_after_reset(self.is_busy(), full_screen) {
             self.write(vec![0x0c]);
@@ -1156,16 +1171,73 @@ pub fn start(
     Ok(())
 }
 
-/// Writes the terminal content to its auto-save file, if it has one.
+/// Writes the terminal content to its auto-save file, if it has one and the text may have
+/// changed since it was written there. A thread of its own reads and writes it, which takes
+/// long for a long history; the user interface does not wait for it.
 pub fn auto_save(id: TerminalId) {
+    static SAVER: OnceLock<Option<mpsc::Sender<TerminalId>>> = OnceLock::new();
     let Some(backend) = backend(id) else {
         return;
     };
-    let path = backend.auto_save.lock().ok().and_then(|path| path.clone());
-    if let Some(path) = path
-        && let Err(error) = backend.save_output(&path)
-    {
-        eprintln!("kudari: could not save {}: {error}", path.display());
+    if !backend.save_due() {
+        return;
+    }
+    let saver = SAVER.get_or_init(|| {
+        let (sender, receiver) = mpsc::channel::<TerminalId>();
+        std::thread::Builder::new()
+            .name("kudari-save".into())
+            .spawn(move || {
+                // In the order asked for, so a file gets the newer text last.
+                for id in receiver {
+                    if let Some(terminal) = self::backend(id) {
+                        terminal.save_now();
+                    }
+                }
+            })
+            .ok()
+            .map(|_| sender)
+    });
+    match saver {
+        Some(saver) => {
+            let _ = saver.send(id);
+        }
+        None => backend.save_now(),
+    }
+}
+
+/// Whether auto save is due for `path` at `count` changes, after it wrote `saved` last: when
+/// the text may have changed, or the file is another or gone.
+fn save_due(path: &std::path::Path, count: u64, saved: Option<&(PathBuf, u64)>) -> bool {
+    saved.is_none_or(|(written, at)| written != path || *at != count) || !path.exists()
+}
+
+impl Backend {
+    fn save_due(&self) -> bool {
+        let path = lock(&self.auto_save).clone();
+        path.is_some_and(|path| {
+            save_due(
+                &path,
+                self.mailbox.changes.load(Ordering::Relaxed),
+                lock(&self.saved).as_ref(),
+            )
+        })
+    }
+
+    /// Writes the text to the auto-save file, if it is still the one and the text may have
+    /// changed: the user can turn auto save off while this waited.
+    fn save_now(&self) {
+        let Some(path) = lock(&self.auto_save).clone() else {
+            return;
+        };
+        // Before the text: output while it is read counts for the next time.
+        let count = self.mailbox.changes.load(Ordering::Relaxed);
+        if !save_due(&path, count, lock(&self.saved).as_ref()) {
+            return;
+        }
+        match self.save_output(&path) {
+            Ok(()) => *lock(&self.saved) = Some((path, count)),
+            Err(error) => eprintln!("kudari: could not save {}: {error}", path.display()),
+        }
     }
 }
 
@@ -1317,6 +1389,30 @@ mod tests {
         ));
         assert_eq!(run_work(), 1);
         assert_eq!(COPIED.take(), ["later"]);
+    }
+
+    #[test]
+    fn auto_save_writes_after_changes_only() {
+        let proxy = kept_proxy();
+        let path = std::env::temp_dir().join(format!("kudari-auto-save-{}", std::process::id()));
+        std::fs::write(&path, "saved").unwrap();
+        let count = || proxy.mailbox.changes.load(Ordering::Relaxed);
+        // Nothing written yet: due.
+        assert!(save_due(&path, count(), None));
+        let saved = (path.clone(), count());
+        assert!(!save_due(&path, count(), Some(&saved)), "nothing changed");
+        // Titles and bells change no text; output does.
+        proxy.send_event(Event::Title("title".into()));
+        proxy.send_event(Event::Bell);
+        assert!(!save_due(&path, count(), Some(&saved)));
+        proxy.send_event(Event::Wakeup);
+        assert!(save_due(&path, count(), Some(&saved)), "output came");
+        let saved = (path.clone(), count());
+        // Another file, or the file gone, is due as well.
+        assert!(save_due(&path.with_extension("other"), count(), Some(&saved)));
+        std::fs::remove_file(&path).unwrap();
+        assert!(save_due(&path, count(), Some(&saved)), "the file went away");
+        run_work();
     }
 
     #[test]
