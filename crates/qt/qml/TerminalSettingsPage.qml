@@ -428,6 +428,7 @@ FormCard.FormCardPage {
 
     FormCard.FormCard {
         NumberField {
+            id: historyLines
             label: root.controller.translate("@label:spinbox", "History lines:")
             from: 0
             to: 1000000
@@ -438,6 +439,27 @@ FormCard.FormCardPage {
                     root.set("HistoryLines", value);
                 }
             }
+        }
+
+        // What the lines take: each keeps a cell for every column, whatever it shows.
+        FormCard.FormTextDelegate {
+            id: historyMemory
+            objectName: "historyMemory"
+
+            readonly property var memory: JSON.parse(root.controller.historyMemory(historyLines.value))
+
+            text: root.controller.translateWith("@info", "About %1 for each terminal as wide as the active one.", Qt.locale().formattedDataSize(memory.each))
+        }
+
+        FormCard.FormTextDelegate {
+            objectName: "historyMemoryAll"
+            text: root.controller.translateWith("@info", "About %1 for the terminals open now.", Qt.locale().formattedDataSize(historyMemory.memory.all))
+        }
+
+        FormCard.FormTextDelegate {
+            objectName: "historyWarning"
+            visible: historyMemory.memory.warn
+            text: root.controller.translate("@info", "That is more than a quarter of the memory of this computer.")
         }
 
         FormCard.FormDelegateSeparator {}

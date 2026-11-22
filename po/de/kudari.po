@@ -1555,3 +1555,19 @@ msgstr "Bilder je Sekunde nur für Ausgabe:"
 msgctxt "@info"
 msgid "On a screen faster than 60 Hz, fewer frames for a terminal that only shows output spare the processor and the graphics card. What you type always shows at once."
 msgstr "Auf einem Bildschirm mit mehr als 60 Hz schonen weniger Bilder für ein Terminal, das nur Ausgabe zeigt, Prozessor und Grafikkarte. Was Sie tippen, erscheint immer sofort."
+
+msgctxt "@info"
+msgid "About %1 for each terminal as wide as the active one."
+msgstr "Etwa %1 für jedes Terminal, das so breit ist wie das aktive."
+
+msgctxt "@info"
+msgid "About %1 for the terminals open now."
+msgstr "Etwa %1 für die jetzt offenen Terminals."
+
+msgctxt "@info"
+msgid "That is more than a quarter of the memory of this computer."
+msgstr "Das ist mehr als ein Viertel des Arbeitsspeichers dieses Rechners."
+
+msgctxt "@label"
+msgid "About %1 of memory."
+msgstr "Etwa %1 Arbeitsspeicher."

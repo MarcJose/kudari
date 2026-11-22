@@ -6,7 +6,8 @@
 #
 #   tools/bench.sh [--binary [NAME=]PATH] [--rev [NAME=]REV] [--runs N] [--warmup N] [--seed N]
 #                  [--loads LOAD,...]
-#                  [--set GROUP.KEY=VALUE] [--scale N] [--detail] [--scenarios] [--perf]
+#                  [--set GROUP.KEY=VALUE] [--scale N] [--font FAMILY:SIZE] [--history N]
+#                  [--refresh HZ] [--outputs 1|2] [--detail] [--scenarios] [--perf]
 #                  [--qml-profile] [--keep] [--keep-env] [TERMINAL...]
 #
 # The terminals are kudari, yakuake, konsole, alacritty, kitty, ghostty, contour and xterm;
@@ -77,9 +78,18 @@
 # on the monotonic clock from its first byte to the answer of the terminal to a query of the
 # cursor (DSR) after its last, when the terminal has read and parsed all of it; the report
 # gives that query alone and how long each terminal still worked after the last byte. Each
-# terminal keeps its own font, so the number of cells differs between them. The graphics card of the
-# computer draws, so compare only runs on the same computer. Needs kwin_wayland with
-# Xwayland, qdbus6, dbus-run-session and python3, and kscreen-doctor for --scale.
+# terminal keeps its own font, so the number of cells differs between them, unless --font
+# 'FAMILY:SIZE' gives all the same one; --history N gives them all N lines of history as well.
+# Both go to Kudari as settings, to Konsole and Yakuake in a profile, and to alacritty, kitty
+# and xterm on their command line; ghostty takes the font, and its history counts bytes, not
+# lines; contour takes neither. The report warns when the cells still differ by more than 5 %,
+# as the height of a line, the margins and the rounding of the width of a cell differ between
+# terminals. The virtual screen shows 60 frames a second; --refresh HZ gives it that rate
+# instead, as a mode of its own that kscreen-doctor adds, and the measurement stops if it does
+# not take. --outputs 2 gives KWin a second screen beside it, and Kudari opens on that one. The
+# graphics card of the computer draws, so compare only runs on the same computer. Needs
+# kwin_wayland with Xwayland, qdbus6, dbus-run-session and python3, and kscreen-doctor for
+# --scale and --refresh.
 set -eu
 tools=$(cd "$(dirname "$0")" && pwd)
 all="kudari yakuake konsole alacritty kitty ghostty contour xterm"
@@ -135,6 +145,30 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
         fi
         sleep 1
     fi
+    # A rate of its own for the screen, as a mode that kscreen-doctor adds and selects. Only
+    # the private KWin of the measurement may get it, never the session of the user.
+    refresh=$(cat "$KUDARI_BENCH_WORK/refresh" 2> /dev/null || true)
+    if [ -n "$refresh" ]; then
+        case $XDG_RUNTIME_DIR in */kudari-bench-run.*) private=1 ;; *) private= ;; esac
+        if [ "$WAYLAND_DISPLAY" != kudari-bench ] || [ -z "$private" ]; then
+            echo "the rate of the screen is only set in the KWin of the measurement" > "$KUDARI_BENCH_WORK/failed"
+            exit 1
+        fi
+        modes() { kscreen-doctor -o 2> /dev/null | sed 's/\x1b\[[0-9;]*m//g'; }
+        output=$(modes | awk '/^Output:/ { print $3; exit }')
+        kscreen-doctor "output.$output.addCustomMode.2560.1440.$((refresh * 1000)).full" > /dev/null 2>&1 || true
+        sleep 1
+        # The mode closest to the rate asked for, such as 143.91 for 144.
+        mode=$(modes | grep -o '[0-9]*:2560x1440@[0-9.]*' | awk -F'[:@]' -v want="$refresh" \
+            'BEGIN { best = -1 } { apart = $3 - want; if (apart < 0) apart = -apart; if (apart < 1 && (best < 0 || apart < near)) { best = $1; near = apart } } END { if (best >= 0) print best }')
+        [ -z "$mode" ] || kscreen-doctor "output.$output.mode.$mode" > /dev/null 2>&1 || true
+        sleep 1
+        active=$(modes | grep -o '[0-9]*:2560x1440@[0-9.]*\*' | head -n 1 | sed 's/.*@//; s/\*//')
+        if [ -z "$active" ] || ! awk -v active="$active" -v want="$refresh" 'BEGIN { exit !(active - want < 1 && want - active < 1) }'; then
+            echo "the virtual screen did not take a rate of $refresh Hz but ${active:-none}; see kscreen-doctor -o" > "$KUDARI_BENCH_WORK/failed"
+            exit 1
+        fi
+    fi
     [ -z "${KUDARI_BENCH_SCENARIOS:-}" ] || exec "$tools/bench-scenarios.sh"
 fi
 if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
@@ -159,6 +193,21 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
         # installed one in its place.
         owner=$(qdbus6 org.freedesktop.DBus / org.freedesktop.DBus.GetConnectionUnixProcessID "$1" 2> /dev/null || true)
         [ "$owner" = "$pid" ] || fail "$terminal ended after it started; see $log"
+    }
+    # The same font and history for all terminals, where --font and --history give them.
+    same_font=$(cat "$KUDARI_BENCH_WORK/same-font" 2> /dev/null || true)
+    same_family=${same_font%:*} same_size=${same_font##*:}
+    same_history=$(cat "$KUDARI_BENCH_WORK/same-history" 2> /dev/null || true)
+    # Konsole and Yakuake take them from the default profile of Konsole.
+    same_profile() {
+        [ -n "$same_font$same_history" ] || return 0
+        mkdir -p "$XDG_DATA_HOME/konsole"
+        {
+            printf '[General]\nName=Bench\nParent=FALLBACK/\n'
+            [ -z "$same_font" ] || printf '[Appearance]\nFont=%s,%s,-1,5,400,0,0,0,0,0,0,0,0,0,0,1\n' "$same_family" "$same_size"
+            [ -z "$same_history" ] || printf '[Scrolling]\nHistoryMode=1\nHistorySize=%s\n' "$same_history"
+        } > "$XDG_DATA_HOME/konsole/Bench.profile"
+        printf '[Desktop Entry]\nDefaultProfile=Bench.profile\n' >> "$XDG_CONFIG_HOME/konsolerc"
     }
     # The warm-up runs come first, as w1, w2 and so on; the report leaves them out.
     round=1
@@ -221,21 +270,46 @@ if [ "${KUDARI_BENCH_ROLE:-}" = session ]; then
                 yakuake)
                     printf '[Dialogs]\nFirstRun=false\nConfirmQuit=false\n[Window]\nWidth=100\nHeight=100\n[Animation]\nFrames=0\n' \
                         > "$XDG_CONFIG_HOME/yakuakerc"
+                    same_profile
                     SHELL=$shell yakuake > "$log" 2>&1 &
                     pid=$!
                     on_bus org.kde.yakuake
                     qdbus6 org.kde.yakuake /yakuake/window toggleWindowState > /dev/null ||
                         fail "could not open $terminal; see $log"
                     ;;
-                konsole) konsole --nofork --hide-menubar --hide-tabbar -e "$shell" > "$log" 2>&1 & pid=$! ;;
-                alacritty) alacritty -e "$shell" > "$log" 2>&1 & pid=$! ;;
-                kitty) kitty -o confirm_os_window_close=0 "$shell" > "$log" 2>&1 & pid=$! ;;
+                konsole)
+                    same_profile
+                    konsole --nofork --hide-menubar --hide-tabbar -e "$shell" > "$log" 2>&1 &
+                    pid=$!
+                    ;;
+                alacritty)
+                    set --
+                    [ -z "$same_font" ] || set -- -o "font.normal.family=\"$same_family\"" -o "font.size=$same_size"
+                    [ -z "$same_history" ] || set -- "$@" -o "scrolling.history=$same_history"
+                    alacritty "$@" -e "$shell" > "$log" 2>&1 &
+                    pid=$!
+                    ;;
+                kitty)
+                    set --
+                    [ -z "$same_font" ] || set -- -o "font_family=$same_family" -o "font_size=$same_size"
+                    [ -z "$same_history" ] || set -- "$@" -o "scrollback_lines=$same_history"
+                    kitty -o confirm_os_window_close=0 "$@" "$shell" > "$log" 2>&1 &
+                    pid=$!
+                    ;;
                 ghostty)
-                    ghostty --gtk-single-instance=false --confirm-close-surface=false -e "$shell" > "$log" 2>&1 &
+                    set --
+                    [ -z "$same_font" ] || set -- "--font-family=$same_family" "--font-size=$same_size"
+                    ghostty --gtk-single-instance=false --confirm-close-surface=false "$@" -e "$shell" > "$log" 2>&1 &
                     pid=$!
                     ;;
                 contour) contour terminal execute "$shell" > "$log" 2>&1 & pid=$! ;;
-                xterm) xterm -e "$shell" > "$log" 2>&1 & pid=$! ;;
+                xterm)
+                    set --
+                    [ -z "$same_font" ] || set -- -fa "$same_family" -fs "$same_size"
+                    [ -z "$same_history" ] || set -- "$@" -sl "$same_history"
+                    xterm "$@" -e "$shell" > "$log" 2>&1 &
+                    pid=$!
+                    ;;
             esac
             # Time for the window to come up and to go full screen.
             sleep 3
@@ -281,6 +355,10 @@ keep=
 keep_env=
 warmup=1
 settings=
+font=
+history=
+refresh=
+outputs=1
 seed=
 detail=
 perf=
@@ -305,6 +383,30 @@ while [ $# -gt 0 ]; do
         --runs) runs=$2; shift 2 ;;
         --keep) keep=1; shift ;;
         --scale) scale=$2; shift 2 ;;
+        --font)
+            case ${2:-} in
+                *:*) ;;
+                *) die "--font needs FAMILY:SIZE, such as 'DejaVu Sans Mono:10'" ;;
+            esac
+            printf '%s' "${2##*:}" | grep -qE '^[0-9]+(\.[0-9]+)?$' || die "the size of --font is a number, not '${2##*:}'"
+            [ -n "${2%:*}" ] && [ "$(printf '%s' "$2" | wc -l)" -eq 0 ] || die "--font needs the name of a font on one line"
+            font=$2
+            shift 2
+            ;;
+        --history)
+            printf '%s' "${2:-}" | grep -qE '^[0-9]+$' || die "--history needs a number of lines"
+            history=$2
+            shift 2
+            ;;
+        --refresh)
+            printf '%s' "${2:-}" | grep -qE '^[1-9][0-9]*$' || die "--refresh needs frames a second, such as 144"
+            refresh=$2
+            shift 2
+            ;;
+        --outputs)
+            case ${2:-} in 1 | 2) outputs=$2 ;; *) die "--outputs takes 1 or 2" ;; esac
+            shift 2
+            ;;
         --loads)
             loads=$(echo "$2" | tr ',' ' ')
             for load in $loads; do
@@ -338,7 +440,7 @@ while [ $# -gt 0 ]; do
         *)
             case " $all " in
                 *" $1 "*) terminals="$terminals $1"; shift ;;
-                *) die "usage: tools/bench.sh [--binary [NAME=]PATH] [--rev [NAME=]REV] [--runs N] [--warmup N] [--seed N] [--loads LOAD,...] [--scale N] [--detail] [--scenarios] [--perf] [--qml-profile] [--keep] [--keep-env] [TERMINAL...]; the terminals are: $all" ;;
+                *) die "usage: tools/bench.sh [--binary [NAME=]PATH] [--rev [NAME=]REV] [--runs N] [--warmup N] [--seed N] [--loads LOAD,...] [--scale N] [--font FAMILY:SIZE] [--history N] [--refresh HZ] [--outputs 1|2] [--detail] [--scenarios] [--perf] [--qml-profile] [--keep] [--keep-env] [TERMINAL...]; the terminals are: $all" ;;
             esac
             ;;
     esac
@@ -440,6 +542,22 @@ if [ -z "${KUDARI_BENCH_WORK:-}" ]; then
     done << VARIANTS
 $variants
 VARIANTS
+    # The same font and history for all terminals: for Kudari as settings, for the session and
+    # the report in files of their own.
+    if [ -n "$font" ]; then
+        settings="$settings$(printf '\nTerminal.FontFamily=%s\nTerminal.FontSize=%s' "${font%:*}" "${font##*:}")"
+        printf '%s\n' "$font" > "$work/same-font"
+    fi
+    if [ -n "$history" ]; then
+        settings="$settings$(printf '\nTerminal.HistoryLines=%s' "$history")"
+        printf '%s\n' "$history" > "$work/same-history"
+    fi
+    # The screen: its rate, and a second one, which Kudari opens on.
+    [ -z "$refresh" ] || printf '%s\n' "$refresh" > "$work/refresh"
+    if [ "$outputs" = 2 ]; then
+        settings="$settings$(printf '\nWindow.Screen=2')"
+        printf '2\n' > "$work/outputs"
+    fi
     # The settings for Kudari, one a line as given, and as lines of its kudarirc; KConfig
     # joins groups named twice. A value may hold spaces, so the lines split only at newlines.
     printf '%s\n' "$settings" | sed '/^$/d' > "$work/settings"
@@ -505,8 +623,10 @@ tail -f "$work/progress.log" &
 progress=$!
 trap 'kill "$progress" 2> /dev/null; rm -rf "$XDG_RUNTIME_DIR"' EXIT
 # KWin finds the desktop file of the fake input among its data.
+outputs=$(cat "$work/outputs" 2> /dev/null || echo 1)
 KUDARI_BENCH_ROLE=session XDG_DATA_HOME="$work/data" kwin_wayland --virtual --xwayland --no-lockscreen --socket=kudari-bench \
-    --width 2560 --height 1440 --scale "$scale" --exit-with-session "$tools/bench.sh" > "$work/kwin.log" 2>&1 || true
+    --width 2560 --height 1440 --output-count "$outputs" --scale "$scale" --exit-with-session "$tools/bench.sh" \
+    > "$work/kwin.log" 2>&1 || true
 sleep 0.5
 if [ -e "$work/failed" ]; then
     die "$(cat "$work/failed")"

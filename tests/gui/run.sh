@@ -415,9 +415,19 @@ check "dropping links a file" "$work/source/c.txt" "$(readlink "$work/home/c.txt
 
 run "clear; seq 1 900"
 hook Trigger adjust-history; sleep 1.2
-input key 29 30; settle; input key 6; input key 11; settle; input key 28; settle
+# The dialog tells the memory the lines take, as they are typed.
+asked=$(hook Property historyLines memory | tr '\n' ' ' | sed 's/<[^>]*>//g')
+input key 29 30; settle; input key 6; input key 11; settle
+typed=$(hook Property historyLines memory | tr '\n' ' ' | sed 's/<[^>]*>//g')
+input key 28; settle
 hook SaveOutput 0 "$work/short"; sleep 0.4
 check "the scrollback of a terminal can shrink" yes "$([ "$(wc -l < "$work/short")" -lt 100 ] && echo yes || echo no)"
+told=no
+case "$asked/$typed" in
+    *"About "[1-9]*" of memory."*/*"About "[1-9]*" of memory."*) [ "$asked" != "$typed" ] && told=yes ;;
+esac
+check "the dialog for the lines of a terminal tells their memory as they are typed" yes \
+    "$([ $told = yes ] && echo yes || echo "no: $asked / $typed")"
 run "clear; echo saved here"
 hook Trigger file_save_as; sleep 1.5; input key 28; sleep 1
 check "saving asks for a file and writes the output there" yes \
@@ -532,6 +542,17 @@ hook SetSetting FontSize 96; settle
 hook Trigger options_configure; sleep 2
 input click 250 316; sleep 1.2
 check "the settings show a font size above 72" 96 "$(hook Property fontSize value)"
+# The page of the terminal tells what the lines of history take, for each terminal and for all
+# open now, in the units of the language.
+input click 250 352; sleep 1.2
+history=$(printf '%s|%s|%s' "$(hook Property historyMemory text)" "$(hook Property historyMemoryAll text)" \
+    "$(hook Property historyWarning visible)" | sed 's/<[^>]*>//g')
+told=no
+case $history in
+    "About "[1-9]*" for each terminal as wide as the active one.|About "[1-9]*" for the terminals open now.|false") told=yes ;;
+esac
+check "the settings tell what the history takes" yes "$([ $told = yes ] && echo yes || echo "no: $history")"
+input click 250 316; sleep 1.2
 input click 700 354; sleep 0.3
 input click 700 433; sleep 0.5
 check "a font size above 72 stays" 96 "$(setting FontSize)"

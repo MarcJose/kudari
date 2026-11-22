@@ -52,6 +52,31 @@ class Report(unittest.TestCase):
         part = text.split("frames that Qt Quick drew")[1]
         return next(line.split() for line in part.splitlines() if line.startswith(load + " "))
 
+    def test_the_rate_and_the_screens_are_told(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            self.assertIsNone(bench.screen_of(work))
+            (work / "refresh").write_text("144\n")
+            self.assertEqual(bench.screen_of(work), "The virtual screen showed 144 Hz.")
+            (work / "outputs").write_text("2\n")
+            self.assertEqual(
+                bench.screen_of(work),
+                "The virtual screen showed 144 Hz, with a second screen beside it, on which Kudari opened.",
+            )
+
+    def test_the_same_font_for_all_is_told_and_cells_apart_are_warned_of(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            self.assertIsNone(bench.same_terminals(work, {"kudari": "315x93"}))
+            (work / "same-font").write_text("DejaVu Sans Mono:10\n")
+            (work / "same-history").write_text("500\n")
+            close = bench.same_terminals(work, {"kudari": "200x60", "alacritty": "202x60", "contour": "100x30"})
+            self.assertIn("the font DejaVu Sans Mono at 10 points", close)
+            self.assertIn("500 lines of history", close)
+            self.assertNotIn("Warning", close)
+            apart = bench.same_terminals(work, {"kudari": "315x93", "alacritty": "284x65"})
+            self.assertIn("Warning: their cells still differ by more than 5%: kudari 315x93, alacritty 284x65.", apart)
+
     def test_the_rate_counts_frames_over_the_seconds_they_were_counted_in(self):
         # 12 frames from the start of a load of 0.2 s to 50 ms after it: 48 a second.
         self.run_of("kudari-1", [threaded(0.02 * index, 1) for index in range(12)])

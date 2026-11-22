@@ -181,6 +181,21 @@ pub fn options() -> Option<Options> {
         .clone()
 }
 
+/// The memory a history of `lines` lines takes in a terminal of `columns` columns: each line
+/// keeps a cell for every column, whatever it shows.
+#[must_use]
+pub fn history_bytes(lines: usize, columns: usize) -> u64 {
+    let cell = std::mem::size_of::<alacritty_terminal::term::cell::Cell>() as u64;
+    (lines as u64).saturating_mul(columns as u64).saturating_mul(cell)
+}
+
+/// Whether histories of `bytes` in all take more than a quarter of the memory of the computer,
+/// as far as it is known: too much to keep without a word.
+#[must_use]
+pub fn history_too_big(bytes: u64, memory: Option<u64>) -> bool {
+    memory.is_some_and(|memory| bytes > memory / 4)
+}
+
 /// The title format while `ssh` runs, without a copy of all the options for it.
 fn remote_title_format() -> String {
     OPTIONS
@@ -1412,6 +1427,20 @@ mod tests {
         ));
         assert_eq!(run_work(), 1);
         assert_eq!(COPIED.take(), ["later"]);
+    }
+
+    #[test]
+    fn the_history_takes_a_cell_for_each_column_of_each_line() {
+        let cell = std::mem::size_of::<alacritty_terminal::term::cell::Cell>() as u64;
+        assert_eq!(history_bytes(1000, 315), 1000 * 315 * cell);
+        // A million lines of a wide terminal, as "unlimited" of Konsole comes over: gigabytes.
+        assert!(history_bytes(1_000_000, 315) > 7_000_000_000);
+        assert_eq!(history_bytes(0, 315), 0);
+        // More than a quarter of the memory is too much; an unknown memory warns of nothing.
+        let memory = Some(16 << 30);
+        assert!(!history_too_big(4 << 30, memory));
+        assert!(history_too_big((4 << 30) + 1, memory));
+        assert!(!history_too_big(u64::MAX, None));
     }
 
     #[test]

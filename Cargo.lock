@@ -14,6 +14,8 @@ dependencies = [
 [[package]]
 name = "alacritty_terminal"
 version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bda177466b9524d59f1b12f0dd30b68696788e9992a7e959021c4a0ed96fcf59"
 dependencies = [
  "base64",
  "bitflags",
@@ -519,16 +521,39 @@ dependencies = [
 name = "kudari"
 version = "0.4.0"
 dependencies = [
- "alacritty_terminal",
  "cxx",
  "cxx-qt",
  "cxx-qt-build",
  "cxx-qt-lib",
  "cxx-qt-lib-extras",
+ "kudari-alacritty-terminal",
  "kudari-core",
  "kudari-qt",
  "serde_json",
  "zbus",
+]
+
+[[package]]
+name = "kudari-alacritty-terminal"
+version = "0.26.0"
+dependencies = [
+ "base64",
+ "bitflags",
+ "home",
+ "kudari-vte",
+ "libc",
+ "log",
+ "miow",
+ "parking_lot",
+ "piper",
+ "polling",
+ "regex-automata",
+ "rustix",
+ "rustix-openpty",
+ "serde",
+ "signal-hook",
+ "unicode-width 0.2.3",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -539,8 +564,8 @@ version = "0.4.0"
 name = "kudari-core"
 version = "0.4.0"
 dependencies = [
- "alacritty_terminal",
  "getrandom",
+ "kudari-alacritty-terminal",
  "libc",
  "polling",
  "regex-automata",
@@ -549,16 +574,37 @@ dependencies = [
 ]
 
 [[package]]
-name = "kudari-qt"
+name = "kudari-difftest"
 version = "0.4.0"
 dependencies = [
  "alacritty_terminal",
+ "kudari-alacritty-terminal",
+ "vte",
+]
+
+[[package]]
+name = "kudari-qt"
+version = "0.4.0"
+dependencies = [
  "cxx",
  "cxx-qt",
  "cxx-qt-build",
  "cxx-qt-lib",
+ "kudari-alacritty-terminal",
  "kudari-core",
  "serde_json",
+]
+
+[[package]]
+name = "kudari-vte"
+version = "0.15.0"
+dependencies = [
+ "arrayvec",
+ "bitflags",
+ "cursor-icon",
+ "log",
+ "memchr",
+ "serde",
 ]
 
 [[package]]
@@ -788,7 +834,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -972,7 +1018,7 @@ dependencies = [
  "getrandom",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1100,6 +1146,8 @@ dependencies = [
 [[package]]
 name = "vte"
 version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
 dependencies = [
  "arrayvec",
  "bitflags",
@@ -1174,7 +1222,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

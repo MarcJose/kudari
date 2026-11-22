@@ -7,17 +7,15 @@ use std::os::windows::io::IntoRawHandle;
 use std::{mem, ptr};
 
 use windows_sys::Win32::Foundation::{HANDLE, S_OK};
-use windows_sys::Win32::System::Console::{
-    COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
-};
+use windows_sys::Win32::System::Console::{COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole};
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows_sys::core::{HRESULT, PWSTR};
 use windows_sys::{s, w};
 
 use windows_sys::Win32::System::Threading::{
-    CREATE_UNICODE_ENVIRONMENT, CreateProcessW, EXTENDED_STARTUPINFO_PRESENT,
-    InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION,
-    STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, UpdateProcThreadAttribute,
+    CREATE_UNICODE_ENVIRONMENT, CreateProcessW, EXTENDED_STARTUPINFO_PRESENT, InitializeProcThreadAttributeList,
+    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
+    UpdateProcThreadAttribute,
 };
 
 use crate::event::{OnResize, WindowSize};
@@ -37,8 +35,7 @@ const PIPE_CAPACITY: usize = crate::event_loop::READ_BUFFER_SIZE;
 ///
 /// The conpty.dll and OpenConsole.exe files will be searched in PATH and in
 /// the directory where Alacritty's executable is located.
-type CreatePseudoConsoleFn =
-    unsafe extern "system" fn(COORD, HANDLE, HANDLE, u32, *mut HPCON) -> HRESULT;
+type CreatePseudoConsoleFn = unsafe extern "system" fn(COORD, HANDLE, HANDLE, u32, *mut HPCON) -> HRESULT;
 type ResizePseudoConsoleFn = unsafe extern "system" fn(HPCON, COORD) -> HRESULT;
 type ClosePseudoConsoleFn = unsafe extern "system" fn(HPCON);
 
@@ -54,7 +51,7 @@ impl ConptyApi {
             Some(conpty) => {
                 info!("Using conpty.dll for pseudoconsole");
                 conpty
-            },
+            }
             None => {
                 // Cannot load conpty.dll - use the standard Windows API.
                 info!("Using Windows API for pseudoconsole");
@@ -63,7 +60,7 @@ impl ConptyApi {
                     resize: ResizePseudoConsole,
                     close: ClosePseudoConsole,
                 }
-            },
+            }
         }
     }
 
@@ -153,8 +150,7 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
 
     // Create the appropriately sized thread attribute list.
     unsafe {
-        let failure =
-            InitializeProcThreadAttributeList(ptr::null_mut(), 1, 0, &mut size as *mut usize) > 0;
+        let failure = InitializeProcThreadAttributeList(ptr::null_mut(), 1, 0, &mut size as *mut usize) > 0;
 
         // This call was expected to return false.
         if failure {
@@ -176,12 +172,7 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
     }
 
     unsafe {
-        success = InitializeProcThreadAttributeList(
-            startup_info_ex.lpAttributeList,
-            1,
-            0,
-            &mut size as *mut usize,
-        ) > 0;
+        success = InitializeProcThreadAttributeList(startup_info_ex.lpAttributeList, 1, 0, &mut size as *mut usize) > 0;
 
         if !success {
             return Err(Error::last_os_error());
@@ -214,7 +205,7 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
         Some(custom_env_block) => {
             creation_flags |= CREATE_UNICODE_ENVIRONMENT;
             custom_env_block.as_ptr() as *mut std::ffi::c_void
-        },
+        }
         None => ptr::null_mut(),
     };
 
@@ -242,7 +233,10 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
     let conout = UnblockedReader::new(conout, PIPE_CAPACITY);
 
     let child_watcher = ChildExitWatcher::new(proc_info.hProcess)?;
-    let conpty = Conpty { handle: pty_handle as HPCON, api };
+    let conpty = Conpty {
+        handle: pty_handle as HPCON,
+        api,
+    };
 
     Ok(Pty::new(conpty, conout, conin, child_watcher))
 }
@@ -262,11 +256,7 @@ fn convert_custom_env(custom_env: &HashMap<String, String>) -> Option<Vec<u16>> 
     for (custom_key, custom_value) in custom_env {
         let custom_key_os = OsStr::new(custom_key);
         if all_env_keys.insert(custom_key_os.to_ascii_uppercase()) {
-            add_windows_env_key_value_to_block(
-                &mut converted_block,
-                custom_key_os,
-                OsStr::new(&custom_value),
-            );
+            add_windows_env_key_value_to_block(&mut converted_block, custom_key_os, OsStr::new(&custom_value));
         } else {
             warn!(
                 "Omitting environment variable pair with duplicate key: \
@@ -278,11 +268,7 @@ fn convert_custom_env(custom_env: &HashMap<String, String>) -> Option<Vec<u16>> 
     // Pull the current process environment after, to avoid overwriting the user provided one.
     for (inherited_key, inherited_value) in std::env::vars_os() {
         if all_env_keys.insert(inherited_key.to_ascii_uppercase()) {
-            add_windows_env_key_value_to_block(
-                &mut converted_block,
-                &inherited_key,
-                &inherited_value,
-            );
+            add_windows_env_key_value_to_block(&mut converted_block, &inherited_key, &inherited_value);
         }
     }
 
@@ -318,6 +304,9 @@ impl From<WindowSize> for COORD {
     fn from(window_size: WindowSize) -> Self {
         let lines = window_size.num_lines;
         let columns = window_size.num_cols;
-        COORD { X: columns as i16, Y: lines as i16 }
+        COORD {
+            X: columns as i16,
+            Y: lines as i16,
+        }
     }
 }

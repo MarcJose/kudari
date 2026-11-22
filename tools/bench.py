@@ -1699,6 +1699,52 @@ def ranged(whole, width):
     return milliseconds(whole) if width == 1 else f"{whole}-{whole + width}"
 
 
+def screen_of(directory):
+    """The rate of the virtual screen and its number of outputs, where --refresh or --outputs
+    set them; None for the 60 Hz of one screen."""
+    def given(name):
+        path = directory / name
+        return path.read_text().strip() if path.exists() else ""
+
+    refresh, outputs = given("refresh"), given("outputs")
+    if not refresh and not outputs:
+        return None
+    rate = f"{refresh} Hz" if refresh else "60 Hz"
+    second = ", with a second screen beside it, on which Kudari opened" if outputs == "2" else ""
+    return f"The virtual screen showed {rate}{second}."
+
+
+def same_terminals(directory, sizes, apart=0.05):
+    """What --font and --history gave all terminals, and a warning where the cells still differ
+    by more than `apart` between them; None without either."""
+    def given(name):
+        path = directory / name
+        return path.read_text().strip() if path.exists() else ""
+
+    font, history = given("same-font"), given("same-history")
+    if not font and not history:
+        return None
+    parts = []
+    if font:
+        family, _, size = font.rpartition(":")
+        parts.append(f"the font {family} at {size} points (not contour)")
+    if history:
+        parts.append(f"{history} lines of history (not contour, nor ghostty, which counts bytes)")
+    text = "All terminals had " + " and ".join(parts) + ": the highest throughput comes first."
+    cells = {}
+    for terminal, size in sizes.items():
+        # contour takes neither, so it says nothing about how well the others match.
+        if terminal == "contour":
+            continue
+        columns, _, rows = size.partition("x")
+        if columns.isdigit() and rows.isdigit():
+            cells[terminal] = int(columns) * int(rows)
+    if cells and max(cells.values()) > (1 + apart) * min(cells.values()):
+        listed = ", ".join(f"{terminal} {sizes[terminal]}" for terminal in cells)
+        text += f"\nWarning: their cells still differ by more than {apart:.0%}: {listed}."
+    return text
+
+
 def report(directory, order, detail=False):
     head = directory / "environment.txt"
     if head.exists():
@@ -1723,8 +1769,15 @@ def report(directory, order, detail=False):
     print("Seconds per load: the median, its median absolute deviation in percent of it, a 95 %")
     print("bootstrap interval of the median (seed 1), the fastest and the slowest run, and the runs")
     print("further than three deviations and 3 % from the median. The throughput is that of the median.")
-    print("The terminals differ in their fonts and so in their cells, and the frames load in its size:")
-    print("the highest throughput comes first.")
+    screen = screen_of(directory)
+    if screen:
+        print(screen)
+    same = same_terminals(directory, {terminal: runs[terminal][0][1][0] for terminal in terminals})
+    if same:
+        print(same)
+    else:
+        print("The terminals differ in their fonts and so in their cells, and the frames load in its size:")
+        print("the highest throughput comes first.")
     throughput(runs, terminals)
     latency(runs, terminals)
     zooming(runs, terminals)
