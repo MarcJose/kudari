@@ -788,11 +788,16 @@ void rk_popup_tab_menu(int x, int y, const QString &json)
     popup(menu, x, y);
 }
 
-void rk_popup_terminal_menu(int x, int y, bool canCopy, const QString &link, bool autoSaving)
+void rk_popup_terminal_menu(int x, int y, bool canCopy, const QString &link, const QString &shown, bool autoSaving)
 {
     auto menu = new QMenu();
     menu->setAttribute(Qt::WA_DeleteOnClose);
     if (!link.isEmpty()) {
+        // Where the link leads, which its text need not say; a mark of a shortcut in it stays
+        // text.
+        QAction *address = menu->addAction(QString(shown).replace(QLatin1Char('&'), QStringLiteral("&&")));
+        address->setObjectName(QStringLiteral("linkAddress"));
+        address->setEnabled(false);
         QAction *open = menu->addAction(QIcon::fromTheme(QStringLiteral("internet-services")), xi18nc("@action:inmenu", "Open Link"));
         QObject::connect(open, &QAction::triggered, s_owner, [link] {
             kde_open_link(link);

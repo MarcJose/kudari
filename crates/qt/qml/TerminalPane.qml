@@ -178,6 +178,7 @@ Item {
         const wanted = control || (pane.config.UnderlineLinks ?? true);
         const geometry = wanted ? terminal.linkGeometry(x, y, control || (pane.config.UnderlineFiles ?? false)) : "";
         linkLine.visible = geometry.length > 0;
+        linkLine.hint = linkLine.visible ? terminal.linkHint(x, y) : "";
         if (linkLine.visible) {
             const parts = geometry.split(",").map(Number);
             linkLine.x = parts[0];
@@ -404,13 +405,33 @@ Item {
             Drag.supportedActions: Qt.CopyAction
         }
 
-        // Underlines a link while Ctrl is held over it.
+        // Underlines a link while Ctrl is held over it. A link that a program set to another
+        // address than its text shows tells that address, before a click opens it.
         Rectangle {
             id: linkLine
+            objectName: "linkLine"
+
+            property string hint: ""
 
             visible: false
             height: 1
             color: pane.foregroundColor
+
+            QQC2.ToolTip {
+                id: linkHint
+                objectName: "linkHint"
+
+                visible: linkLine.visible && linkLine.hint.length > 0
+                delay: 300
+                y: linkLine.height + 4
+                contentItem: Text {
+                    // The address comes from the program: it is text, whatever it looks like.
+                    textFormat: Text.PlainText
+                    text: linkLine.hint
+                    color: linkHint.palette.toolTipText
+                    elide: Text.ElideMiddle
+                }
+            }
         }
 
         // Text an input method is still composing, shown at the terminal cursor.

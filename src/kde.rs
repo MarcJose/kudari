@@ -45,7 +45,7 @@ pub mod ffi {
         fn rk_popup_main_menu(x: i32, y: i32);
         fn rk_popup_session_menu(x: i32, y: i32);
         fn rk_popup_tab_menu(x: i32, y: i32, json: &QString);
-        fn rk_popup_terminal_menu(x: i32, y: i32, can_copy: bool, link: &QString, auto_saving: bool);
+        fn rk_popup_terminal_menu(x: i32, y: i32, can_copy: bool, link: &QString, shown: &QString, auto_saving: bool);
         fn rk_notify(event: &QString, text: &QString);
         fn rk_slide_window();
         /// Asks without blocking whether an AI agent may use Kudari; the answer arrives in
