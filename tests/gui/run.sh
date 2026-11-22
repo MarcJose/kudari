@@ -1208,6 +1208,11 @@ check "a notification shows the title of its session as text" \
     "$(hook LastNotification)"
 kill "$http"
 check "a title loads nothing from the network" no "$(grep -q 't.png' "$work/http.log" && echo yes || echo no)"
+# A script names the tab with marks of direction, so that `exe.txt` would show as `txt.exe`:
+# the tab shows the name without them.
+tabs setTabTitle "$first" "$(printf 'photo\342\200\256gpj.exe')"
+check "a name from a script shows nothing that turns the text around" photogpj.exe "$(tabs tabTitle "$first")"
+tabs setTabTitle "$first" ""; settle
 hook SetSetting TitleFormat "%d : %n"; settle
 run_open "clear; stty raw -echo; printf '\033[?1000h\033[?1006h'; timeout 2 cat > $work/mouse; printf '\033[?1000l\033[?1006l'; stty sane"
 # Three turns of 15 pixels, as a touchpad sends them, are three lines of 15 pixels: one

@@ -161,6 +161,8 @@ impl Tabs {
     #[zbus(name = "setTabTitle")]
     fn set_tab_title(&self, session: i32, title: String) {
         queue(move |mut c| {
+            // Any program on the bus can call this, unlike the dialog where the user types.
+            let title = crate::sessions::bounded_title(&title);
             c.as_mut().stack_mut().set_tab_title(session, &title, true);
             c.refresh();
         });
