@@ -611,6 +611,30 @@ run "seq 1 30"
 hook Trigger clear-history-and-reset; settle
 hook SaveOutput "$(sessions activeTerminalId)" "$work/reset"; sleep 0.4
 check "resetting the terminal clears it" 0 "$(grep -cxE '[0-9]+' "$work/reset")"
+# Auto save writes the text of a terminal when it may have changed, and only then: each write
+# puts a new file in the place of the old one, with an inode of its own.
+hook SetSetting AutoSaveSeconds 1; settle
+run "clear; echo vorher"
+saving=$(sessions activeTerminalId)
+hook AutoSave "$saving" "$work/autosave.txt"
+inode() { # waits a while for the file, then tells its inode, or "none"
+    tries=0
+    while [ ! -s "$work/autosave.txt" ] && [ "$tries" -lt 80 ]; do sleep 0.1; tries=$((tries + 1)); done
+    stat -c %i "$work/autosave.txt" 2>/dev/null || echo none
+}
+written=$(inode)
+sleep 3
+idle=$(inode)
+run "echo nachher"; sleep 2.5
+again=$(inode)
+hook AutoSave "$saving" ""
+hook SetSetting AutoSaveSeconds 10; settle
+saves=no
+if [ "$written" != none ] && [ "$idle" = "$written" ] && [ "$again" != "$idle" ] && grep -q nachher "$work/autosave.txt"; then
+    saves=yes
+fi
+check "auto save writes the text when it changed, and only then" yes \
+    "$([ "$saves" = yes ] && echo yes || echo "no: inodes $written $idle $again, terminal $saving, active $(sessions activeTerminalId)")"
 run "echo gefunden"
 hook Trigger edit_find; settle
 for code in 34 18 33; do input key "$code"; settle; done

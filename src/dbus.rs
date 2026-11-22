@@ -693,6 +693,17 @@ impl TestHooks {
         });
     }
 
+    /// Saves the output of a terminal to `path` from now on, as auto save in its menu does
+    /// after its dialog; an empty path turns it off.
+    fn auto_save(&self, terminal: i32, path: String) {
+        queue(move |_| {
+            if let Some(backend) = crate::terminal::backend(terminal) {
+                *backend.auto_save.lock().unwrap_or_else(PoisonError::into_inner) =
+                    (!path.is_empty()).then(|| PathBuf::from(path));
+            }
+        });
+    }
+
     fn set_setting(&self, key: String, value: String) {
         queue(move |c| c.set_setting_from_test(&key, &value));
     }
