@@ -196,7 +196,10 @@ impl Frontend for Plasma {
     }
 
     fn popup_terminal_menu(&self, x: i32, y: i32, can_copy: bool, link: &str, auto_saving: bool) -> Option<String> {
-        kde::rk_popup_terminal_menu(x, y, can_copy, &qs(link), auto_saving);
+        // The address comes from the program in the terminal: it shows as text, and nothing
+        // in it hides or turns around a part of it.
+        let shown = kudari_core::view::shown_target(link);
+        kde::rk_popup_terminal_menu(x, y, can_copy, &qs(link), &qs(&shown), auto_saving);
         None
     }
 
