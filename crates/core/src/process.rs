@@ -125,6 +125,24 @@ impl<P: Programs + ?Sized> Programs for Same<'_, P> {
     }
 }
 
+/// The memory of this computer in bytes, as far as Kudari can tell: on Linux, `MemTotal` of
+/// `/proc/meminfo`.
+#[must_use]
+pub fn total_memory() -> Option<u64> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let info = std::fs::read_to_string("/proc/meminfo").ok()?;
+    memory_in(&info)
+}
+
+/// `MemTotal` of the text of `/proc/meminfo`, in bytes.
+fn memory_in(info: &str) -> Option<u64> {
+    let line = info.lines().find_map(|line| line.strip_prefix("MemTotal:"))?;
+    let kilobytes: u64 = line.trim().strip_suffix("kB")?.trim().parse().ok()?;
+    kilobytes.checked_mul(1024)
+}
+
 /// The home directory of the user.
 #[must_use]
 pub fn home() -> Option<PathBuf> {
@@ -306,6 +324,16 @@ pub fn program(pid: u32, own: Option<&Path>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_memory_of_the_computer_comes_from_meminfo() {
+        assert_eq!(
+            memory_in("MemTotal:       16314884 kB\nMemFree: 1 kB\n"),
+            Some(16_314_884 * 1024)
+        );
+        assert_eq!(memory_in("MemFree: 1 kB\n"), None);
+        assert_eq!(memory_in("MemTotal: lots\n"), None);
+    }
 
     #[test]
     fn the_signals_of_the_menu_are_known() {
