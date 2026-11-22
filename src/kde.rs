@@ -30,6 +30,8 @@ pub mod ffi {
         fn rk_finish_startup(show_tray: bool);
         fn rk_config_read(group: &QString, key: &QString, fallback: &QString) -> QString;
         fn rk_config_write(group: &QString, key: &QString, value: &QString);
+        /// Writes the settings changed meanwhile to the disk now.
+        fn rk_config_flush();
         fn rk_shortcuts_json() -> QString;
         fn rk_highlight_color() -> QString;
         fn rk_available_screen_rect(output: &QString) -> QString;

@@ -533,11 +533,37 @@ QString rk_config_read(const QString &group, const QString &key, const QString &
     return KSharedConfig::openConfig()->group(group).readEntry(key, fallback);
 }
 
+// Settings go to the disk a moment after the last of a row of changes, as the steps of a
+// slider or of a number field come, rather than with a sync of their own each.
+static QTimer *s_configSync = nullptr;
+static constexpr int ConfigSyncDelay = 400;
+
 void rk_config_write(const QString &group, const QString &key, const QString &value)
 {
     KConfigGroup configGroup = KSharedConfig::openConfig()->group(group);
     configGroup.writeEntry(key, value);
-    configGroup.sync();
+    // What guards the user, and that the first start is done, go to the disk at once.
+    if (group == QLatin1String("Security") || (group == QLatin1String("Dialogs") && key == QLatin1String("FirstRun"))) {
+        rk_config_flush();
+        return;
+    }
+    if (!s_configSync) {
+        s_configSync = new QTimer;
+        s_configSync->setSingleShot(true);
+        s_configSync->setInterval(ConfigSyncDelay);
+        QObject::connect(s_configSync, &QTimer::timeout, [] {
+            KSharedConfig::openConfig()->sync();
+        });
+    }
+    s_configSync->start();
+}
+
+void rk_config_flush()
+{
+    if (s_configSync) {
+        s_configSync->stop();
+    }
+    KSharedConfig::openConfig()->sync();
 }
 
 QString rk_shortcuts_json()

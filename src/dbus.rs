@@ -712,6 +712,18 @@ impl TestHooks {
         });
     }
 
+    /// Writes the settings changed meanwhile to the disk now, for checks that read the file.
+    async fn flush_settings(&self) -> bool {
+        ask(
+            |_| {
+                crate::kde::rk_config_flush();
+                true
+            },
+            false,
+        )
+        .await
+    }
+
     fn set_setting(&self, key: String, value: String) {
         queue(move |c| c.set_setting_from_test(&key, &value));
     }
