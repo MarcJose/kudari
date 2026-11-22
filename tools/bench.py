@@ -36,12 +36,17 @@ import select
 import statistics
 import subprocess
 import sys
-import termios
 import threading
 import time
 from pathlib import Path
 from typing import NamedTuple
 from xml.etree import ElementTree
+
+try:
+    import termios
+except ImportError:
+    # Windows, where tests/windows/bench.ps1 takes only the data and the frames from here.
+    termios = None
 
 WORDS = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor".split()
 CELLS = "abcdefghijklmnopqrstuvwxyz0123456789#@%&"
@@ -635,17 +640,22 @@ def threads(path):
     return used, woken, memory, card
 
 
+def data_file(path):
+    """A file of data, the same bytes on every system: UTF-8, with new lines as they are."""
+    return open(path, "w", encoding="utf-8", newline="")
+
+
 def data(directory):
     rng = random.Random(1)
-    with open(directory / "plain.txt", "w") as text:
+    with data_file(directory / "plain.txt") as text:
         for number in range(400_000):
             text.write(f"{number:7d} " + " ".join(rng.choice(WORDS) for _ in range(8)) + "\n")
-    with open(directory / "color.txt", "w") as text:
+    with data_file(directory / "color.txt") as text:
         for _ in range(200_000):
             words = (f"\x1b[38;5;{rng.randrange(256)}m{rng.choice(WORDS)}" for _ in range(8))
             text.write(" ".join(words) + "\x1b[0m\n")
     floods(directory, rng)
-    with open(directory / "unicode.txt", "w") as text:
+    with data_file(directory / "unicode.txt") as text:
         for number in range(150_000):
             pieces = (rng.choice((rng.choice(WIDE), rng.choice(EMOJI), rng.choice(MARKED) + rng.choice(WORDS), rng.choice(WORDS))) for _ in range(6))
             words = (f"\x1b[38;5;{rng.randrange(256)}m{piece}" for piece in pieces)
@@ -658,7 +668,7 @@ def frames(directory, rows, columns):
     if path.exists():
         return
     rng = random.Random(1)
-    with open(path, "w") as text:
+    with data_file(path) as text:
         for _ in range(300):
             text.write("\x1b[H")
             for row in range(rows):
@@ -673,12 +683,12 @@ def frames(directory, rows, columns):
 def floods(directory, rng):
     """The loads that flood a terminal with what it has to act on beside its text: titles, other
     operating system commands, bells, queries, and marks that combine with the letters."""
-    with open(directory / "titles.txt", "w") as text:
+    with data_file(directory / "titles.txt") as text:
         for number in range(300_000):
             text.write(f"\x1b]0;title {number} {rng.choice(WORDS)}\x07")
             if number % 100 == 99:
                 text.write(f"{number}\n")
-    with open(directory / "osc.txt", "w") as text:
+    with data_file(directory / "osc.txt") as text:
         for number in range(100_000):
             word = rng.choice(WORDS)
             text.write(
@@ -687,12 +697,12 @@ def floods(directory, rng):
                 + (f"\x1b]52;c;{word.encode().hex()}\x07" if number % 10 == 0 else "")
                 + "\x1b]133;D;0\x07\n"
             )
-    with open(directory / "bells.txt", "w") as text:
+    with data_file(directory / "bells.txt") as text:
         text.write("\x07" * 300_000)
-    with open(directory / "queries.txt", "w") as text:
+    with data_file(directory / "queries.txt") as text:
         text.write("\x1b[c" * QUERIES)
     marks = [chr(code) for code in range(0x0300, 0x0370)]
-    with open(directory / "combining.txt", "w") as text:
+    with data_file(directory / "combining.txt") as text:
         for _ in range(20_000):
             cells = (rng.choice("aeiouxyz") + "".join(rng.choice(marks) for _ in range(4)) for _ in range(60))
             text.write("".join(cells) + "\n")
@@ -728,7 +738,7 @@ def boxes(directory, rows, columns):
         return
     rng = random.Random(1)
     half_rows, half_columns = max(3, rows // 2), max(4, columns // 2)
-    with open(path, "w") as text:
+    with data_file(path) as text:
         for _ in range(300):
             screen = [[" "] * columns for _ in range(rows)]
             colors = [["\x1b[0m"] * columns for _ in range(rows)]

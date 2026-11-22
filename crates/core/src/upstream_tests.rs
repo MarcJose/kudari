@@ -84,7 +84,6 @@ const SECONDS: Duration = Duration::from_secs(5);
 
 /// Held by the tests that run a real PTY, one at a time: one measures the time of the thread of
 /// the PTY of its own, which those of others would add to.
-#[cfg(unix)]
 static REAL_PTY: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
@@ -398,6 +397,87 @@ fn a_pseudo_console_that_fails_is_an_error_not_a_panic() {
     let mut pty = tty::new(&Pty::default(), size, 0).expect("a pseudo console");
     let resized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pty.on_resize(nothing)));
     assert!(resized.is_ok());
+}
+
+#[cfg(windows)]
+#[test]
+fn output_of_more_than_64_kib_at_once_reaches_the_terminal_under_conpty() {
+    use std::fmt::Write as _;
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    use alacritty_terminal::event::WindowSize;
+    use alacritty_terminal::event_loop::{EventLoop, Msg};
+    use alacritty_terminal::sync::FairMutex;
+    use alacritty_terminal::tty::{self, Options as Pty, Shell};
+
+    // Under Windows `alacritty_terminal` 0.26 stopped reading after 64 KiB and then waited for
+    // an event that the thread reading ConPTY sends only once a read found nothing. A screen
+    // that the console host sends in more than that at once froze the terminal for ever;
+    // fixed in `third_party`. Full screens with colors of their own in every cell, as a busy
+    // program draws them, and a mark at the end.
+    let _alone = REAL_PTY.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (columns, lines) = (300_usize, 80_usize);
+    let mut screens = String::new();
+    for screen in 0..60 {
+        screens.push_str("\x1b[H");
+        for line in 0..lines {
+            for column in 0..columns {
+                let (foreground, background) = (
+                    (line * 7 + column + screen) % 256,
+                    (line + column * 3 + screen * 5) % 256,
+                );
+                let letter = char::from(b'a' + ((line + column + screen) % 26) as u8);
+                let _ = write!(screens, "\x1b[38;5;{foreground};48;5;{background}m{letter}");
+            }
+            if line + 1 < lines {
+                screens.push_str("\r\n");
+            }
+        }
+    }
+    screens.push_str("\x1b[0m\x1b[2J\x1b[Hkudari-end");
+    let directory = std::env::temp_dir().join(format!("kudari-screens-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).expect("a folder for the test");
+    let screens_file = directory.join("screens.txt");
+    std::fs::write(&screens_file, screens).expect("the screens");
+    // Windows PowerShell has the console act on the sequences, and stays, so that the output
+    // is all there before it ends.
+    let script = format!(
+        "[Console]::Out.Write([IO.File]::ReadAllText('{}')); Start-Sleep -Seconds 60",
+        screens_file.display()
+    );
+    let term = Arc::new(FairMutex::new(Term::new(
+        Config::default(),
+        &TermSize::new(columns, lines),
+        VoidListener,
+    )));
+    let options = Pty {
+        shell: Some(Shell::new(
+            "powershell.exe".to_string(),
+            vec!["-NoProfile".to_string(), "-Command".to_string(), script],
+        )),
+        ..Pty::default()
+    };
+    let size = WindowSize {
+        num_lines: lines as u16,
+        num_cols: columns as u16,
+        cell_width: 8,
+        cell_height: 16,
+    };
+    let pty = tty::new(&options, size, 0).expect("a pseudo console");
+    let event_loop = EventLoop::new(Arc::clone(&term), VoidListener, pty, false, false).expect("an event loop");
+    let channel = event_loop.channel();
+    let thread = event_loop.spawn();
+    let started = Instant::now();
+    let mut ended = false;
+    while !ended && started.elapsed() < Duration::from_secs(40) {
+        std::thread::sleep(Duration::from_millis(20));
+        ended = line_text(&term.lock(), 0) == "kudari-end";
+    }
+    let _ = channel.send(Msg::Shutdown);
+    let _ = thread.join();
+    let _ = std::fs::remove_dir_all(&directory);
+    assert!(ended, "the output did not come to its end within 40 s");
 }
 
 #[test]

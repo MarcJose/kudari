@@ -1418,6 +1418,10 @@ msgid "Remove the shortcut"
 msgstr "Remove the shortcut"
 
 msgctxt "@info"
+msgid "Windows does not give Kudari the shortcut %1, which another program may use. Choose another one on the page Shortcuts of the settings."
+msgstr "Windows does not give Kudari the shortcut %1, which another program may use. Choose another one on the page Shortcuts of the settings."
+
+msgctxt "@info"
 msgid "Another program already uses this shortcut."
 msgstr "Another program already uses this shortcut."
 

@@ -62,10 +62,88 @@ pub trait System {
     fn distributions(&self, wsl: &Path) -> Option<Vec<u8>>;
 }
 
-/// The shells on this computer, found once.
+/// The shells of a computer, found once: those of Windows at once, the distributions of WSL
+/// through `wsl.exe`, which takes seconds where its service has to start first.
+pub struct Found {
+    windows: OnceLock<Vec<Shell>>,
+    wsl: OnceLock<Vec<Shell>>,
+    all: OnceLock<Vec<Shell>>,
+}
+
+impl Found {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            windows: OnceLock::new(),
+            wsl: OnceLock::new(),
+            all: OnceLock::new(),
+        }
+    }
+
+    fn windows(&self, system: &dyn System) -> &[Shell] {
+        self.windows.get_or_init(|| windows_shells(system))
+    }
+
+    /// All shells, which waits for the distributions of WSL, also where a thread of its own
+    /// looks for them already.
+    pub fn all(&self, system: &dyn System) -> &[Shell] {
+        self.all.get_or_init(|| {
+            let wsl = self.wsl.get_or_init(|| wsl_shells(system));
+            [self.windows(system), wsl.as_slice()].concat()
+        })
+    }
+
+    /// The shells a new terminal can start with the shell `chosen` for it and the `Shell`
+    /// setting: without the distributions of WSL, unless it may start one of them or they are
+    /// known already, so that the first terminal does not wait for `wsl.exe`.
+    pub fn for_terminal(&self, system: &dyn System, chosen: Option<&str>, setting: &str) -> &[Shell] {
+        let wsl = |id: &str| id.starts_with("wsl:");
+        if chosen.is_some_and(wsl) || wsl(setting) || self.wsl.get().is_some() {
+            self.all(system)
+        } else {
+            self.windows(system)
+        }
+    }
+
+    /// Looks for the distributions of WSL on a thread of its own, to have them before a menu
+    /// or a terminal asks.
+    pub fn look_for_wsl(&'static self, system: &'static (dyn System + Sync)) {
+        let _ = std::thread::Builder::new()
+            .name("kudari-wsl".to_string())
+            .spawn(move || {
+                self.wsl.get_or_init(|| wsl_shells(system));
+            });
+    }
+}
+
+impl Default for Found {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+static FOUND: Found = Found::new();
+
+/// The shells on this computer, found once; the first call waits for `wsl.exe`.
 pub fn installed() -> &'static [Shell] {
-    static SHELLS: OnceLock<Vec<Shell>> = OnceLock::new();
-    SHELLS.get_or_init(|| if cfg!(windows) { discover(&Here) } else { Vec::new() })
+    if cfg!(windows) { FOUND.all(&Here) } else { &[] }
+}
+
+/// The shells a new terminal can need; see [`Found::for_terminal`].
+#[must_use]
+pub fn for_terminal(chosen: Option<&str>, setting: &str) -> &'static [Shell] {
+    if cfg!(windows) {
+        FOUND.for_terminal(&Here, chosen, setting)
+    } else {
+        &[]
+    }
+}
+
+/// Starts to look for the distributions of WSL, on Windows.
+pub fn look_for_wsl() {
+    if cfg!(windows) {
+        FOUND.look_for_wsl(&Here);
+    }
 }
 
 /// The real system.
@@ -146,12 +224,24 @@ fn output_within(command: &mut Command, timeout: Duration) -> Option<Vec<u8>> {
 /// The shells of Windows that `system` has, in the order a menu shows them.
 #[must_use]
 pub fn discover(system: &dyn System) -> Vec<Shell> {
-    let root = PathBuf::from(
+    let mut shells = windows_shells(system);
+    shells.extend(wsl_shells(system));
+    shells
+}
+
+/// The folder `System32` of `system`.
+fn system32(system: &dyn System) -> PathBuf {
+    PathBuf::from(
         system
             .variable("SystemRoot")
             .unwrap_or_else(|| "C:\\Windows".to_string()),
-    );
-    let system32 = root.join("System32");
+    )
+    .join("System32")
+}
+
+/// The shells of Windows itself, which only take a look at their files.
+fn windows_shells(system: &dyn System) -> Vec<Shell> {
+    let system32 = system32(system);
     let mut shells = Vec::new();
     let mut add = |id: &str, name: &str, program: PathBuf, kind: Kind| {
         if system.is_file(&program) {
@@ -182,20 +272,28 @@ pub fn discover(system: &dyn System) -> Vec<Shell> {
         .variable("ComSpec")
         .map_or_else(|| system32.join("cmd.exe"), PathBuf::from);
     add("cmd", "Command Prompt", cmd, Kind::CommandPrompt);
-    let wsl = system32.join("wsl.exe");
-    if system.is_file(&wsl) {
-        let names = system
-            .distributions(&wsl)
-            .map_or_default(|output| distributions(&output));
-        shells.extend(names.into_iter().map(|name| Shell {
+    shells
+}
+
+/// The distributions of WSL that `system` has, which asks `wsl.exe`.
+fn wsl_shells(system: &dyn System) -> Vec<Shell> {
+    let wsl = system32(system).join("wsl.exe");
+    if !system.is_file(&wsl) {
+        return Vec::new();
+    }
+    let names = system
+        .distributions(&wsl)
+        .map_or_default(|output| distributions(&output));
+    names
+        .into_iter()
+        .map(|name| Shell {
             id: format!("wsl:{name}"),
             arguments: vec!["--distribution".to_string(), name.clone()],
             name,
             program: wsl.clone(),
             kind: Kind::Wsl,
-        }));
-    }
-    shells
+        })
+        .collect()
 }
 
 /// A program in one of the directories of `PATH`.
@@ -547,6 +645,72 @@ mod tests {
         let shells = discover(&system);
         assert_eq!(ids(&shells), ["pwsh", "cmd"]);
         assert_eq!(windows_path(&shells.first().unwrap().program), "D:\\Tools\\pwsh.exe");
+    }
+
+    /// A Windows whose `wsl.exe` takes a while, as where its service starts first.
+    struct Slow {
+        windows: Fake,
+        asked: std::sync::atomic::AtomicUsize,
+    }
+
+    impl System for Slow {
+        fn variable(&self, name: &str) -> Option<String> {
+            self.windows.variable(name)
+        }
+
+        fn is_file(&self, path: &Path) -> bool {
+            self.windows.is_file(path)
+        }
+
+        fn distributions(&self, wsl: &Path) -> Option<Vec<u8>> {
+            self.asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            std::thread::sleep(Duration::from_millis(600));
+            self.windows.distributions(wsl)
+        }
+    }
+
+    fn slow() -> (&'static Slow, &'static Found) {
+        let system = Slow {
+            windows: windows(&ALL),
+            asked: std::sync::atomic::AtomicUsize::new(0),
+        };
+        (Box::leak(Box::new(system)), Box::leak(Box::new(Found::new())))
+    }
+
+    fn asked(system: &Slow) -> usize {
+        system.asked.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[test]
+    fn a_new_terminal_waits_for_wsl_only_where_it_may_start_a_distribution() {
+        let (system, found) = slow();
+        let started = Instant::now();
+        // The default shell, or another one of Windows: no wait for wsl.exe.
+        assert_eq!(ids(found.for_terminal(system, None, "")), ["pwsh", "powershell", "cmd"]);
+        assert_eq!(
+            ids(found.for_terminal(system, Some("cmd"), "pwsh")),
+            ["pwsh", "powershell", "cmd"]
+        );
+        assert!(started.elapsed() < Duration::from_millis(300));
+        assert_eq!(asked(system), 0);
+        // A distribution, chosen for the tab or as the setting: it waits, and has them.
+        assert!(ids(found.for_terminal(system, None, "wsl:Debian")).contains(&"wsl:Debian"));
+        assert!(ids(found.for_terminal(system, Some("wsl:Ubuntu"), "")).contains(&"wsl:Ubuntu"));
+        assert_eq!(asked(system), 1);
+    }
+
+    #[test]
+    fn the_distributions_found_meanwhile_go_to_the_next_terminal() {
+        let (system, found) = slow();
+        found.look_for_wsl(system);
+        let until = Instant::now() + Duration::from_secs(5);
+        while found.wsl.get().is_none() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Known now: a terminal and a menu get them without asking again.
+        assert!(ids(found.for_terminal(system, None, "")).contains(&"wsl:Ubuntu"));
+        assert!(ids(found.all(system)).contains(&"wsl:Debian"));
+        assert_eq!(asked(system), 1);
     }
 
     #[test]
