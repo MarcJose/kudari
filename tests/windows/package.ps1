@@ -37,6 +37,31 @@ Test-Check 'the program in the archive is signed' ($signature.SignerCertificate.
 Test-Check 'the archive holds the licenses' (Test-Path (Join-Path $program.DirectoryName 'licenses\Qt-LGPL-3.0-only.txt'))
 Test-Check 'the archive holds the runtime of Visual C++' (Test-Path (Join-Path $program.DirectoryName 'vcruntime140.dll'))
 
+# The console host of Windows Terminal, signed by Microsoft, and the terminals use it.
+$hosts = foreach ($name in 'conpty.dll', 'OpenConsole.exe') {
+    $path = Join-Path $program.DirectoryName $name
+    if (Test-Path $path) { Get-AuthenticodeSignature $path }
+}
+Test-Check 'the archive holds the console host of Windows Terminal, signed by Microsoft' (
+    @($hosts | Where-Object { $_.Status -eq 'Valid' -and $_.SignerCertificate.Subject -like 'CN=Microsoft Corporation,*' }).Count -eq 2)
+Test-Check 'the archive holds the license of the console host' (Test-Path (Join-Path $program.DirectoryName 'licenses\ConPTY-MIT.txt'))
+$appdata = (New-Item -ItemType Directory -Force (Join-Path $work 'appdata\Kudari')).Parent.FullName
+Set-Content (Join-Path $appdata 'Kudari\kudari.ini') "[Behavior]`nOpenAfterStart=true`n[Dialogs]`nFirstRun=false"
+$userData = $env:APPDATA
+$env:APPDATA = $appdata
+$started = Start-Process $program.FullName -PassThru -WorkingDirectory $appdata
+$env:APPDATA = $userData
+$consoleHost = $null
+foreach ($attempt in 1..40) {
+    $consoleHost = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($started.Id)" | Where-Object Name -EQ 'OpenConsole.exe' | Select-Object -First 1
+    if ($consoleHost) { break }
+    Start-Sleep -Milliseconds 250
+}
+Test-Check 'a terminal runs in the console host of the archive' ($consoleHost -and $consoleHost.ExecutablePath -eq (Join-Path $program.DirectoryName 'OpenConsole.exe'))
+foreach ($child in Get-CimInstance Win32_Process -Filter "ParentProcessId=$($started.Id)") { Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue }
+Stop-Process -Id $started.Id -Force
+[void] $started.WaitForExit(10000)
+
 # kudari in a shell finds kudari.com, a program of the console, which the shell waits for
 # and which hands on the exit code; kudari.exe has no console, and a shell went on at once.
 $console = Join-Path $program.DirectoryName 'kudari.com'
