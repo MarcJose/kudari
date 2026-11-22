@@ -304,6 +304,11 @@ pub mod qobject {
         #[qinvokable]
         fn link_geometry(self: &Self, x: f64, y: f64, files: bool) -> QString;
 
+        /// The address of the link at a position where it differs from its text, or an empty
+        /// string; see `view::Link::hint`.
+        #[qinvokable]
+        fn link_hint(self: &Self, x: f64, y: f64) -> QString;
+
         #[qinvokable]
         fn clear_selection(self: Pin<&mut Self>);
 
@@ -1206,6 +1211,12 @@ impl qobject::TerminalItem {
             origin_y + f64::from(link.start.line.0 + offset + 1) * cell_height - 1.0,
             link.cells as f64 * cell_width,
         ))
+    }
+
+    fn link_hint(&self, x: f64, y: f64) -> QString {
+        self.link(x, y, false)
+            .and_then(|link| link.hint)
+            .map_or_else(QString::default, |hint| kde::qs(&hint))
     }
 
     fn select_line(mut self: Pin<&mut Self>) {

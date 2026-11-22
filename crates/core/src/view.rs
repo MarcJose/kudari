@@ -85,6 +85,9 @@ pub struct Link {
     pub start: Point,
     /// How many cells it covers.
     pub cells: usize,
+    /// For a link that a program set with OSC 8 to another address than its text shows, that
+    /// address, made safe to show; see [`shown_target`].
+    pub hint: Option<String>,
 }
 
 /// The state of one terminal's view.
@@ -387,6 +390,72 @@ pub fn link_at<T>(term: &Term<T>, point: Point, files: bool, context: &Context) 
     }
 }
 
+/// The most characters of an address that a hint shows, but for its scheme and host, which it
+/// always shows whole: longer ones lose the middle of the rest.
+const MOST_SHOWN: usize = 120;
+
+/// An address that a program set, as a hint can show it: what could hide or turn around
+/// parts of it, control characters, the marks of the direction of text and characters without
+/// width, shows as `�`. A long address loses the middle of its path, query or fragment, but
+/// only in the plain form `scheme://host…`, where the host, with any user before an `@`, is
+/// sure to show whole; any other form shows whole, as a parser of addresses can read the host
+/// elsewhere in it than this one.
+#[must_use]
+pub fn shown_target(target: &str) -> String {
+    let hidden = |character: char| {
+        character.is_control()
+            || crate::sessions::sets_direction(character)
+            || matches!(character, '\u{00ad}' | '\u{200b}'..='\u{200d}' | '\u{2060}'..='\u{2064}' | '\u{feff}')
+    };
+    let shown: Vec<char> = target
+        .chars()
+        .map(|character| if hidden(character) { '\u{fffd}' } else { character })
+        .collect();
+    if shown.len() <= MOST_SHOWN {
+        return shown.into_iter().collect();
+    }
+    let Some(head) = plain_head(&shown) else {
+        return shown.into_iter().collect();
+    };
+    let (head, rest) = shown.split_at(head);
+    let room = MOST_SHOWN.saturating_sub(head.len());
+    let mut text: String = head.iter().collect();
+    if rest.len() <= room {
+        text.extend(rest);
+    } else {
+        // The start and the end of the rest, around a `…`.
+        let half = room.saturating_sub(1) / 2;
+        text.extend(rest.iter().take(half));
+        text.push('…');
+        text.extend(rest.iter().skip(rest.len() - half));
+    }
+    text
+}
+
+/// How many characters of `address` are `scheme://user@host:port`, where the address has that
+/// plain form, and what follows has nothing that a parser could take for a part of the host:
+/// no `@`, and no `\`, which a parser of the web takes for a `/`.
+fn plain_head(address: &[char]) -> Option<usize> {
+    let colon = address.iter().position(|character| *character == ':')?;
+    let scheme = address.get(..colon)?;
+    let plain_scheme = scheme.first().is_some_and(char::is_ascii_alphabetic)
+        && scheme
+            .iter()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.'));
+    if !plain_scheme || address.get(colon + 1..colon + 3) != Some(&['/', '/'][..]) {
+        return None;
+    }
+    let start = colon + 3;
+    let length = address
+        .get(start..)?
+        .iter()
+        .position(|character| matches!(character, '/' | '?' | '#' | '\\'))
+        .unwrap_or(address.len() - start);
+    let end = start + length;
+    let rest = address.get(end..)?;
+    (length > 0 && !rest.iter().any(|character| matches!(character, '@' | '\\'))).then_some(end)
+}
+
 /// What [`find_link`] finds at a cell.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Found {
@@ -442,6 +511,7 @@ impl Words {
             target,
             start: Point::new(self.line, Column(from - self.row)),
             cells: to - from,
+            hint: None,
         })
     }
 }
@@ -494,9 +564,21 @@ pub fn find_link<T>(term: &Term<T>, point: Point, files: bool, options: &Options
             target,
             start: Point::new(point.line, Column(start)),
             cells: end - start + 1,
+            hint: None,
         };
         if is_safe_link(link.uri(), &options.link_schemes) {
-            return Some(Found::Link(found(link.uri().to_string())));
+            // A text such as `https://bank.example` can lead elsewhere: the address shows
+            // before a click, where it differs.
+            let text = text_between(
+                term,
+                Point::new(point.line, Column(start)),
+                Point::new(point.line, Column(end)),
+            );
+            let hint = (text.trim() != link.uri()).then(|| shown_target(link.uri()));
+            return Some(Found::Link(Link {
+                hint,
+                ..found(link.uri().to_string())
+            }));
         }
         // A file of this computer, as `ls --hyperlink` names it with the name of the host:
         // it opens after the checks of a file in the text. Else the visible text counts.
@@ -1939,6 +2021,59 @@ mod tests {
     }
 
     #[test]
+    fn a_link_to_another_address_than_its_text_tells_it() {
+        let term = term_of(
+            60,
+            "\x1b]8;;https://evil.example/login\x1b\\https://bank.example\x1b]8;;\x1b\\ \x1b]8;;https://kde.org\x1b\\https://kde.org\x1b]8;;\x1b\\ https://plain.example",
+        );
+        let options = Options::default();
+        let hint = |column: usize| match find_link(&term, Point::new(Line(0), Column(column)), false, &options) {
+            Some(Found::Link(link)) => Some(link.hint),
+            _ => None,
+        };
+        assert_eq!(hint(3), Some(Some("https://evil.example/login".to_string())));
+        assert_eq!(hint(25), Some(None), "the text is the address");
+        assert_eq!(hint(45), Some(None), "an address in the text");
+    }
+
+    #[test]
+    fn a_hint_hides_nothing_of_the_address() {
+        assert_eq!(shown_target("https://a.example/x"), "https://a.example/x");
+        // What turns text around, hides it or has no width shows as a mark of its own.
+        assert_eq!(
+            shown_target("https://bank.example\u{202e}moc.live\u{200b}\u{7}/"),
+            "https://bank.example\u{fffd}moc.live\u{fffd}\u{fffd}/"
+        );
+        // A long one keeps its host and the start and end of its path.
+        let long = format!("https://host.example/{}/end", "x".repeat(500));
+        let shown = shown_target(&long);
+        assert!(shown.chars().count() <= 120, "{}", shown.chars().count());
+        assert!(shown.starts_with("https://host.example/") && shown.ends_with("/end") && shown.contains('…'));
+        // A host however long shows whole, with what it ends in, and a user before it.
+        let host = format!(
+            "https://bank.example.{}.evil.example/{}",
+            "a".repeat(200),
+            "p".repeat(300)
+        );
+        let shown = shown_target(&host);
+        assert_eq!(shown, format!("https://bank.example.{}.evil.example…", "a".repeat(200)));
+        assert!(
+            shown_target("https://bank.example@evil.example/login").starts_with("https://bank.example@evil.example/")
+        );
+        // Forms where a parser can find the host elsewhere show whole, however long.
+        let tail = "p".repeat(300);
+        for odd in [
+            format!("https:/\\evil.example/{tail}"),
+            format!("https:\\\\evil.example\\{tail}"),
+            format!("https://bank.example\\@evil.example/{tail}"),
+            format!("https://bank.example/{tail}@evil.example/"),
+            format!("https:///evil.example/{tail}"),
+        ] {
+            assert_eq!(shown_target(&odd), odd);
+        }
+    }
+
+    #[test]
     fn urls_are_found_under_the_cursor() {
         let line = "see https://example.org/a?b=1, or (http://x.y).";
         assert_eq!(url_at(line, 10).unwrap(), "https://example.org/a?b=1");
@@ -3364,7 +3499,8 @@ mod tests {
             Some(Link {
                 target: "https://a.org/x".into(),
                 start: Point::new(Line(0), Column(1)),
-                cells: 15
+                cells: 15,
+                hint: None,
             })
         );
         assert!(at(20, true).unwrap().target.ends_with("notes.txt"));

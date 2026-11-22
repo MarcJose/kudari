@@ -58,6 +58,9 @@ uses the same global shortcut, Kudari asks before taking it over.
   and `mailto`, unless you change the list under Settings → Terminal Behavior. Paths to
   existing files work the same way, except executables and `.desktop` files, which are
   never started.
+- A link that a program sets with OSC 8 can show other text than its address. Where they
+  differ, the address shows when the pointer rests on the link, and the context menu
+  always names it.
 
 ## AI agents
 

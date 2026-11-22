@@ -73,6 +73,10 @@ int main(int argc, char **argv)
             wl_display_roundtrip(display); usleep(25000);
         }
         org_kde_kwin_fake_input_button(fake, 272, 0); wl_display_roundtrip(display); usleep(80000);
+    } else if (!strcmp(cmd, "move")) {
+        // move X Y: the pointer goes there, without a button.
+        org_kde_kwin_fake_input_pointer_motion_absolute(fake, wl_fixed_from_double(atof(argv[2])), wl_fixed_from_double(atof(argv[3])));
+        wl_display_roundtrip(display); usleep(150000);
     } else if (!strcmp(cmd, "wheel")) {
         // wheel X Y VALUE [TIMES [AXIS]]: AXIS 0 is the vertical one, 1 the horizontal one.
         int times = argc > 5 ? atoi(argv[5]) : 1;

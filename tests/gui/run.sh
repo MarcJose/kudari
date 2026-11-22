@@ -1208,6 +1208,15 @@ run_open "clear; cat > $work/dropped"
 hook DropText "$(printf 'three\nfour\n')"; sleep 1; input key 1; settle
 check "dropping several lines of text asks first as well" "" "$(cat "$work/dropped")"
 end_input
+# A link that a program set to another address than its text shows tells that address when the
+# pointer rests on it, before a click opens it; one whose text is its address tells nothing.
+run "clear; printf '\033]8;;https://evil.example/login\033\\\\https://bank.example\033]8;;\033\\\\ \033]8;;https://kde.org\033\\\\https://kde.org\033]8;;\033\\\\\n'"
+input move 40 8; sleep 0.8
+told="$(pane_value linkLine hint) $(pane_value linkHint visible)"
+input move 230 8; sleep 0.8
+told="$told / $(pane_value linkLine hint) $(pane_value linkHint visible)"
+input move 300 8; sleep 0.3
+check "a link to another address than its text tells it" "https://evil.example/login true /  false" "$told"
 mkdir -p "$work/bin"; ln -sf "$(command -v sleep)" "$work/bin/ssh"
 hook SetSetting RemoteTitleFormat "%w on %H"; settle
 run_open "clear; printf '\033]0;remote\a'; $work/bin/ssh 3"

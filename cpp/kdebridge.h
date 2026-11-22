@@ -43,7 +43,7 @@ void rk_set_toggle_shortcut(const QString &sequence);
 void rk_popup_main_menu(int x, int y);
 void rk_popup_session_menu(int x, int y);
 void rk_popup_tab_menu(int x, int y, const QString &json);
-void rk_popup_terminal_menu(int x, int y, bool canCopy, const QString &link, bool autoSaving);
+void rk_popup_terminal_menu(int x, int y, bool canCopy, const QString &link, const QString &shown, bool autoSaving);
 
 void rk_about(const QString &what);
 void rk_configure_keys();
