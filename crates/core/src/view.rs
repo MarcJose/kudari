@@ -390,12 +390,15 @@ pub fn link_at<T>(term: &Term<T>, point: Point, files: bool, context: &Context) 
     }
 }
 
-/// The most characters of an address that a hint shows; longer ones lose their middle.
+/// The most characters of an address that a hint shows, but for its scheme and host, which it
+/// always shows whole: longer ones lose the middle of the rest.
 const MOST_SHOWN: usize = 120;
 
 /// An address that a program set, as a hint can show it: what could hide or turn around
 /// parts of it, control characters, the marks of the direction of text and characters without
-/// width, shows as `�`, and a long one keeps its start, with the host, and its end.
+/// width, shows as `�`. The scheme and the host, with any user before an `@`, always show
+/// whole, as they say where the link leads; of a long path, query or fragment, the start and
+/// the end show.
 #[must_use]
 pub fn shown_target(target: &str) -> String {
     let hidden = |character: char| {
@@ -407,13 +410,28 @@ pub fn shown_target(target: &str) -> String {
         .chars()
         .map(|character| if hidden(character) { '\u{fffd}' } else { character })
         .collect();
-    if shown.len() <= MOST_SHOWN {
-        return shown.into_iter().collect();
+    // `scheme://user@host:port`, up to the path, the query or the fragment.
+    let after_scheme = shown
+        .windows(3)
+        .position(|three| three == [':', '/', '/'])
+        .map_or(0, |at| at + 3);
+    let authority = shown
+        .iter()
+        .skip(after_scheme)
+        .position(|character| matches!(character, '/' | '?' | '#'))
+        .map_or(shown.len(), |at| after_scheme + at);
+    let (head, rest) = shown.split_at(authority);
+    let room = MOST_SHOWN.saturating_sub(head.len());
+    let mut text: String = head.iter().collect();
+    if rest.len() <= room {
+        text.extend(rest);
+    } else {
+        // The start and the end of the rest, around a `…`.
+        let half = room.saturating_sub(1) / 2;
+        text.extend(rest.iter().take(half));
+        text.push('…');
+        text.extend(rest.iter().skip(rest.len() - half));
     }
-    let half = (MOST_SHOWN - 1) / 2;
-    let mut text: String = shown.iter().take(half).collect();
-    text.push('…');
-    text.extend(shown.iter().skip(shown.len() - half));
     text
 }
 
@@ -1973,11 +1991,22 @@ mod tests {
             shown_target("https://bank.example\u{202e}moc.live\u{200b}\u{7}/"),
             "https://bank.example\u{fffd}moc.live\u{fffd}\u{fffd}/"
         );
-        // A long one keeps its start, with the host, and its end.
+        // A long one keeps its host and the start and end of its path.
         let long = format!("https://host.example/{}/end", "x".repeat(500));
         let shown = shown_target(&long);
-        assert_eq!(shown.chars().count(), 119);
+        assert!(shown.chars().count() <= 120, "{}", shown.chars().count());
         assert!(shown.starts_with("https://host.example/") && shown.ends_with("/end") && shown.contains('…'));
+        // A host however long shows whole, with what it ends in, and a user before it.
+        let host = format!(
+            "https://bank.example.{}.evil.example/{}",
+            "a".repeat(200),
+            "p".repeat(300)
+        );
+        let shown = shown_target(&host);
+        assert_eq!(shown, format!("https://bank.example.{}.evil.example…", "a".repeat(200)));
+        assert!(
+            shown_target("https://bank.example@evil.example/login").starts_with("https://bank.example@evil.example/")
+        );
     }
 
     #[test]
