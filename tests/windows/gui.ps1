@@ -295,8 +295,12 @@ try {
     [void] (Invoke-Element 'Close Session')
     [void] (Wait-For { if ((Get-TabCount) -eq $tabs) { $true } })
 
+    # Settings go to the file a moment after they change, and the rest when Kudari ends.
+    $before = Get-KeepOpen
+    [void] (Invoke-Element 'Keep open when the focus moves elsewhere')
     [void] (Invoke-Element 'Quit')
     Test-Check 'the quit button ends Kudari' ($process.WaitForExit(10000))
+    Test-Check 'a setting changed just before quitting is saved' ((Get-KeepOpen) -ne $before)
 
     $errors = @(Get-Content $log -ErrorAction SilentlyContinue | Where-Object { $_ -match 'qrc:/|TypeError|ReferenceError|QML' })
     Test-Check 'the QML reports no errors' ($errors.Count -eq 0)
