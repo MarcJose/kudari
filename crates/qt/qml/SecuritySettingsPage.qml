@@ -29,6 +29,19 @@ FormCard.FormCardPage {
     }
 
     FormCard.FormHeader {
+        title: root.controller.translate("@title:group", "Clipboard")
+    }
+
+    FormCard.FormCard {
+        FormCard.FormSwitchDelegate {
+            text: root.controller.translate("@option:check", "Let only the terminal in front copy")
+            description: root.controller.translate("@info", "Programs can copy to the clipboard with an escape sequence, as tmux, Neovim and programs over SSH do. With this on, only the active terminal of the window can, while the window has the focus; a copy from the background is dropped, and a notification says so.")
+            checked: root.config.ProgramsCopyOnlyWithFocus
+            onToggled: root.controller.setSetting("ProgramsCopyOnlyWithFocus", String(checked))
+        }
+    }
+
+    FormCard.FormHeader {
         title: root.controller.translate("@title:group", "AI Agents")
     }
 

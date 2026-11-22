@@ -50,6 +50,33 @@ pub enum Report {
     /// The terminal broke: Kudari or its emulator panicked in the thread of its PTY or
     /// while drawing it. What it holds may be half done; the terminal is of no use any more.
     Failed,
+    /// The program copied text, with OSC 52, for the front end to take or refuse.
+    Copied(Copied),
+}
+
+/// Text that a program copied. Further copies to the same place replace it until it is taken,
+/// and are reported again only after that.
+pub struct Copied {
+    mailbox: Arc<Mailbox>,
+    /// Where the program asked for it.
+    pub target: Selection,
+}
+
+impl std::fmt::Debug for Copied {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Copied")
+            .field("target", &self.target)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Copied {
+    /// The text copied last, which is gone from the terminal then.
+    #[must_use]
+    pub fn take(self) -> Option<String> {
+        lock(self.mailbox.slot(self.target)).take()
+    }
 }
 
 /// Holds back further reports of the same kind while it lives.
@@ -434,11 +461,7 @@ impl EventListener for Proxy {
                 };
                 if lock(mailbox.slot(target)).replace(text).is_none() {
                     let mailbox = Arc::clone(mailbox);
-                    run(move || {
-                        if let Some(text) = lock(mailbox.slot(target)).take() {
-                            listener.clipboard().copy(&text, target);
-                        }
-                    });
+                    listener.report(id, Report::Copied(Copied { mailbox, target }));
                 }
             }
             // The flags of the kitty keyboard protocol in force, which `alacritty_terminal`
@@ -1281,6 +1304,18 @@ mod tests {
         }
 
         fn report(&self, _terminal: TerminalId, report: Report) {
+            // Copies go on as the front end takes them, when the work kept runs.
+            if let Report::Copied(copied) = report {
+                WORK.with_borrow_mut(|kept| {
+                    kept.push(Box::new(move || {
+                        let target = copied.target;
+                        if let Some(text) = copied.take() {
+                            Kept.copy(&text, target);
+                        }
+                    }));
+                });
+                return;
+            }
             REPORTS.with_borrow_mut(|kept| kept.push(report));
         }
 

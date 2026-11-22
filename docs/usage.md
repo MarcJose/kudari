@@ -50,7 +50,10 @@ uses the same global shortcut, Kudari asks before taking it over.
 - Pasted text loses its control characters, so it cannot end a bracketed paste or
   inject terminal sequences. Pasting line breaks into a program without bracketed
   paste asks for confirmation.
-- Programs can write to the clipboard through OSC 52, but not read it.
+- Programs can write to the clipboard through OSC 52, but not read it. Under
+  Settings → Security → Clipboard, you can let only the active terminal copy, while the
+  window has the focus; a copy from a terminal in the background is then dropped, and a
+  notification says so.
 - Links open on Ctrl+click or from the context menu, and only for `http`, `https`
   and `mailto`, unless you change the list under Settings → Terminal Behavior. Paths to
   existing files work the same way, except executables and `.desktop` files, which are
