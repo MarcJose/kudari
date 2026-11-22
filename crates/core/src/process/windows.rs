@@ -17,6 +17,7 @@ use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, INVALID_HAND
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
+use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows_sys::Win32::System::Threading::{
     GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
     QueryFullProcessImageNameW, TerminateProcess,
@@ -165,6 +166,16 @@ fn start_time(id: u32) -> Option<u64> {
     }
 }
 
+/// The physical memory of this computer in bytes.
+pub(super) fn total_memory() -> Option<u64> {
+    // SAFETY: the structure is valid for the call and says its own size, as Windows wants.
+    unsafe {
+        let mut status = std::mem::zeroed::<MEMORYSTATUSEX>();
+        status.dwLength = u32::try_from(std::mem::size_of::<MEMORYSTATUSEX>()).ok()?;
+        (GlobalMemoryStatusEx(&raw mut status) != 0).then_some(status.ullTotalPhys)
+    }
+}
+
 /// The name of the program behind process `pid`; for `kudari mcp`, the binary `own`, the
 /// agent which started it.
 pub(super) fn program(pid: u32, own: Option<&Path>) -> Option<String> {
@@ -289,6 +300,24 @@ impl Programs for Console {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_memory_of_the_computer_is_what_is_built_in_less_what_firmware_keeps() {
+        use windows_sys::Win32::System::SystemInformation::GetPhysicallyInstalledSystemMemory;
+
+        let total = crate::process::total_memory().expect("the memory of the computer");
+        // The memory built in, in KiB, as the firmware tells it, which some virtual machines
+        // do not: of that, Windows uses a little less.
+        let mut installed = 0_u64;
+        // SAFETY: the number is valid for the call.
+        if unsafe { GetPhysicallyInstalledSystemMemory(&raw mut installed) } != 0 {
+            let installed = installed * 1024;
+            assert!(total <= installed, "{total} of {installed}");
+            assert!(total > installed / 2, "{total} of {installed}");
+        } else {
+            assert!(total > 512 << 20, "{total}");
+        }
+    }
 
     #[test]
     fn what_is_only_shown_shares_one_list_of_processes_for_a_moment() {

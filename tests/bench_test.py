@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parent.parent / "tools"
@@ -829,6 +830,31 @@ class Loads(unittest.TestCase):
         (self.directory / "boxes-12x40.txt").unlink()
         bench.boxes(self.directory, 12, 40)
         self.assertEqual((self.directory / "boxes-12x40.txt").read_bytes().decode(), first)
+
+    def test_windows_makes_the_same_data_without_terminal_control(self):
+        # Windows has no `termios`, and its Python writes text in the code page of the system,
+        # with a carriage return before each line feed, unless told otherwise.
+        with mock.patch.dict(sys.modules, {"termios": None}):
+            windows = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(windows)
+        plain_open = open
+
+        def as_on_windows(path, mode="r", *arguments, encoding=None, newline=None, **keywords):
+            if "w" in mode and "b" not in mode:
+                encoding = encoding or "cp1252"
+                newline = "\r\n" if newline is None else newline
+            return plain_open(path, mode, *arguments, encoding=encoding, newline=newline, **keywords)
+
+        here = self.directory / "windows"
+        here.mkdir()
+        self.addCleanup(lambda: [path.unlink() for path in here.iterdir()] and here.rmdir())
+        with mock.patch("builtins.open", as_on_windows):
+            windows.data(here)
+            windows.frames(here, 4, 10)
+        bench.data(self.directory)
+        bench.frames(self.directory, 4, 10)
+        for name in ("plain.txt", "unicode.txt", "frames-4x10.txt"):
+            self.assertEqual((here / name).read_bytes(), (self.directory / name).read_bytes(), name)
 
     def test_the_unicode_text_holds_wide_characters_emoji_and_marks(self):
         bench.data(self.directory)

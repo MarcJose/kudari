@@ -107,18 +107,27 @@ impl<R: Read + Send + 'static> UnblockedReader<R> {
 
     /// Register interest in the reader.
     pub fn register(&mut self, poller: &Arc<Poller>, event: Event, mode: PollMode) {
-        let mut interest = self.interest.interest.lock().unwrap();
-        *interest = Some(Interest {
+        *self.interest.interest.lock().unwrap() = Some(Interest {
             event,
             poller: poller.clone(),
             mode,
         });
 
         // Send the event to start off with if we have any data.
-        if (!self.pipe.is_empty() && event.readable) || self.first_register {
+        if self.first_register || (event.readable && self.has_data_or_waits()) {
             self.first_register = false;
             poller.post(CompletionPacket::new(event)).ok();
         }
+    }
+
+    /// Whether the pipe has data. Where it has none, it wakes the poller once some comes: a
+    /// read that found data took that waker from it.
+    fn has_data_or_waits(&mut self) -> bool {
+        let waker = Waker::from(self.interest.clone());
+        // A read of nothing, which only registers the waker where the pipe is empty.
+        self.pipe
+            .poll_drain_bytes(&mut Context::from_waker(&waker), &mut [])
+            .is_ready()
     }
 
     /// Deregister interest in the reader.
