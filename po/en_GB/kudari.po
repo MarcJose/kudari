@@ -1544,3 +1544,15 @@ msgstr "Programs can copy to the clipboard with an escape sequence, as tmux, Neo
 msgctxt "@info"
 msgid "A program in session \"%1\" tried to copy to the clipboard from the background. Only the terminal in front may, as set under Security."
 msgstr "A program in session \"%1\" tried to copy to the clipboard from the background. Only the terminal in front may, as set under Security."
+
+msgctxt "@item:inlistbox frames a second"
+msgid "As many as the screen shows"
+msgstr "As many as the screen shows"
+
+msgctxt "@label:listbox"
+msgid "Frames a second for output alone:"
+msgstr "Frames a second for output alone:"
+
+msgctxt "@info"
+msgid "On a screen faster than 60 Hz, fewer frames for a terminal that only shows output spare the processor and the graphics card. What you type always shows at once."
+msgstr "On a screen faster than 60 Hz, fewer frames for a terminal that only shows output spare the processor and the graphics card. What you type always shows at once."

@@ -948,6 +948,31 @@ sessions removeTerminal "$split"; sleep 0.6
 hook SetSetting BlinkingCursor false; sleep 0.3
 check "nothing is painted while nothing happens" "0 yes 0 0 0" \
     "$idle $([ "$blinking" -gt 0 ] && echo yes || echo "no: $blinking") $rested $hidden $beside"
+# Output alone gets at most the frames a second of the setting, here 15 over two seconds of
+# output that goes on; as many as the screen shows, it gets more.
+flood() { # frames a second
+    hook SetSetting OutputFrameRate "$1"; settle
+    run_open "clear; timeout 3 sh -c 'while :; do echo flood; done'"
+    hook ResetStats; sleep 2
+    paints "$(sessions activeTerminalId)"
+    sleep 1; settle
+}
+capped=$(flood 15)
+free=$(flood 0)
+check "output alone gets the frames a second of the setting" yes \
+    "$([ "$capped" -le 36 ] && [ "$free" -gt 50 ] && echo yes || echo "no: $capped with 15 a second, $free with no limit")"
+# What is typed shows at once, also under such a limit: here 2 frames a second for output that
+# comes ten times a second, and five keys 100 ms apart, each with a frame of its own.
+hook SetSetting OutputFrameRate 2; settle
+run_open "clear; timeout 3 sh -c 'while :; do echo tick; sleep 0.1; done'"
+hook ResetStats
+for _ in 1 2 3 4 5; do input key 30; sleep 0.1; done; sleep 0.1
+typed_frames=$(paints "$(sessions activeTerminalId)")
+sleep 2; settle
+hook SetSetting OutputFrameRate 0; settle
+run "clear"
+check "what is typed gets its frame at once under a limit for output" yes \
+    "$([ "$typed_frames" -ge 5 ] && echo yes || echo "no: $typed_frames frames for five keys")"
 mark; background=$(sessions addSession); wait_shells
 sessions raiseSession "$background"; settle
 hook ResetStats

@@ -80,12 +80,42 @@ Item {
     // again, instead of taking the lock and drawing a frame for every piece of output in a
     // tab in the background or a window that is hidden.
     function refreshWhenSeen() {
-        if (seen) {
-            terminal.stale = false;
-            terminal.refresh();
-        } else {
+        if (!seen) {
             terminal.stale = true;
+            return;
         }
+        // Output alone gets at most the frames a second of the setting; input, and output a
+        // moment after it, as its echo, get their frame at once.
+        const rate = pane.config.OutputFrameRate ?? 0;
+        const now = Date.now();
+        if (rate > 0 && now - lastInput > 150) {
+            const due = lastOutputFrame + 1000 / rate;
+            if (now < due) {
+                if (!outputFrame.running) {
+                    outputFrame.interval = Math.ceil(due - now);
+                    outputFrame.start();
+                }
+                return;
+            }
+        }
+        refreshOutput();
+    }
+
+    function refreshOutput() {
+        outputFrame.stop();
+        lastOutputFrame = Date.now();
+        terminal.stale = false;
+        terminal.refresh();
+    }
+
+    // When the last frame for output came, and the last input, for refreshWhenSeen().
+    property double lastOutputFrame: 0
+    property double lastInput: 0
+
+    Timer {
+        id: outputFrame
+        repeat: false
+        onTriggered: pane.refreshWhenSeen()
     }
 
     onSeenChanged: {
@@ -333,6 +363,7 @@ Item {
             }
         }
         Keys.onPressed: event => {
+            pane.lastInput = Date.now();
             pane.wakeCursor();
             if (event.key === Qt.Key_Control && mouse.containsMouse) {
                 pane.linkUnderMouse(mouse.mouseX, mouse.mouseY, Qt.ControlModifier);
@@ -525,6 +556,7 @@ Item {
                 }
             }
             onPressed: event => {
+                pane.lastInput = Date.now();
                 const needsControl = pane.config.DragNeedsCtrl ?? true;
                 dragStart = event.button === Qt.LeftButton && (!needsControl || (event.modifiers & Qt.ControlModifier))
                     && !(event.modifiers & Qt.AltModifier) && terminal.hasSelection() && terminal.selectionContains(event.x, event.y)
@@ -585,6 +617,7 @@ Item {
                 }
             }
             onWheel: event => {
+                pane.lastInput = Date.now();
                 if ((event.modifiers & Qt.ControlModifier) && (pane.config.WheelZoom ?? true)) {
                     const steps = terminal.wheelZoom(event.angleDelta.y, event.pixelDelta.y);
                     if (steps !== 0)
