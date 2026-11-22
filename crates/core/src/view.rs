@@ -396,9 +396,10 @@ const MOST_SHOWN: usize = 120;
 
 /// An address that a program set, as a hint can show it: what could hide or turn around
 /// parts of it, control characters, the marks of the direction of text and characters without
-/// width, shows as `�`. The scheme and the host, with any user before an `@`, always show
-/// whole, as they say where the link leads; of a long path, query or fragment, the start and
-/// the end show.
+/// width, shows as `�`. A long address loses the middle of its path, query or fragment, but
+/// only in the plain form `scheme://host…`, where the host, with any user before an `@`, is
+/// sure to show whole; any other form shows whole, as a parser of addresses can read the host
+/// elsewhere in it than this one.
 #[must_use]
 pub fn shown_target(target: &str) -> String {
     let hidden = |character: char| {
@@ -410,17 +411,13 @@ pub fn shown_target(target: &str) -> String {
         .chars()
         .map(|character| if hidden(character) { '\u{fffd}' } else { character })
         .collect();
-    // `scheme://user@host:port`, up to the path, the query or the fragment.
-    let after_scheme = shown
-        .windows(3)
-        .position(|three| three == [':', '/', '/'])
-        .map_or(0, |at| at + 3);
-    let authority = shown
-        .iter()
-        .skip(after_scheme)
-        .position(|character| matches!(character, '/' | '?' | '#'))
-        .map_or(shown.len(), |at| after_scheme + at);
-    let (head, rest) = shown.split_at(authority);
+    if shown.len() <= MOST_SHOWN {
+        return shown.into_iter().collect();
+    }
+    let Some(head) = plain_head(&shown) else {
+        return shown.into_iter().collect();
+    };
+    let (head, rest) = shown.split_at(head);
     let room = MOST_SHOWN.saturating_sub(head.len());
     let mut text: String = head.iter().collect();
     if rest.len() <= room {
@@ -433,6 +430,30 @@ pub fn shown_target(target: &str) -> String {
         text.extend(rest.iter().skip(rest.len() - half));
     }
     text
+}
+
+/// How many characters of `address` are `scheme://user@host:port`, where the address has that
+/// plain form, and what follows has nothing that a parser could take for a part of the host:
+/// no `@`, and no `\`, which a parser of the web takes for a `/`.
+fn plain_head(address: &[char]) -> Option<usize> {
+    let colon = address.iter().position(|character| *character == ':')?;
+    let scheme = address.get(..colon)?;
+    let plain_scheme = scheme.first().is_some_and(char::is_ascii_alphabetic)
+        && scheme
+            .iter()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.'));
+    if !plain_scheme || address.get(colon + 1..colon + 3) != Some(&['/', '/'][..]) {
+        return None;
+    }
+    let start = colon + 3;
+    let length = address
+        .get(start..)?
+        .iter()
+        .position(|character| matches!(character, '/' | '?' | '#' | '\\'))
+        .unwrap_or(address.len() - start);
+    let end = start + length;
+    let rest = address.get(end..)?;
+    (length > 0 && !rest.iter().any(|character| matches!(character, '@' | '\\'))).then_some(end)
 }
 
 /// What [`find_link`] finds at a cell.
@@ -2007,6 +2028,17 @@ mod tests {
         assert!(
             shown_target("https://bank.example@evil.example/login").starts_with("https://bank.example@evil.example/")
         );
+        // Forms where a parser can find the host elsewhere show whole, however long.
+        let tail = "p".repeat(300);
+        for odd in [
+            format!("https:/\\evil.example/{tail}"),
+            format!("https:\\\\evil.example\\{tail}"),
+            format!("https://bank.example\\@evil.example/{tail}"),
+            format!("https://bank.example/{tail}@evil.example/"),
+            format!("https:///evil.example/{tail}"),
+        ] {
+            assert_eq!(shown_target(&odd), odd);
+        }
     }
 
     #[test]
