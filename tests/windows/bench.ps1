@@ -16,9 +16,9 @@ run starts Kudari anew with a configuration of its own in a temporary folder.
 - start: the milliseconds from the start of the process to its first frame, and from a second
   start, which shows the hidden window, to the frame that shows it, with the time the second
   process took to hand over; the memory with one terminal.
-- idle: the CPU time, the context switches of its threads and the frames a second while it
-  waits, shown and hidden, with one terminal and with ten, and with a blinking cursor, and
-  its memory in each.
+- idle: the CPU time and cycles, the context switches of its threads and the frames a second
+  while it waits, shown and hidden, with one terminal and with ten, and with a blinking
+  cursor, and its memory in each.
 - loads: the loads of tools/bench.py, `plain`, `color`, `unicode`, `frames`, `boxes` and
   `seq`, with its data, the same bytes as under Linux. Each counts from its first byte until
   Kudari has read all of it, with the CPU time of Kudari and of the console host, the frames
@@ -26,11 +26,12 @@ run starts Kudari anew with a configuration of its own in a temporary folder.
   host answers queries such as that of the cursor itself, so the end of a load is a copy to
   the clipboard with OSC 52 after it: the loads change the clipboard. They need Python.
 
-The report gives the median of the runs, the fastest and the slowest. A virtual machine draws
-in software or on a virtual graphics card, and the console host does much of the work of a
-load: compare only runs on the same computer, never with the numbers of tools/bench.sh. It
-needs a desktop session, and no other Kudari of the same user may run, as the window and the
-pipe for agents belong to one per user.
+The report gives the median of the runs, the fastest and the slowest. In a virtual machine
+the CPU time that Windows tells for a process can jump between runs; its cycles stay steady.
+A virtual machine draws in software or on a virtual graphics card, and the console host does
+much of the work of a load: compare only runs on the same computer, never with the numbers of
+tools/bench.sh. It needs a desktop session, and no other Kudari of the same user may run, as
+the window and the pipe for agents belong to one per user.
 #>
 param(
     [string] $Program,
@@ -55,7 +56,6 @@ if (-not (Test-Path $Program)) {
     exit 2
 }
 $Program = (Resolve-Path $Program).Path
-$name = [IO.Path]::GetFileNameWithoutExtension($Program)
 if (Get-Process kudari, kudari-windows -ErrorAction SilentlyContinue) {
     Write-Host 'Kudari runs already; the measurement needs to be the only one.'
     exit 2
@@ -77,6 +77,59 @@ $Automation = [System.Windows.Automation.AutomationElement]
 $Scope = [System.Windows.Automation.TreeScope]
 $Invariant = [Globalization.CultureInfo]::InvariantCulture
 $Hosts = 'conhost.exe', 'OpenConsole.exe'
+
+# What the threads of a process did, from one look at all threads of the system: the counters
+# of performance would number the threads anew between two looks. And the cycles of the
+# processor that a process used, which Windows counts exactly, where its CPU time goes in
+# steps of about 16 ms.
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class KudariBench {
+    [DllImport("ntdll.dll")] static extern int NtQuerySystemInformation(int what, IntPtr buffer, int length, out int needed);
+    [DllImport("kernel32.dll")] static extern bool QueryProcessCycleTime(IntPtr process, out ulong cycles);
+    const int SystemProcessInformation = 5;
+    const int TooSmall = unchecked((int) 0xC0000004);
+    // The context switches of each thread of process `id` so far, by the id of the thread.
+    public static Dictionary<long, long> Switches(int id) {
+        var switches = new Dictionary<long, long>();
+        int length = 1 << 22;
+        IntPtr buffer = Marshal.AllocHGlobal(length);
+        try {
+            int needed;
+            while (NtQuerySystemInformation(SystemProcessInformation, buffer, length, out needed) == TooSmall) {
+                Marshal.FreeHGlobal(buffer);
+                length = needed + (1 << 20);
+                buffer = Marshal.AllocHGlobal(length);
+            }
+            long offset = 0;
+            while (true) {
+                // SYSTEM_PROCESS_INFORMATION of 64 bits, followed by its threads, each a
+                // SYSTEM_THREAD_INFORMATION of 0x50 bytes with its context switches at 0x40.
+                IntPtr entry = new IntPtr(buffer.ToInt64() + offset);
+                int next = Marshal.ReadInt32(entry, 0);
+                if (Marshal.ReadInt64(entry, 0x50) == id) {
+                    int threads = Marshal.ReadInt32(entry, 4);
+                    for (int thread = 0; thread < threads; thread++) {
+                        int at = 0x100 + thread * 0x50;
+                        switches[Marshal.ReadInt64(entry, at + 0x30)] = (uint) Marshal.ReadInt32(entry, at + 0x40);
+                    }
+                    return switches;
+                }
+                if (next == 0) return switches;
+                offset += next;
+            }
+        } finally {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+    public static ulong Cycles(IntPtr process) {
+        ulong cycles;
+        return QueryProcessCycleTime(process, out cycles) ? cycles : 0;
+    }
+}
+'@
 
 # A folder of its own as APPDATA, with the settings of the measurement and `extra`.
 function New-Config([string] $folder, [string] $extra = '') {
@@ -209,25 +262,21 @@ function Measure-Idle($process, [string] $appdata, [string] $state) {
     Start-Sleep -Seconds 3
     $process.Refresh()
     $cpu = $process.TotalProcessorTime.TotalMilliseconds
+    $cycles = [KudariBench]::Cycles($process.Handle)
+    $switches = [KudariBench]::Switches($process.Id)
     $from = Get-Date
-    $switches = $null
-    # A rate over the whole time: the counter takes its first value at the start. A thread
-    # that ended meanwhile has a sample that is not valid, and makes it an error.
-    $sample = Get-Counter "\Thread($name/*)\Context Switches/sec" -SampleInterval $IdleSeconds -MaxSamples 1 -ErrorAction SilentlyContinue
-    if ($sample) {
-        $switches = ($sample.CounterSamples | Where-Object Status -EQ 0 | Measure-Object CookedValue -Sum).Sum
-    } else {
-        # Counters with names in another language, or none at all.
-        $left = $IdleSeconds - ((Get-Date) - $from).TotalSeconds
-        if ($left -gt 0) { Start-Sleep -Milliseconds ([int] ($left * 1000)) }
-    }
+    Start-Sleep -Seconds $IdleSeconds
     $to = Get-Date
+    # A thread that ended meanwhile is left out, one that started counts from nothing.
+    $after = [KudariBench]::Switches($process.Id)
+    $switches = ($after.Keys | ForEach-Object { $after[$_] - $(if ($switches.ContainsKey($_)) { $switches[$_] } else { 0 }) } | Measure-Object -Sum).Sum
+    $cycles = [KudariBench]::Cycles($process.Handle) - $cycles
     $process.Refresh()
     $seconds = ($to - $from).TotalSeconds
     $frames = @(Get-Frames $appdata | Where-Object { $_ -gt $from -and $_ -le $to }).Count
     $memory = Get-Memory $process
     , @($state, ('{0:N2}' -f (($process.TotalProcessorTime.TotalMilliseconds - $cpu) / $seconds)),
-        $(if ($null -eq $switches) { '-' } else { '{0:N0}' -f $switches }), ('{0:N1}' -f ($frames / $seconds)),
+        ('{0:N2}' -f ($cycles / 1e6 / $seconds)), ('{0:N1}' -f ($switches / $seconds)), ('{0:N1}' -f ($frames / $seconds)),
         ('{0:N0}' -f $memory.Private), ('{0:N0}' -f $memory.Resident))
 }
 
@@ -321,9 +370,10 @@ try {
         }
         $report.Add('')
         $report.Add("While Kudari waits, over $IdleSeconds s each: CPU in ms a second, which Windows counts in steps")
-        $report.Add("of about 16 ms, so that less than $('{0:N2}' -f (15.625 / $IdleSeconds)) shows as 0; context switches of its threads a")
-        $report.Add('second ("-" without the counters in English); frames a second; memory in MB')
-        $report.AddRange([string[]] (Write-Table @('state', 'CPU ms/s', 'switches/s', 'frames/s', 'private', 'resident') $rows))
+        $report.Add("of about 16 ms, so that less than $('{0:N2}' -f (15.625 / $IdleSeconds)) shows as 0, and in millions of cycles of the")
+        $report.Add('processor a second, which it counts exactly; context switches of its threads a second;')
+        $report.Add('frames a second; memory in MB')
+        $report.AddRange([string[]] (Write-Table @('state', 'CPU ms/s', 'Mcycles/s', 'switches/s', 'frames/s', 'private', 'resident') $rows))
     }
 
     if ($Parts -contains 'loads') {
