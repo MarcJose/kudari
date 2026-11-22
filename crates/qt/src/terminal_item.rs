@@ -993,7 +993,7 @@ impl qobject::TerminalItem {
             return;
         };
         let options = terminal::options().unwrap_or_default();
-        let mut term = backend.lock();
+        let term = backend.lock();
         let Some(text) = view::selected_text(&term, &options) else {
             return;
         };
@@ -1002,10 +1002,11 @@ impl qobject::TerminalItem {
         } else {
             String::new()
         };
+        // The clipboard takes copies of both, which the terminal need not wait for.
+        drop(term);
         frontend().copy_rich(&text, &html);
         if options.clear_on_copy {
-            term.selection = None;
-            drop(term);
+            backend.lock().selection = None;
             self.as_mut().update();
         }
     }

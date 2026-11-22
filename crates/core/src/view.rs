@@ -396,9 +396,10 @@ const MOST_SHOWN: usize = 120;
 
 /// An address that a program set, as a hint can show it: what could hide or turn around
 /// parts of it, control characters, the marks of the direction of text and characters without
-/// width, shows as `�`. The scheme and the host, with any user before an `@`, always show
-/// whole, as they say where the link leads; of a long path, query or fragment, the start and
-/// the end show.
+/// width, shows as `�`. A long address loses the middle of its path, query or fragment, but
+/// only in the plain form `scheme://host…`, where the host, with any user before an `@`, is
+/// sure to show whole; any other form shows whole, as a parser of addresses can read the host
+/// elsewhere in it than this one.
 #[must_use]
 pub fn shown_target(target: &str) -> String {
     let hidden = |character: char| {
@@ -410,17 +411,13 @@ pub fn shown_target(target: &str) -> String {
         .chars()
         .map(|character| if hidden(character) { '\u{fffd}' } else { character })
         .collect();
-    // `scheme://user@host:port`, up to the path, the query or the fragment.
-    let after_scheme = shown
-        .windows(3)
-        .position(|three| three == [':', '/', '/'])
-        .map_or(0, |at| at + 3);
-    let authority = shown
-        .iter()
-        .skip(after_scheme)
-        .position(|character| matches!(character, '/' | '?' | '#'))
-        .map_or(shown.len(), |at| after_scheme + at);
-    let (head, rest) = shown.split_at(authority);
+    if shown.len() <= MOST_SHOWN {
+        return shown.into_iter().collect();
+    }
+    let Some(head) = plain_head(&shown) else {
+        return shown.into_iter().collect();
+    };
+    let (head, rest) = shown.split_at(head);
     let room = MOST_SHOWN.saturating_sub(head.len());
     let mut text: String = head.iter().collect();
     if rest.len() <= room {
@@ -433,6 +430,30 @@ pub fn shown_target(target: &str) -> String {
         text.extend(rest.iter().skip(rest.len() - half));
     }
     text
+}
+
+/// How many characters of `address` are `scheme://user@host:port`, where the address has that
+/// plain form, and what follows has nothing that a parser could take for a part of the host:
+/// no `@`, and no `\`, which a parser of the web takes for a `/`.
+fn plain_head(address: &[char]) -> Option<usize> {
+    let colon = address.iter().position(|character| *character == ':')?;
+    let scheme = address.get(..colon)?;
+    let plain_scheme = scheme.first().is_some_and(char::is_ascii_alphabetic)
+        && scheme
+            .iter()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.'));
+    if !plain_scheme || address.get(colon + 1..colon + 3) != Some(&['/', '/'][..]) {
+        return None;
+    }
+    let start = colon + 3;
+    let length = address
+        .get(start..)?
+        .iter()
+        .position(|character| matches!(character, '/' | '?' | '#' | '\\'))
+        .unwrap_or(address.len() - start);
+    let end = start + length;
+    let rest = address.get(end..)?;
+    (length > 0 && !rest.iter().any(|character| matches!(character, '@' | '\\'))).then_some(end)
 }
 
 /// What [`find_link`] finds at a cell.
@@ -1662,7 +1683,44 @@ fn html_escape(character: char, html: &mut String) {
     }
 }
 
-/// The selection with its colors and styles, for pasting into rich text editors.
+/// The most cells of a selection that a copy gives as HTML as well: each can take a span of
+/// its own, about 110 bytes, and a selection beyond this copies as plain text alone.
+pub const MOST_HTML_CELLS: usize = 2_000_000;
+
+/// How a cell looks in the HTML of a copy, to compare with the cell before it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CellStyle {
+    foreground: Rgb,
+    background: Option<Rgb>,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+}
+
+impl CellStyle {
+    /// The span that starts the style.
+    fn open(self, html: &mut String) {
+        use std::fmt::Write as _;
+        let Rgb { r, g, b } = self.foreground;
+        let _ = write!(html, "<span style=\"color:#{r:02x}{g:02x}{b:02x}");
+        if let Some(Rgb { r, g, b }) = self.background {
+            let _ = write!(html, ";background-color:#{r:02x}{g:02x}{b:02x}");
+        }
+        if self.bold {
+            html.push_str(";font-weight:bold");
+        }
+        if self.italic {
+            html.push_str(";font-style:italic");
+        }
+        if self.underline {
+            html.push_str(";text-decoration:underline");
+        }
+        html.push_str("\">");
+    }
+}
+
+/// The selection with its colors and styles, for pasting into rich text editors; nothing for
+/// one of more than [`MOST_HTML_CELLS`] cells.
 #[must_use]
 pub fn selection_html<T>(term: &Term<T>, bold_intense: bool) -> String {
     let Some(range) = term.selection.as_ref().and_then(|selection| selection.to_range(term)) else {
@@ -1672,6 +1730,10 @@ pub fn selection_html<T>(term: &Term<T>, bold_intense: bool) -> String {
     let palette = term.colors();
     let grid = term.grid();
     let columns = term.columns();
+    let lines = (range.end.line.0 - range.start.line.0 + 1) as usize;
+    if lines.saturating_mul(columns) > MOST_HTML_CELLS {
+        return String::new();
+    }
     let hex = |color: Rgb| format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b);
     let mut html = format!(
         "<pre style=\"color:{};background-color:{};font-family:monospace\">",
@@ -1702,7 +1764,7 @@ pub fn selection_html<T>(term: &Term<T>, bold_intense: bool) -> String {
                 .find(|column| row[Column(*column)].c != ' ')
                 .map_or(first, |column| column + 1)
         };
-        let mut style = String::new();
+        let mut style: Option<CellStyle> = None;
         for column in first..end.min(columns) {
             let cell = &row[Column(column)];
             if cell
@@ -1716,35 +1778,26 @@ pub fn selection_html<T>(term: &Term<T>, bold_intense: bool) -> String {
             if cell.flags.contains(Flags::HIDDEN) {
                 foreground = back;
             }
-            let mut wanted = format!("color:{}", hex(foreground));
-            if back != scheme.background {
-                wanted.push_str(";background-color:");
-                wanted.push_str(&hex(back));
-            }
-            if cell.flags.contains(Flags::BOLD) {
-                wanted.push_str(";font-weight:bold");
-            }
-            if cell.flags.contains(Flags::ITALIC) {
-                wanted.push_str(";font-style:italic");
-            }
-            if cell.flags.intersects(Flags::ALL_UNDERLINES) {
-                wanted.push_str(";text-decoration:underline");
-            }
-            if wanted != style {
-                if !style.is_empty() {
+            let wanted = CellStyle {
+                foreground,
+                background: (back != scheme.background).then_some(back),
+                bold: cell.flags.contains(Flags::BOLD),
+                italic: cell.flags.contains(Flags::ITALIC),
+                underline: cell.flags.intersects(Flags::ALL_UNDERLINES),
+            };
+            if style != Some(wanted) {
+                if style.is_some() {
                     html.push_str("</span>");
                 }
-                html.push_str("<span style=\"");
-                html.push_str(&wanted);
-                html.push_str("\">");
-                style = wanted;
+                wanted.open(&mut html);
+                style = Some(wanted);
             }
             html_escape(cell.c, &mut html);
             for character in cell.zerowidth().into_iter().flatten() {
                 html_escape(*character, &mut html);
             }
         }
-        if !style.is_empty() {
+        if style.is_some() {
             html.push_str("</span>");
         }
         if line != range.end.line.0 && !wrapped {
@@ -2007,6 +2060,17 @@ mod tests {
         assert!(
             shown_target("https://bank.example@evil.example/login").starts_with("https://bank.example@evil.example/")
         );
+        // Forms where a parser can find the host elsewhere show whole, however long.
+        let tail = "p".repeat(300);
+        for odd in [
+            format!("https:/\\evil.example/{tail}"),
+            format!("https:\\\\evil.example\\{tail}"),
+            format!("https://bank.example\\@evil.example/{tail}"),
+            format!("https://bank.example/{tail}@evil.example/"),
+            format!("https:///evil.example/{tail}"),
+        ] {
+            assert_eq!(shown_target(&odd), odd);
+        }
     }
 
     #[test]
@@ -2189,6 +2253,29 @@ mod tests {
             selection_step(&mut term, Key::Escape, NONE, "", &OPTIONS),
             SelectionStep::Leave(None)
         );
+    }
+
+    #[test]
+    fn a_huge_selection_copies_as_plain_text_alone() {
+        let size = alacritty_terminal::term::test::TermSize::new(1000, 10);
+        let config = alacritty_terminal::term::Config {
+            scrolling_history: 3000,
+            ..alacritty_terminal::term::Config::default()
+        };
+        let mut term = Term::new(config, &size, VoidListener);
+        feed(&mut term, "\x1b[31mred\x1b[0m\r\n".repeat(3000).as_bytes());
+        let select = |term: &mut Term<VoidListener>, lines: i32| {
+            let bottom = term.bottommost_line();
+            let start = Point::new(Line(bottom.0 - lines + 1), Column(0));
+            let mut selection = Selection::new(SelectionType::Simple, start, Side::Left);
+            selection.update(Point::new(bottom, term.last_column()), Side::Right);
+            term.selection = Some(selection);
+        };
+        // 2,000 lines of 1,000 columns are as many cells as HTML is made for.
+        select(&mut term, 2000);
+        assert!(selection_html(&term, false).contains("color:#"));
+        select(&mut term, 2001);
+        assert_eq!(selection_html(&term, false), "");
     }
 
     #[test]
