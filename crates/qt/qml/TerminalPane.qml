@@ -429,7 +429,8 @@ Item {
                     textFormat: Text.PlainText
                     text: linkLine.hint
                     color: linkHint.palette.toolTipText
-                    elide: Text.ElideMiddle
+                    // All of it, broken over lines: a part left out could be the host.
+                    wrapMode: Text.WrapAnywhere
                 }
             }
         }
