@@ -6,8 +6,8 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, mpsc};
 use std::time::Instant;
 
 use alacritty_terminal::event::{Event, EventListener, Notify, OnResize, WindowSize};
@@ -181,6 +181,15 @@ pub fn options() -> Option<Options> {
         .clone()
 }
 
+/// The title format while `ssh` runs, without a copy of all the options for it.
+fn remote_title_format() -> String {
+    OPTIONS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .map_or_else(String::new, |options| options.remote_title_format.clone())
+}
+
 fn config() -> Config {
     let mut config = Config::default();
     if let Some(options) = options() {
@@ -346,6 +355,9 @@ struct Mailbox {
     replies: Mutex<Vec<Reply>>,
     /// Whether the terminal broke; see [`Report::Failed`].
     failed: AtomicBool,
+    /// Counts what can change the text of the terminal: output, a reset, a new size or a new
+    /// length of the history. Auto save writes only when it moved; see [`auto_save`].
+    changes: AtomicU64,
 }
 
 /// The most bytes of a title that a program sets: tabs, the window and notifications show
@@ -443,6 +455,7 @@ impl EventListener for Proxy {
         };
         let mailbox = &self.mailbox;
         if matches!(event, Event::Wakeup) {
+            mailbox.changes.fetch_add(1, Ordering::Relaxed);
             stats::count(stats::Count::Wakeups);
             stats::key(id, stats::Step::Output);
         }
@@ -547,6 +560,8 @@ pub struct Backend {
     window_size: Mutex<WindowSize>,
     /// File the terminal content is saved to regularly.
     pub auto_save: Mutex<Option<PathBuf>>,
+    /// The file auto save wrote last, and the count of changes it wrote.
+    saved: Mutex<Option<(PathBuf, u64)>>,
     /// Scrollback size of this terminal, instead of the configured one.
     history_lines: Mutex<Option<usize>>,
     /// Whether programs get the mouse here, instead of the configured choice.
@@ -702,6 +717,7 @@ impl Backend {
             mailbox,
             window_size: Mutex::new(size),
             auto_save: Mutex::new(None),
+            saved: Mutex::new(None),
             history_lines: Mutex::new(None),
             mouse_tracking: Mutex::new(None),
             quoting,
@@ -728,6 +744,12 @@ impl Backend {
             config.scrolling_history = lines;
         }
         self.lock().set_options(config);
+        self.changed();
+    }
+
+    /// Notes a change of the text that came without output; see [`Mailbox::changes`].
+    fn changed(&self) {
+        self.mailbox.changes.fetch_add(1, Ordering::Relaxed);
     }
 
     /// The scrollback size of this terminal.
@@ -821,6 +843,7 @@ impl Backend {
         }
         term.resize(TermSize::new(columns.into(), lines.into()));
         drop(term);
+        self.changed();
         stats::count(stats::Count::Resizes);
         let mut notifier = Notifier(self.notifier.0.clone());
         notifier.on_resize(size);
@@ -829,7 +852,12 @@ impl Backend {
     /// The directory of the program in the foreground, or else the one the shell reported,
     /// if it is a directory still.
     pub fn working_directory(&self) -> Option<PathBuf> {
-        self.programs.working_directory().or_else(|| {
+        self.directory_of(&*self.programs)
+    }
+
+    /// The working directory of `programs`, or else the one the shell marked.
+    fn directory_of(&self, programs: &dyn Programs) -> Option<PathBuf> {
+        programs.working_directory().or_else(|| {
             let marks = self.marks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             marks.directory.clone().filter(|directory| directory.is_dir())
         })
@@ -862,19 +890,35 @@ impl Backend {
     /// The title of the terminal in `session`: the remote format while `ssh` runs, else
     /// `format`.
     pub fn title(&self, format: &str, session: SessionId) -> String {
-        let remote = options().map_or_default(|options| options.remote_title_format);
+        self.title_of(&*self.programs.now(), format, session)
+    }
+
+    fn title_of(&self, programs: &dyn Programs, format: &str, session: SessionId) -> String {
         title::title(
-            &*self.programs,
-            self.working_directory(),
+            programs,
+            &|| self.directory_of(programs),
             &title::with_session(format, session),
-            &title::with_session(&remote, session),
+            &title::with_session(&remote_title_format(), session),
             &self.program_title(),
         )
     }
 
-    /// The text of a format string; see [`title::format_title`].
+    /// The title of [`Backend::title`] and whether a program runs, as [`Backend::is_busy_recent`]
+    /// tells it, from one look at the programs.
+    pub fn status(&self, format: &str, session: SessionId) -> (String, bool) {
+        let programs = self.programs.now();
+        (self.title_of(&*programs, format, session), programs.is_busy_recent())
+    }
+
+    /// The text of a format string; see [`title::local_title`].
     pub fn local_title(&self, format: &str) -> String {
-        title::local_title(&*self.programs, self.working_directory(), format, &self.program_title())
+        let programs = self.programs.now();
+        title::local_title(
+            &*programs,
+            &|| self.directory_of(&*programs),
+            format,
+            &self.program_title(),
+        )
     }
 
     /// The text of the badge for `format`, as [`Backend::refresh_badge`] last made it; made
@@ -937,9 +981,10 @@ impl Backend {
         crate::view::text_between(&term, start, end)
     }
 
-    /// The last `lines` lines of scrollback and screen, or the screen when `lines` is zero.
-    pub fn recent_text(&self, lines: usize) -> String {
-        last_lines(&self.lock(), lines)
+    /// The last `lines` lines of scrollback and screen, or the screen when `lines` is zero, in
+    /// about `most` bytes; see [`last_lines`].
+    pub fn recent_text(&self, lines: usize, most: usize) -> (String, usize) {
+        last_lines(&self.lock(), lines, most)
     }
 
     /// Columns and lines of the screen.
@@ -965,6 +1010,7 @@ impl Backend {
         let full_screen = term.mode().contains(TermMode::ALT_SCREEN);
         term.reset_state();
         drop(term);
+        self.changed();
         crate::memory::release_later();
         if redraws_after_reset(self.is_busy(), full_screen) {
             self.write(vec![0x0c]);
@@ -1022,8 +1068,8 @@ impl crate::agent::Terminal for Backend {
         Backend::app_cursor(self)
     }
 
-    fn recent_text(&self, lines: usize) -> String {
-        Backend::recent_text(self, lines)
+    fn recent_text(&self, lines: usize, most: usize) -> (String, usize) {
+        Backend::recent_text(self, lines, most)
     }
 
     fn write_user_input(&self, bytes: Vec<u8>) {
@@ -1032,8 +1078,10 @@ impl crate::agent::Terminal for Backend {
 }
 
 /// The text of the last `lines` lines that have any, up to the end of the screen; all of the
-/// screen when `lines` is zero. The empty lines below the text do not count.
-fn last_lines<T: EventListener>(term: &Term<T>, lines: usize) -> String {
+/// screen when `lines` is zero. The empty lines below the text do not count. The text has
+/// about `most` bytes at most, and the number after it tells how many of the lines asked for
+/// it left out for that.
+fn last_lines<T: EventListener>(term: &Term<T>, lines: usize, most: usize) -> (String, usize) {
     let grid = term.grid();
     let screen = term.screen_lines();
     // The screen comes along, since the text can end anywhere on it.
@@ -1046,7 +1094,29 @@ fn last_lines<T: EventListener>(term: &Term<T>, lines: usize) -> String {
     // Line numbers run from minus the scrollback up to the last line of the screen.
     let count = i32::try_from(span).unwrap_or(i32::MAX).saturating_sub(1);
     let top = Line(bottom.0.saturating_sub(count)).max(grid.topmost_line());
-    let text = crate::view::text_between(term, Point::new(top, Column(0)), Point::new(bottom, grid.last_column()));
+    // From the bottom up, as far as `most` bytes reach: lines can be long, a terminal wide, and
+    // the text of all of them only to be cut afterwards took long under the lock. The last
+    // line comes along whatever its length.
+    let length = |line: Line| {
+        crate::view::text_between(term, Point::new(line, Column(0)), Point::new(line, grid.last_column()))
+            .trim_end()
+            .len()
+    };
+    let mut first = bottom;
+    let mut size = length(bottom);
+    while first > top {
+        let above = Line(first.0 - 1);
+        size += length(above) + 1;
+        if size > most {
+            break;
+        }
+        first = above;
+    }
+    let text = crate::view::text_between(
+        term,
+        Point::new(first, Column(0)),
+        Point::new(bottom, grid.last_column()),
+    );
     let mut found: Vec<&str> = text.lines().map(str::trim_end).collect();
     let used = found
         .iter()
@@ -1054,7 +1124,12 @@ fn last_lines<T: EventListener>(term: &Term<T>, lines: usize) -> String {
         .map_or(0, |last| last + 1);
     found.truncate(used);
     let wanted = if lines == 0 { screen } else { lines };
-    found.split_off(found.len().saturating_sub(wanted)).join("\n")
+    let left_out = if first > top {
+        wanted.saturating_sub(found.len())
+    } else {
+        0
+    };
+    (found.split_off(found.len().saturating_sub(wanted)).join("\n"), left_out)
 }
 
 /// Types paths into a terminal, quoted for its shell, or a command that changes into a
@@ -1119,16 +1194,73 @@ pub fn start(
     Ok(())
 }
 
-/// Writes the terminal content to its auto-save file, if it has one.
+/// Writes the terminal content to its auto-save file, if it has one and the text may have
+/// changed since it was written there. A thread of its own reads and writes it, which takes
+/// long for a long history; the user interface does not wait for it.
 pub fn auto_save(id: TerminalId) {
+    static SAVER: OnceLock<Option<mpsc::Sender<TerminalId>>> = OnceLock::new();
     let Some(backend) = backend(id) else {
         return;
     };
-    let path = backend.auto_save.lock().ok().and_then(|path| path.clone());
-    if let Some(path) = path
-        && let Err(error) = backend.save_output(&path)
-    {
-        eprintln!("kudari: could not save {}: {error}", path.display());
+    if !backend.save_due() {
+        return;
+    }
+    let saver = SAVER.get_or_init(|| {
+        let (sender, receiver) = mpsc::channel::<TerminalId>();
+        std::thread::Builder::new()
+            .name("kudari-save".into())
+            .spawn(move || {
+                // In the order asked for, so a file gets the newer text last.
+                for id in receiver {
+                    if let Some(terminal) = self::backend(id) {
+                        terminal.save_now();
+                    }
+                }
+            })
+            .ok()
+            .map(|_| sender)
+    });
+    match saver {
+        Some(saver) => {
+            let _ = saver.send(id);
+        }
+        None => backend.save_now(),
+    }
+}
+
+/// Whether auto save is due for `path` at `count` changes, after it wrote `saved` last: when
+/// the text may have changed, or the file is another or gone.
+fn save_due(path: &std::path::Path, count: u64, saved: Option<&(PathBuf, u64)>) -> bool {
+    saved.is_none_or(|(written, at)| written != path || *at != count) || !path.exists()
+}
+
+impl Backend {
+    fn save_due(&self) -> bool {
+        let path = lock(&self.auto_save).clone();
+        path.is_some_and(|path| {
+            save_due(
+                &path,
+                self.mailbox.changes.load(Ordering::Relaxed),
+                lock(&self.saved).as_ref(),
+            )
+        })
+    }
+
+    /// Writes the text to the auto-save file, if it is still the one and the text may have
+    /// changed: the user can turn auto save off while this waited.
+    fn save_now(&self) {
+        let Some(path) = lock(&self.auto_save).clone() else {
+            return;
+        };
+        // Before the text: output while it is read counts for the next time.
+        let count = self.mailbox.changes.load(Ordering::Relaxed);
+        if !save_due(&path, count, lock(&self.saved).as_ref()) {
+            return;
+        }
+        match self.save_output(&path) {
+            Ok(()) => *lock(&self.saved) = Some((path, count)),
+            Err(error) => eprintln!("kudari: could not save {}: {error}", path.display()),
+        }
     }
 }
 
@@ -1295,6 +1427,30 @@ mod tests {
     }
 
     #[test]
+    fn auto_save_writes_after_changes_only() {
+        let proxy = kept_proxy();
+        let path = std::env::temp_dir().join(format!("kudari-auto-save-{}", std::process::id()));
+        std::fs::write(&path, "saved").unwrap();
+        let count = || proxy.mailbox.changes.load(Ordering::Relaxed);
+        // Nothing written yet: due.
+        assert!(save_due(&path, count(), None));
+        let saved = (path.clone(), count());
+        assert!(!save_due(&path, count(), Some(&saved)), "nothing changed");
+        // Titles and bells change no text; output does.
+        proxy.send_event(Event::Title("title".into()));
+        proxy.send_event(Event::Bell);
+        assert!(!save_due(&path, count(), Some(&saved)));
+        proxy.send_event(Event::Wakeup);
+        assert!(save_due(&path, count(), Some(&saved)), "output came");
+        let saved = (path.clone(), count());
+        // Another file, or the file gone, is due as well.
+        assert!(save_due(&path.with_extension("other"), count(), Some(&saved)));
+        std::fs::remove_file(&path).unwrap();
+        assert!(save_due(&path, count(), Some(&saved)), "the file went away");
+        run_work();
+    }
+
+    #[test]
     fn a_reset_types_ctrl_l_only_for_the_shell_or_a_full_screen_program() {
         assert!(redraws_after_reset(false, false), "the shell at its prompt");
         assert!(redraws_after_reset(true, true), "vim or htop");
@@ -1411,14 +1567,39 @@ mod tests {
     #[test]
     fn recent_text_ends_with_the_screen() {
         let term = term_with("one\ntwo\nthree\nfour\nfive\n$ ", 20, 3, 100);
-        assert_eq!(last_lines(&term, 0), "four\nfive\n$");
-        assert_eq!(last_lines(&term, 2), "five\n$");
-        assert_eq!(last_lines(&term, 5), "two\nthree\nfour\nfive\n$");
-        assert_eq!(last_lines(&term, 100), "one\ntwo\nthree\nfour\nfive\n$");
+        let text = |lines| last_lines(&term, lines, usize::MAX).0;
+        assert_eq!(text(0), "four\nfive\n$");
+        assert_eq!(text(2), "five\n$");
+        assert_eq!(text(5), "two\nthree\nfour\nfive\n$");
+        assert_eq!(text(100), "one\ntwo\nthree\nfour\nfive\n$");
         // The lines below the prompt are left out, and do not count.
-        assert_eq!(last_lines(&term_with("$ ls", 20, 5, 0), 0), "$ ls");
-        assert_eq!(last_lines(&term_with("a\nb\n$ ls", 20, 5, 0), 2), "b\n$ ls");
-        assert_eq!(last_lines(&term_with("", 20, 5, 0), 0), "");
+        let all = |output, lines| last_lines(&term_with(output, 20, 5, 0), lines, usize::MAX);
+        assert_eq!(all("$ ls", 0), ("$ ls".to_string(), 0));
+        assert_eq!(all("a\nb\n$ ls", 2), ("b\n$ ls".to_string(), 0));
+        assert_eq!(all("", 0), (String::new(), 0));
+    }
+
+    #[test]
+    fn recent_text_reads_from_the_bottom_as_far_as_its_bytes_reach() {
+        use std::fmt::Write as _;
+
+        let output: String = (0..1000).fold(String::new(), |mut output, line| {
+            let _ = writeln!(output, "line {line:04}");
+            output
+        });
+        let term = term_with(&format!("{output}$ "), 20, 5, 2000);
+        // All of it, with room.
+        let (text, left_out) = last_lines(&term, 1000, usize::MAX);
+        assert_eq!((text.lines().count(), left_out), (1000, 0));
+        // 100 bytes: the newest lines that fit, each of 9 bytes and a line break, and the
+        // number of those asked for that are left out.
+        let (text, left_out) = last_lines(&term, 1000, 100);
+        assert!(text.ends_with("line 0999\n$"), "{text}");
+        assert!(text.len() <= 100, "{} bytes", text.len());
+        assert_eq!(left_out, 1000 - text.lines().count());
+        // The last line comes along whatever its length.
+        let (text, _) = last_lines(&term, 10, 0);
+        assert_eq!(text, "$");
     }
 
     #[test]

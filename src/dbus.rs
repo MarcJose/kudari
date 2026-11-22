@@ -10,6 +10,7 @@
 #![allow(clippy::unused_self, clippy::used_underscore_binding)]
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::Duration;
@@ -627,6 +628,14 @@ impl TestHooks {
         kudari_qt::terminal_item::set_refresh_delay(milliseconds.into());
     }
 
+    /// The text of the notification sent last, as it went to `KNotification`.
+    fn last_notification(&self) -> String {
+        crate::plasma::LAST_NOTIFICATION
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// The text under each match of the search that the last frame of the terminal showed,
     /// a line each.
     fn matched_text(&self, terminal: i32) -> String {
@@ -680,6 +689,17 @@ impl TestHooks {
         queue(move |_| {
             if let Some(backend) = crate::terminal::backend(terminal) {
                 let _ = backend.save_output(std::path::Path::new(&path));
+            }
+        });
+    }
+
+    /// Saves the output of a terminal to `path` from now on, as auto save in its menu does
+    /// after its dialog; an empty path turns it off.
+    fn auto_save(&self, terminal: i32, path: String) {
+        queue(move |_| {
+            if let Some(backend) = crate::terminal::backend(terminal) {
+                *backend.auto_save.lock().unwrap_or_else(PoisonError::into_inner) =
+                    (!path.is_empty()).then(|| PathBuf::from(path));
             }
         });
     }
@@ -748,9 +768,15 @@ impl Application {
     }
 }
 
+/// The file of the script, written once a run of Kudari, and again where it went: a script of
+/// another version can lie there.
 fn pointer_script_path() -> Option<PathBuf> {
+    static WRITTEN: AtomicBool = AtomicBool::new(false);
     let path = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?).join("kudari-pointer-output.js");
-    std::fs::write(&path, POINTER_SCRIPT).ok()?;
+    if !WRITTEN.load(Ordering::Relaxed) || !path.exists() {
+        std::fs::write(&path, POINTER_SCRIPT).ok()?;
+        WRITTEN.store(true, Ordering::Relaxed);
+    }
     Some(path)
 }
 
@@ -764,15 +790,31 @@ fn unload_pointer_script(connection: &Connection) {
     ));
 }
 
+/// [`unload_pointer_script`] without waiting for the answer: `KWin` takes the calls of a
+/// connection in their order, so the next load comes after it.
+fn unload_pointer_script_later(connection: &Connection) {
+    let message = zbus::message::Message::method_call("/Scripting", "unloadScript")
+        .destination("org.kde.KWin")
+        .interface("org.kde.kwin.Scripting")
+        .with_flags(zbus::message::Flags::NO_REPLY_EXPECTED)
+        .build(&POINTER_SCRIPT_NAME);
+    if let Ok(message) = message {
+        let _ = block_on(connection.send(&message));
+    }
+}
+
 /// The output under the mouse pointer.
 ///
 /// `activeOutputName` is no replacement: closing the window hands the focus back to
 /// another window, which moves `KWin`'s active output there while the pointer stays put.
-/// Blocks for at most [`POINTER_TIMEOUT`] plus the round trips to `KWin`.
+/// Blocks for at most [`POINTER_TIMEOUT`] plus two round trips to `KWin`: loading the script
+/// and starting it. A script that a Kudari before left is unloaded the first time; after
+/// that, each unloads itself, as Kudari tells `KWin` without waiting.
 pub fn pointer_output() -> Option<String> {
+    static UNLOADED: std::sync::Once = std::sync::Once::new();
     let connection = CONNECTION.get()?;
     let path = pointer_script_path()?;
-    unload_pointer_script(connection);
+    UNLOADED.call_once(|| unload_pointer_script(connection));
 
     let (sender, receiver) = mpsc::channel();
     *POINTER_REPLY.lock().unwrap_or_else(PoisonError::into_inner) = Some(sender);
@@ -797,7 +839,7 @@ pub fn pointer_output() -> Option<String> {
         &(),
     ));
     let output = started.ok().and_then(|_| receiver.recv_timeout(POINTER_TIMEOUT).ok());
-    unload_pointer_script(connection);
+    unload_pointer_script_later(connection);
     output
 }
 

@@ -78,6 +78,51 @@ pub trait Programs: Send + Sync {
     /// Hangs up the shell and the program in the foreground, as a terminal that goes does,
     /// also when they are stopped.
     fn hang_up(&self) {}
+    /// The programs as they are now, for several questions in a row: which program is in the
+    /// foreground is found once for all of them, and they agree on it. What is read of it is
+    /// still read only when asked. Not to keep: a moment later, another program can be there.
+    fn now(&self) -> Box<dyn Programs + '_> {
+        Box::new(Same(self))
+    }
+}
+
+/// Programs that find their foreground for each question anew, as they are.
+struct Same<'a, P: ?Sized>(&'a P);
+
+impl<P: Programs + ?Sized> Programs for Same<'_, P> {
+    fn is_busy(&self) -> bool {
+        self.0.is_busy()
+    }
+    fn is_busy_recent(&self) -> bool {
+        self.0.is_busy_recent()
+    }
+    fn working_directory(&self) -> Option<PathBuf> {
+        self.0.working_directory()
+    }
+    fn name(&self) -> Option<String> {
+        self.0.name()
+    }
+    fn arguments(&self) -> Option<Vec<String>> {
+        self.0.arguments()
+    }
+    fn signal(&self, signal: Signal) {
+        self.0.signal(signal);
+    }
+    fn supports(&self, signal: Signal) -> bool {
+        self.0.supports(signal)
+    }
+    fn set_flow_control(&self, enabled: bool) {
+        self.0.set_flow_control(enabled);
+    }
+    fn is_root(&self) -> bool {
+        self.0.is_root()
+    }
+    fn hang_up(&self) {
+        self.0.hang_up();
+    }
+    fn now(&self) -> Box<dyn Programs + '_> {
+        Box::new(Same(self.0))
+    }
 }
 
 /// The home directory of the user.
@@ -96,13 +141,24 @@ pub fn user() -> String {
     std::env::var(name).unwrap_or_default()
 }
 
-/// The name of this computer.
+/// The name of this computer, as it is now: it can change while Kudari runs.
 #[must_use]
 pub fn host() -> String {
-    let name = if cfg!(windows) {
-        std::env::var("COMPUTERNAME").unwrap_or_default()
-    } else {
-        std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default()
+    #[cfg(windows)]
+    let name = std::env::var("COMPUTERNAME").unwrap_or_default();
+    #[cfg(unix)]
+    let name = {
+        // A name has at most 64 bytes on Linux, and 255 by POSIX.
+        let mut name = [0u8; 256];
+        // SAFETY: the buffer is valid for the length given, which leaves its last byte zero,
+        // so the name ends with a zero byte also when it is cut.
+        let got = unsafe { libc::gethostname(name.as_mut_ptr().cast(), name.len() - 1) };
+        let name = if got == 0 {
+            name.split(|byte| *byte == 0).next().unwrap_or_default()
+        } else {
+            &[]
+        };
+        String::from_utf8_lossy(name).into_owned()
     };
     name.trim().to_string()
 }
@@ -135,7 +191,13 @@ pub fn write_private(path: &Path, content: &[u8]) -> std::io::Result<()> {
         options.write(true).create_new(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        options.open(&partial)?.write_all(content)?;
+        let mut file = options.open(&partial)?;
+        file.write_all(content)?;
+        // On the disk before it takes the place of the old file, or a crash just after can
+        // leave an empty file where the old one was.
+        file.sync_all()?;
+        // Closed before it takes the place of the old file: Windows replaces no open file.
+        drop(file);
         replace(&partial, &target)
     })();
     if written.is_err() {

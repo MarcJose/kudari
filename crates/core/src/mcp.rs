@@ -129,7 +129,9 @@ fn tools() -> Value {
             "name": "read_terminal",
             "title": "Read a terminal",
             "description": "Returns the text of a terminal: its screen, or the last lines of its \
-                scrollback and screen. Needs reading to be allowed.",
+                scrollback and screen. One reading gives at most 4 MiB of text; when the lines \
+                asked for are more, the newest come, after a note of how many before them are \
+                left out. Needs reading to be allowed.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
