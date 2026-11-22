@@ -1543,3 +1543,19 @@ msgstr "Programme können mit einer Escape-Sequenz in die Zwischenablage kopiere
 msgctxt "@info"
 msgid "A program in session \"%1\" tried to copy to the clipboard from the background. Only the terminal in front may, as set under Security."
 msgstr "Ein Programm in der Sitzung „%1“ wollte aus dem Hintergrund in die Zwischenablage kopieren. Das darf nur das Terminal im Vordergrund, wie unter Sicherheit eingestellt."
+
+msgctxt "@info"
+msgid "About %1 for each terminal as wide as the active one."
+msgstr "Etwa %1 für jedes Terminal, das so breit ist wie das aktive."
+
+msgctxt "@info"
+msgid "About %1 for the terminals open now."
+msgstr "Etwa %1 für die jetzt offenen Terminals."
+
+msgctxt "@info"
+msgid "That is more than a quarter of the memory of this computer."
+msgstr "Das ist mehr als ein Viertel des Arbeitsspeichers dieses Rechners."
+
+msgctxt "@label"
+msgid "About %1 of memory."
+msgstr "Etwa %1 Arbeitsspeicher."

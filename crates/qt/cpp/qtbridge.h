@@ -179,7 +179,7 @@ void rk_font_family(QFont &font, const QString &family);
 QString rk_color_from_text(const QString &text);
 void rk_ask_save_file(int terminal, int purpose, const QString &suggestion);
 void rk_print_text(const QString &text);
-void rk_ask_history_lines(int terminal, int current, const QString &title, const QString &label);
+void rk_ask_history_lines(int terminal, int current, const QString &title, const QString &label, double lineBytes, const QString &estimate);
 
 /// For the GUI test: paints each terminal that shows anew, as a frame with its cursor over
 /// it, to `<path>-<terminal>.png`, and saves what the window shows in its place to
