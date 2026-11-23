@@ -304,6 +304,12 @@ are not installed and names them at the end. The workflow also runs weekly, so t
 new advisories without a push. Dependabot proposes updates only a week after their release,
 which keeps out most malicious versions. Security fixes come at once.
 
+The Scorecard workflow lets [OpenSSF Scorecard](https://scorecard.dev) rate how the project
+guards its supply chain, after each push to main and weekly. It publishes the score for the
+badge in the README and lists each finding under code scanning in the Security tab of the
+repository. The service accepts the result only from a workflow that keeps to its rules,
+which the comment at the top of `scorecard.yml` names: keep to them when you change it.
+
 With the Git hooks turned on, the quick checks run before a commit: secrets in the staged
 changes, formatting, translations, generated tables and licenses. Before a push,
 `tests/check.sh` and `tools/security.sh` run, and the CI takes over the GUI test. The hooks build
