@@ -63,3 +63,9 @@ SPDX-License-Identifier = "MIT"
 path = "CODE_OF_CONDUCT.md"
 SPDX-FileCopyrightText = ["Organization for Ethical Source", "2026 Marc Jose <marc@hahn-jose.de>"]
 SPDX-License-Identifier = "CC-BY-SA-4.0"
+
+# The numbers of tools/bench.sh, measured anew with the releases that change them.
+[[annotations]]
+path = ["BENCHMARK.md"]
+SPDX-FileCopyrightText = "2026 Marc Jose <marc@hahn-jose.de>"
+SPDX-License-Identifier = "MIT"

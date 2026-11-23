@@ -351,4 +351,5 @@ reference, but do not copy their code.
 ## Releases
 
 The maintainers release with `tools/release.py`, as [docs/releases.md](docs/releases.md)
-describes.
+describes. When a release changes the speed or the memory of Kudari, BENCHMARK.md gets new
+numbers, measured with the commands at its end.
