@@ -175,14 +175,18 @@ jobs:
               cosign sign-blob --yes --bundle "$sums.sigstore.json" "$sums"
           done
           cat SHA256SUMS
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      - id: provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/kudari-*
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
+          PROVENANCE: ${{ steps.provenance.outputs.bundle-path }}
         run: |
           version=${GITHUB_REF_NAME#v}
+          # The provenance also goes with the release, to check without asking GitHub.
+          cp "$PROVENANCE" "dist/kudari-$version.intoto.jsonl"
           tools/release.py --notes "$version" > notes.md
           case $version in *-*) prerelease=--prerelease ;; *) prerelease= ;; esac
           # shellcheck disable=SC2086 # empty when it is a normal release

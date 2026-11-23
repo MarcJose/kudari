@@ -14,6 +14,7 @@ Versions follow [Semantic Versioning](https://semver.org). Each release on GitHu
 | `MarcJose.Kudari*.yaml` | the manifests for winget |
 | `SHA256SUMS`, `SHA512SUMS` | checksums of all files |
 | `*.sigstore.json` | the Sigstore signatures of the checksums |
+| `kudari-X.Y.Z.intoto.jsonl` | the build provenance of the `kudari-*` files |
 
 ## Checking a download
 
@@ -33,6 +34,14 @@ GitHub CLI checks:
 
 ```sh
 gh attestation verify kudari-1.2.0.tar.xz --repo MarcJose/kudari
+```
+
+The release carries the same attestation, which checks the file without asking GitHub for
+it:
+
+```sh
+gh attestation verify kudari-1.2.0.tar.xz --repo MarcJose/kudari \
+    --bundle kudari-1.2.0.intoto.jsonl
 ```
 
 ## The Windows packages
