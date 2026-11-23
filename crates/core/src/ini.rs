@@ -583,14 +583,19 @@ mod tests {
         }
         assert_eq!(store.read("Window", "Height", ""), "50");
         assert!(!path.exists());
-        assert!(soon(|| IniFile::open(&path).read("Window", "Height", "") == "50"));
-        assert_eq!(store.saves(), 1);
+        // The thread counts a save once the file is in place: the count, not the file, says
+        // that it is done.
+        assert!(soon(|| store.saves() == 1));
+        assert_eq!(IniFile::open(&path).read("Window", "Height", ""), "50");
         // A change by hand meanwhile stays beside the next one of Kudari.
         let text = std::fs::read_to_string(&path).unwrap();
         std::fs::write(&path, text.replace("[Window]", "[Window]\nKeepOpen=true")).unwrap();
         store.write("Window", "Width", "80");
-        assert!(soon(|| IniFile::open(&path).read("Window", "Width", "") == "80"));
+        assert!(soon(|| store.saves() == 2));
+        assert_eq!(IniFile::open(&path).read("Window", "Width", ""), "80");
         assert_eq!(IniFile::open(&path).read("Window", "KeepOpen", ""), "true");
+        // And no more: the change waited for its moment, not for each step.
+        std::thread::sleep(Duration::from_millis(300));
         assert_eq!(store.saves(), 2);
         drop(store);
         std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
