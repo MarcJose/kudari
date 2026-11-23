@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/MarcJose/kudari/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/MarcJose/kudari/actions/workflows/ci.yml?query=branch%3Amain)
 [![Security](https://github.com/MarcJose/kudari/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/MarcJose/kudari/actions/workflows/security.yml?query=branch%3Amain)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/MarcJose/kudari/badge)](https://scorecard.dev/viewer/?uri=github.com/MarcJose/kudari)
 [![Release](https://img.shields.io/github/v/release/MarcJose/kudari)](https://github.com/MarcJose/kudari/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/MarcJose/kudari)](LICENSE)
 
