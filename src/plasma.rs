@@ -15,6 +15,7 @@ use crate::migrate::{self, Paths};
 use crate::services::{Clipboard, Desktop, GlobalShortcut, Notifications, Screens, Selection, Themes, Window};
 use crate::settings::{self, Store};
 use crate::theme::Palette;
+use kudari_core::i18n::tr_plain;
 
 /// The services of KDE Plasma.
 pub struct Plasma;
@@ -170,12 +171,13 @@ impl Frontend for Plasma {
         let system = Skin {
             id: settings::SYSTEM_SKIN.to_string(),
             name: tr("@item:inlistbox", "System theme"),
-            description: tr("@info", "Follows the active Plasma theme."),
+            // The list of QML shows it as plain text, which screen readers read.
+            description: tr_plain("@info", "Follows the active Plasma theme."),
         };
         let themes = crate::theme::skins(self).into_iter().map(|(id, name)| Skin {
             id,
             name,
-            description: tr("@info", "Plasma theme"),
+            description: tr_plain("@info", "Plasma theme"),
         });
         std::iter::once(system).chain(themes).collect()
     }

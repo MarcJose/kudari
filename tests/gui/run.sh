@@ -559,9 +559,24 @@ check "a font size above 72 stays" 96 "$(setting FontSize)"
 input key 1; settle
 hook SetSetting Height 50; hook SetSetting FontSize 0; settle
 
+# What a screen reader learns of the window and of every page of the settings: a line for each
+# element with its role as a number of QAccessible::Role, its name and its description.
+accessible=$(hook Accessible)
 hook Trigger options_configure; sleep 2
-for row in 208 244 280 316 352 388; do input click 250 "$row"; sleep 0.7; done
+for row in 208 244 280 316 352 388; do
+    input click 250 "$row"; sleep 0.7
+    accessible=$(printf '%s\n%s' "$accessible" "$(hook Accessible)")
+done
 input key 1; settle
+check "the terminal tells a screen reader what it is" yes \
+    "$(echo "$accessible" | grep -q '^129|' && echo yes || echo no)"
+# Buttons, check boxes, radio buttons, lists, sliders, spin boxes and fields.
+check "every control has a name for a screen reader" "" \
+    "$(echo "$accessible" | awk -F'|' '$1 ~ /^(42|43|44|45|46|51|52)$/ && $2 == ""' | sort -u)"
+# KI18n makes rich text of a text in a context such as @info, which a screen reader reads with
+# its tags.
+check "a screen reader gets names and descriptions without markup" "" \
+    "$(echo "$accessible" | grep '<' | sort -u)"
 
 # The actions of the menus and shortcuts, each checked where its effect can be seen.
 active() { sessions activeSessionId; }
