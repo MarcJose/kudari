@@ -57,6 +57,7 @@ void rk_ask_question(int id, const QString &text, const QString &title, int cont
 
 
 QString rk_tr(const QString &context, const QString &text, const QString &argument);
+QString rk_tr_plain(const QString &context, const QString &text, const QString &argument);
 QString rk_action_text(const QString &name);
 void rk_open_url(const QString &url);
 void rk_web_search(const QString &text);
@@ -67,6 +68,7 @@ void rk_test_input_method(const QString &preedit, const QString &commit);
 std::int64_t rk_test_quiet_ms();
 QString rk_test_window_state();
 QString rk_test_property(const QString &name, const QString &property);
+QString rk_test_accessible();
 void rk_test_grab(const QString &path);
 QString rk_test_agent_question();
 void rk_test_answer_agent(bool allow);

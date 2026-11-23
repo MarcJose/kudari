@@ -930,9 +930,11 @@ impl qobject::Controller {
     }
 
     /// Translates a text of the QML pages, which the check of the translations finds there.
+    /// As plain text: the texts there have no markup, and screen readers read the names and
+    /// descriptions of controls with their tags.
     fn translate(&self, context: &QString, text: &QString) -> QString {
         let context = &context.to_string();
-        qs(&tr(context, &text.to_string()))
+        qs(&kudari_core::i18n::tr_plain(context, &text.to_string()))
     }
 
     fn set_setting(self: Pin<&mut Self>, key: &QString, value: &QString) {
@@ -1233,7 +1235,7 @@ impl qobject::Controller {
 
     fn translate_with(&self, context: &QString, text: &QString, argument: &QString) -> QString {
         let context = &context.to_string();
-        qs(&kudari_core::i18n::tr_arg(
+        qs(&kudari_core::i18n::tr_plain_arg(
             context,
             &text.to_string(),
             &argument.to_string(),

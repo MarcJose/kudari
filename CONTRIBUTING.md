@@ -64,6 +64,9 @@ git config core.hooksPath .githooks
   `cpp/`, and plain Qt through `crates/qt/cpp/`. Other front ends share the terminal pane in
   `crates/qt/qml/`, so it uses no Kirigami and takes its colors and spacing from
   `PaneTheme`.
+- **Accessibility.** Every control has a name for screen readers, and every action works
+  from the keyboard. [ACCESSIBILITY.md](ACCESSIBILITY.md) says what to check before a pull
+  request.
 - **Texts.** Every text the user sees is translatable and needs a translation in every
   language under `po/`, and `tools/translations.py` shows what is missing. If you cannot
   translate a new text, say so in the pull request, and the maintainer adds the translations
@@ -354,4 +357,5 @@ reference, but do not copy their code.
 ## Releases
 
 The maintainers release with `tools/release.py`, as [docs/releases.md](docs/releases.md)
-describes.
+describes. When a release changes the speed or the memory of Kudari, BENCHMARK.md gets new
+numbers, measured with the commands at its end.

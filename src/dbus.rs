@@ -664,6 +664,12 @@ impl TestHooks {
         .await
     }
 
+    /// What a screen reader learns of the windows that show: a line for each element with
+    /// its role as a number of `QAccessible::Role`, its name and its description.
+    async fn accessible(&self) -> String {
+        ask(|_| crate::kde::rk_test_accessible().to_string(), String::new()).await
+    }
+
     async fn state(&self) -> String {
         ask(|_| crate::kde::rk_test_window_state().to_string(), String::new()).await
     }
