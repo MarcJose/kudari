@@ -519,7 +519,7 @@ dependencies = [
 
 [[package]]
 name = "kudari"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cxx",
  "cxx-qt",
@@ -558,11 +558,11 @@ dependencies = [
 
 [[package]]
 name = "kudari-console"
-version = "0.4.0"
+version = "0.5.0"
 
 [[package]]
 name = "kudari-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "getrandom",
  "kudari-alacritty-terminal",
@@ -575,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "kudari-difftest"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "alacritty_terminal",
  "kudari-alacritty-terminal",
@@ -584,7 +584,7 @@ dependencies = [
 
 [[package]]
 name = "kudari-qt"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cxx",
  "cxx-qt",
@@ -609,7 +609,7 @@ dependencies = [
 
 [[package]]
 name = "kudari-windows"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cxx",
  "cxx-qt",
