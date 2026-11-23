@@ -32,6 +32,7 @@ fn main() {
     let mut app = QApplication::new();
     kudari_core::timing::mark("application");
     kudari_core::i18n::set_translator(kde::tr_arg);
+    kudari_core::i18n::set_plain_translator(kde::tr_plain_arg);
     kudari_qt::frontend::install(&plasma::Plasma);
     // Handles --help and --version, which must work next to a running instance.
     kde::rk_command_line(&kde::qs(env!("CARGO_PKG_VERSION")));

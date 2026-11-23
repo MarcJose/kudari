@@ -9,8 +9,8 @@
     tools/translations.py --prune   remove entries the code no longer uses
 
 A string is the pair of context and text, as KI18n looks it up. The code calls
-tr() and tr_arg() in Rust, translate(), translateWith() and t() in QML, and
-i18n(), i18nc() and xi18nc() in C++.
+tr(), tr_arg(), tr_plain() and tr_plain_arg() in Rust, translate(), translateWith() and
+t() in QML, and i18n(), i18nc() and xi18nc() in C++.
 """
 
 import argparse
@@ -20,8 +20,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCES = [
-    ("src", ".rs", ["tr", "tr_arg"]),
-    ("crates", ".rs", ["tr", "tr_arg"]),
+    ("src", ".rs", ["tr", "tr_arg", "tr_plain", "tr_plain_arg"]),
+    ("crates", ".rs", ["tr", "tr_arg", "tr_plain", "tr_plain_arg"]),
     ("qml", ".qml", ["translate", "translateWith", "t"]),
     ("crates", ".qml", ["translate", "translateWith", "t"]),
     ("cpp", ".cpp", ["i18n", "i18nc", "xi18nc"]),
