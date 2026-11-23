@@ -1,0 +1,44 @@
+name: Accessibility barrier
+description: Something keeps you from using Kudari with the keyboard, a screen reader, large text or other assistive technology.
+labels: [accessibility]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for telling us. You do not need to say anything about yourself, and a short report is better than none. ACCESSIBILITY.md says what happens next.
+  - type: textarea
+    id: what
+    attributes:
+      label: What you tried to do and what went wrong
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen
+      description: The steps or keys that lead to it, if you know them.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What `kudari --version` says.
+      placeholder: kudari 0.5.0
+  - type: dropdown
+    id: system
+    attributes:
+      label: System
+      options:
+        - KDE Plasma on Wayland
+        - Windows 11
+        - Something else (please say which below)
+  - type: input
+    id: assistive
+    attributes:
+      label: Assistive technology
+      description: The screen reader, magnifier, voice control or other tool you use, with its version, if any.
+      placeholder: Orca 51, Narrator, a magnifier
+  - type: textarea
+    id: details
+    attributes:
+      label: More details
+      description: A screen recording or screenshot only if you are comfortable sharing one. Please leave out anything private, such as tokens shown in a terminal.
