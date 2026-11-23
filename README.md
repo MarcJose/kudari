@@ -164,6 +164,8 @@ line, the D-Bus interface and the files.
 - [CONTRIBUTING.md](CONTRIBUTING.md): building, testing and submitting changes
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): how to treat each other
 - [SECURITY.md](SECURITY.md): reporting vulnerabilities privately
+- [ACCESSIBILITY.md](ACCESSIBILITY.md): what works with the keyboard and screen readers, what
+  does not yet, and reporting a barrier
 - [docs/releases.md](docs/releases.md): how to make, check and rebuild a release
 
 ## License

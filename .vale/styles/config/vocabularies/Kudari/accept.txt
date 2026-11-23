@@ -75,3 +75,4 @@ systemd
 [Aa]utomounts?
 [Rr]eentrant
 qmlprofiler
+Accerciser
