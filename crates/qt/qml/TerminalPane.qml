@@ -261,6 +261,11 @@ Item {
         readonly property real rightGap: pane.config.ScrollBarPosition !== "left" && pane.config.ScrollBarPosition !== "hidden" ? scrollBar.width : 0
 
         objectName: "terminal"
+        // A screen reader says that a terminal takes the focus, from its role: a name
+        // "Terminal" it would say twice. The text in it is not open to screen readers.
+        Accessible.role: Accessible.Terminal
+        Accessible.focusable: true
+        Accessible.focused: activeFocus
         // A terminal in a tab in the background has no size: Qt then frees its image and its
         // texture, some MB each, and draws nothing. It keeps its columns and lines, since
         // applySize() leaves out any size below a cell, and catches up when it shows.
