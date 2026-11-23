@@ -58,6 +58,7 @@ pub mod ffi {
         /// Asks without blocking; the answer arrives in `kde_question_answered`.
         fn rk_ask_question(id: i32, text: &QString, title: &QString, continue_kind: i32);
         fn rk_tr(context: &QString, text: &QString, argument: &QString) -> QString;
+        fn rk_tr_plain(context: &QString, text: &QString, argument: &QString) -> QString;
         fn rk_action_text(name: &QString) -> QString;
         fn rk_open_url(url: &QString);
         fn rk_web_search(text: &QString);
@@ -67,6 +68,7 @@ pub mod ffi {
         fn rk_test_quiet_ms() -> i64;
         fn rk_test_window_state() -> QString;
         fn rk_test_property(name: &QString, property: &QString) -> QString;
+        fn rk_test_accessible() -> QString;
         fn rk_test_grab(path: &QString);
         fn rk_test_agent_question() -> QString;
         fn rk_test_answer_agent(allow: bool);
@@ -113,6 +115,12 @@ pub fn tr(context: &str, text: &str) -> String {
 /// Translates a message with a `%1` placeholder.
 pub fn tr_arg(context: &str, text: &str, argument: &str) -> String {
     rk_tr(&qs(context), &qs(text), &qs(argument)).to_string()
+}
+
+/// Translates a message with a `%1` placeholder as plain text, also where `KI18n` would make
+/// rich text of it.
+pub fn tr_plain_arg(context: &str, text: &str, argument: &str) -> String {
+    rk_tr_plain(&qs(context), &qs(text), &qs(argument)).to_string()
 }
 
 fn kde_tab_color(session: i32, color: i32) {

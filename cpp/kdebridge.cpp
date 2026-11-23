@@ -66,6 +66,7 @@
 #include <QFileDialog>
 #include <QFontDatabase>
 #include <QGuiApplication>
+#include <QAccessible>
 #include <QIcon>
 #include <QInputMethodEvent>
 #include <QDir>
@@ -1140,6 +1141,35 @@ QString rk_test_property(const QString &name, const QString &property)
     }
     return values.join(QLatin1Char(','));
 }
+
+static void accessibleLines(QAccessibleInterface *node, int depth, QStringList &lines)
+{
+    if (!node || !node->isValid() || depth > 64 || node->state().invisible) {
+        return;
+    }
+    lines.append(QStringLiteral("%1|%2|%3")
+                     .arg(int(node->role()))
+                     .arg(node->text(QAccessible::Name), node->text(QAccessible::Description))
+                     .replace(QLatin1Char('\n'), QLatin1Char(' ')));
+    for (int i = 0; i < node->childCount(); ++i) {
+        accessibleLines(node->child(i), depth + 1, lines);
+    }
+}
+
+// What a screen reader learns of the windows that show, a line for each element: its role
+// as the number of QAccessible::Role, its name and its description.
+QString rk_test_accessible()
+{
+    // As when a screen reader starts: the controls of Qt Quick take their roles then.
+    QAccessible::setActive(true);
+    QStringList lines;
+    for (QWindow *window : QGuiApplication::topLevelWindows()) {
+        if (window->isVisible()) {
+            accessibleLines(QAccessible::queryAccessibleInterface(window), 0, lines);
+        }
+    }
+    return lines.join(QLatin1Char('\n'));
+}
 #else
 void rk_test_key(const QString &)
 {
@@ -1173,16 +1203,34 @@ QString rk_test_property(const QString &, const QString &)
     return {};
 }
 
+QString rk_test_accessible()
+{
+    return {};
+}
+
 void rk_test_grab(const QString &)
 {
 }
 #endif
 
-QString rk_tr(const QString &context, const QString &text, const QString &argument)
+static KLocalizedString message(const QString &context, const QString &text, const QString &argument)
 {
     KLocalizedString message = context.isEmpty() ? ki18nd("kudari", text.toUtf8().constData())
                                                  : kxi18ndc("kudari", context.toUtf8().constData(), text.toUtf8().constData());
-    return text.contains(QLatin1String("%1")) ? message.subs(argument).toString() : message.toString();
+    return text.contains(QLatin1String("%1")) ? message.subs(argument) : message;
+}
+
+QString rk_tr(const QString &context, const QString &text, const QString &argument)
+{
+    return message(context, text, argument).toString();
+}
+
+// KI18n makes a text in a context such as @info rich text in <html>, also one without
+// markup. The controls of QML show plain text as well, and screen readers read their text
+// as it is, the tags included.
+QString rk_tr_plain(const QString &context, const QString &text, const QString &argument)
+{
+    return message(context, text, argument).toString(Kuit::PlainText);
 }
 
 QString rk_action_text(const QString &name)
