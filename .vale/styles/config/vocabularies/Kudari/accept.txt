@@ -1,6 +1,10 @@
 Kudari
 Yakuake
 Konsole
+Ghostty
+Radeon
+Ryzen
+Xwayland
 Kirigami
 Plasma
 KWin

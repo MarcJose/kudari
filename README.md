@@ -161,6 +161,7 @@ line, the D-Bus interface and the files.
 - [docs/usage.md](docs/usage.md): settings, coming from Yakuake, AI agents, D-Bus and security
   settings
 - [CHANGELOG.md](CHANGELOG.md): what changed in each release
+- [BENCHMARK.md](BENCHMARK.md): speed, processor time and memory next to other terminals
 - [CONTRIBUTING.md](CONTRIBUTING.md): building, testing and submitting changes
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): how to treat each other
 - [SECURITY.md](SECURITY.md): reporting vulnerabilities privately
